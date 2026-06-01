@@ -133,8 +133,7 @@
         connectivity: {
             wireless: { interface: "wlan0", present: false, state: "missing", online: false, type: "wireless" },
             ethernet: { interface: "eth0", present: false, state: "missing", online: false, type: "ethernet" },
-            can: { interface: "can0", present: false, state: "missing", online: false, type: "can" },
-            bluetooth: { enabled: false, deviceName: "RK3588_Pixhawk", autoConnect: false, online: false }
+            can: { interface: "can0", present: false, state: "missing", online: false, type: "can" }
         },
         camera: {
             enabled: true,

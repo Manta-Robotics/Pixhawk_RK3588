@@ -12,7 +12,7 @@ import fs from 'fs';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import dgram from 'dgram';
-import { execFileSync, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import net from 'net';
 import os from 'os';
 import http from 'http';
@@ -34,7 +34,6 @@ function readJsonFile(relativePath, fallback) {
 
 const config = readJsonFile('config/system.config.json', {});
 const motorConfig = readJsonFile('config/motor_config.json', { motors: [] });
-const bluetoothConfig = readJsonFile('config/bluetooth.config.json', { bluetooth: {} });
 
 const LOGS_DIR = path.resolve(PROJECT_ROOT, config.logs_dir || './logs');
 const SYSTEM_LOG_FILE = path.join(LOGS_DIR, 'system.log');
@@ -242,17 +241,6 @@ function detectEthernetInterface() {
   return listNetworkInterfaces().find((name) => name.startsWith('eth') || name.startsWith('en')) || 'eth0';
 }
 
-function isBluetoothServiceActive() {
-  try {
-    return execFileSync('systemctl', ['is-active', 'bluetooth'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim() === 'active';
-  } catch (_error) {
-    return false;
-  }
-}
-
 function inspectHostname(hostname) {
   if (!hostname) {
     return { hostname: '', resolvable: false, assumed: false, isLocalName: false, matchesLocalHost: false };
@@ -289,13 +277,7 @@ function readConnectivityState() {
       ...ethernet,
       ipv4: readInterfaceIPv4(ethernet.interface)
     },
-    can: readInterfaceState(CAN_INTERFACE),
-    bluetooth: {
-      enabled: Boolean(bluetoothConfig.bluetooth && bluetoothConfig.bluetooth.enabled),
-      deviceName: String((bluetoothConfig.bluetooth && bluetoothConfig.bluetooth.device_name) || 'RK3588_Pixhawk'),
-      autoConnect: Boolean(bluetoothConfig.bluetooth && bluetoothConfig.bluetooth.auto_connect),
-      online: isBluetoothServiceActive()
-    }
+    can: readInterfaceState(CAN_INTERFACE)
   };
 }
 

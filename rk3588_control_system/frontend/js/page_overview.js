@@ -85,7 +85,14 @@
     var pendingCameraFrame = null;
     var cameraFrameRenderBusy = false;
     var cameraNativeStreamMode = false;
+    var cameraEnabledByUser = false;
     var visionActive = false;
+
+    function setCameraToggleState(enabled) {
+        cameraEnabledByUser = Boolean(enabled);
+        setText("cameraToggleState", cameraEnabledByUser ? "ON" : "OFF");
+        renderPeripheralStatus();
+    }
 
     function setVisionButtonState(active) {
         var btn = document.getElementById("btnVisionToggle");
@@ -1010,14 +1017,39 @@
 
         var camera = window.RoverClient.state.camera || {};
         var sourceType = String(camera.sourceType || "").toLowerCase();
+        var feed = document.getElementById("dashCameraFeed");
+        var placeholder = document.getElementById("dashCameraPlaceholder");
+
+        if (!cameraEnabledByUser) {
+            stopCameraRefreshLoop();
+            stopCameraReconnectLoop();
+            stopCameraReadyFallback();
+            stopCameraStreamLoop();
+            currentCameraSource = "";
+            currentCameraRequestUrl = "";
+            cameraFeedReady = false;
+
+            setText("dashCameraTitle", cameraTitle(camera));
+            setText("dashCameraBadge", "CAMERA OFF");
+            setText("dashCameraSource", "Manual switch off");
+            setText("dashCameraMessage", "Camera is off. Turn on the switch to start the stream.");
+
+            if (feed) {
+                feed.removeAttribute("src");
+                feed.style.display = "none";
+            }
+
+            if (placeholder) {
+                placeholder.style.display = "flex";
+            }
+            return;
+        }
 
         setText("dashCameraTitle", cameraTitle(camera));
         setText("dashCameraBadge", cameraBadge(camera));
         setText("dashCameraSource", cameraSourceText(camera));
         setText("dashCameraMessage", cameraMessage(camera));
 
-        var feed = document.getElementById("dashCameraFeed");
-        var placeholder = document.getElementById("dashCameraPlaceholder");
         var sourceUrl = String(camera.sourceUrl || "");
         if (feed && currentCameraSource !== sourceUrl) {
             currentCameraSource = sourceUrl;
@@ -1122,6 +1154,14 @@
             if (b && typeof b.active === "boolean") applyVisionState(b.active);
         }).catch(function () {});
 
+        var cameraToggle = document.getElementById("cameraToggleSwitch");
+        if (cameraToggle) {
+            cameraToggle.checked = false;
+            cameraToggle.addEventListener("change", function () {
+                setCameraToggleState(cameraToggle.checked);
+            });
+        }
+
         var cameraFeed = document.getElementById("dashCameraFeed");
         if (cameraFeed) {
             cameraFeed.addEventListener("load", function () {
@@ -1220,6 +1260,7 @@
         renderDesiredPwm();
         renderLimits();
         renderConnectionSummary();
+        setCameraToggleState(cameraToggle ? cameraToggle.checked : false);
         renderPeripheralStatus();
         renderTelemetry(window.RoverClient.state.telemetry);
         window.RoverClient.fetchLogs(180);
