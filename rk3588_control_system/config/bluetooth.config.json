@@ -1,0 +1,21 @@
+{
+  "bluetooth": {
+    "enabled": true,
+    "device_name": "RK3588_Pixhawk",
+    "service_uuid": "00001101-0000-1000-8000-00805f9b34fb",
+    "baud_rate": 115200,
+    "auto_connect": false
+  },
+  "paired_devices": [
+    {
+      "mac_address": "00:00:00:00:00:00",
+      "name": "Mobile Device",
+      "type": "phone"
+    }
+  ],
+  "security": {
+    "pin": "1234",
+    "authentication_required": true,
+    "encryption_enabled": false
+  }
+}

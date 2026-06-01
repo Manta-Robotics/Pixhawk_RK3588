@@ -1,0 +1,15 @@
+[Unit]
+Description=Manta Control Hotspot
+After=NetworkManager.service
+Wants=NetworkManager.service
+Before=manta-captive-portal.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=/bin/bash __PROJECT_DIR__/scripts/ensure_hotspot.sh start
+ExecStop=/bin/bash __PROJECT_DIR__/scripts/ensure_hotspot.sh stop
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

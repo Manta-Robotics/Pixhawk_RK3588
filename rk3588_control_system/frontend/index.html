@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manta Control</title>
+    <link rel="stylesheet" href="css/style.css?v=20260528d">
+</head>
+<body data-page="dashboard">
+    <header class="shell-header shell-header-compact">
+        <div class="brand brand-compact">
+            <h1>Manta Control</h1>
+            <p>Drive / Camera / Horizon</p>
+        </div>
+        <div class="header-status">
+            <span id="headerConnection" class="pill disconnected">WEB OFF</span>
+            <span id="headerPixhawk" class="pill">FCU OFF</span>
+            <span id="headerTime" class="clock">00:00:00</span>
+        </div>
+    </header>
+
+    <main class="page-grid dashboard-grid dashboard-grid-compact">
+        <section class="panel panel-span-all compact-overview-bar">
+            <div class="compact-stat-grid">
+                <article class="stat-card compact-stat-card">
+                    <span class="label">Mode</span>
+                    <span class="value" id="dashHeroMode">MANUAL</span>
+                </article>
+                <article class="stat-card compact-stat-card">
+                    <span class="label">Arm</span>
+                    <span class="value" id="dashHeroArmed">SAFE</span>
+                </article>
+                <article class="stat-card compact-stat-card">
+                    <span class="label">FCU</span>
+                    <span class="value" id="dashHeroPixhawk">WAIT</span>
+                </article>
+                <article class="stat-card compact-stat-card">
+                    <span class="label">Battery</span>
+                    <span class="value" id="dashBattery">0.0V / 100%</span>
+                </article>
+                <article class="stat-card compact-stat-card">
+                    <span class="label">LubanCat Temp</span>
+                    <span class="value" id="dashHostTemp">--</span>
+                </article>
+                <article class="stat-card compact-stat-card">
+                    <span class="label">FCU Temp</span>
+                    <span class="value" id="dashFcuTemp">--</span>
+                </article>
+                <article class="stat-card compact-stat-card">
+                    <span class="label">Speed</span>
+                    <span class="value" id="dashSpeed">0.00 m/s</span>
+                </article>
+                <article class="stat-card compact-stat-card">
+                    <span class="label">GPS</span>
+                    <span class="value" id="dashGps">0 sat</span>
+                </article>
+            </div>
+        </section>
+
+        <section class="panel panel-span-all operator-cockpit">
+            <div class="operator-cockpit-grid">
+                <div class="camera-stack">
+                    <div class="camera-shell camera-shell-focus">
+                        <img id="dashCameraFeed" class="camera-feed" alt="Manta camera feed">
+                        <canvas id="visionOverlay" class="vision-overlay"></canvas>
+                        <div class="camera-placeholder" id="dashCameraPlaceholder">
+                            <strong id="dashCameraTitle">Camera</strong>
+                            <span id="dashCameraMessage">Waiting for the camera feed.</span>
+                        </div>
+                        <div class="camera-overlay">
+                            <span class="attitude-badge" id="dashCameraBadge">CAMERA</span>
+                            <span class="camera-meta" id="dashCameraSource">Source pending</span>
+                        </div>
+                    </div>
+
+                    <div class="button-row compact-action-row">
+                        <button class="btn" id="btnImuModal" type="button">IMU</button>
+                        <button class="btn" id="btnVisionToggle" type="button">Vision</button>
+                    </div>
+                </div>
+
+                <div class="attitude-stack">
+                    <div class="mini-panel-head">
+                        <h2>Attitude</h2>
+                        <p class="tip compact-tip" id="dashImuHint">IMU ready</p>
+                    </div>
+
+                    <div class="horizon-shell horizon-shell-compact">
+                        <div class="horizon-window">
+                            <div class="horizon-world" id="horizonWorld">
+                                <div class="horizon-sky"></div>
+                                <div class="horizon-ground"></div>
+                                <div class="horizon-line"></div>
+                            </div>
+
+                            <div class="horizon-pitch-ladder">
+                                <div class="pitch-mark pitch-mark-30" data-label="30"></div>
+                                <div class="pitch-mark pitch-mark-20" data-label="20"></div>
+                                <div class="pitch-mark pitch-mark-10" data-label="10"></div>
+                                <div class="pitch-mark pitch-mark-0" data-label="0"></div>
+                                <div class="pitch-mark pitch-mark--10" data-label="10"></div>
+                                <div class="pitch-mark pitch-mark--20" data-label="20"></div>
+                                <div class="pitch-mark pitch-mark--30" data-label="30"></div>
+                            </div>
+
+                            <div class="horizon-bank-scale">
+                                <span class="bank-tick bank-tick-top"></span>
+                                <span class="bank-tick bank-tick-left-20"></span>
+                                <span class="bank-tick bank-tick-right-20"></span>
+                                <span class="bank-tick bank-tick-left-45"></span>
+                                <span class="bank-tick bank-tick-right-45"></span>
+                            </div>
+
+                            <div class="horizon-reticle"></div>
+
+                            <div class="horizon-overlay">
+                                <span class="attitude-badge" id="attModeBadge">MANUAL</span>
+                                <div class="attitude-mini-readout">
+                                    <span>Pitch <strong id="attPitch">0.0°</strong></span>
+                                    <span>Roll <strong id="attRoll">0.0°</strong></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-grid attitude-stat-grid">
+                        <article class="stat-card compact-stat-card">
+                            <span class="label">Pitch</span>
+                            <span class="value" id="attPitchMirror">0.0°</span>
+                        </article>
+                        <article class="stat-card compact-stat-card">
+                            <span class="label">Roll</span>
+                            <span class="value" id="attRollMirror">0.0°</span>
+                        </article>
+                        <article class="stat-card compact-stat-card">
+                            <span class="label">Yaw</span>
+                            <span class="value" id="attYaw">0.0°</span>
+                        </article>
+                        <article class="stat-card compact-stat-card">
+                            <span class="label">Heading</span>
+                            <span class="value" id="dashHeading">0.0°</span>
+                        </article>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel panel-span-all control-surface">
+            <div class="control-surface-head">
+                <div class="button-row compact-action-row">
+                    <button class="btn btn-primary" id="btnArm">Arm</button>
+                    <button class="btn btn-warning" id="btnDisarm">Disarm</button>
+                    <button class="btn btn-danger" id="btnEmergency">Stop</button>
+                    <button class="btn" id="ctrlReset">Center</button>
+                </div>
+
+                <div class="limits-box" id="limitsBox">PWM range loading...</div>
+            </div>
+
+            <div class="stat-grid dashboard-control-summary compact-control-summary">
+                <article class="stat-card compact-stat-card"><span class="label">Left Target</span><span class="value" id="dashLeftTarget">1500</span></article>
+                <article class="stat-card compact-stat-card"><span class="label">Right Target</span><span class="value" id="dashRightTarget">1500</span></article>
+                <article class="stat-card compact-stat-card"><span class="label" id="dashLeftActualLabel">Main1 Actual</span><span class="value" id="dashLeftActual">0</span></article>
+                <article class="stat-card compact-stat-card"><span class="label" id="dashRightActualLabel">Main3 Actual</span><span class="value" id="dashRightActual">0</span></article>
+                <article class="stat-card compact-stat-card compact-last-command"><span class="label">Last Command</span><span class="value" id="dashLastCmd">None</span></article>
+                <article class="stat-card compact-stat-card compact-mode-card"><span class="label">Mode Mirror</span><span class="value" id="dashHeroModeMirror">MANUAL</span></article>
+            </div>
+
+            <div class="twin-stick-grid dashboard-stick-grid control-stick-grid">
+                <article class="motor-stick-card">
+                    <div class="motor-stick-head">
+                        <div>
+                            <h3>Left Motor</h3>
+                            <p id="leftMotorChannel">Main1 target</p>
+                        </div>
+                        <strong id="leftMotorValue">1500 us</strong>
+                    </div>
+                    <div class="motor-stick-shell">
+                        <div class="motor-stick-axis" id="leftMotorStick" role="slider" tabindex="0" aria-orientation="vertical" aria-valuemin="1000" aria-valuemax="2000" aria-valuenow="1500">
+                            <div class="motor-stick-track"></div>
+                            <div class="motor-stick-centerline"></div>
+                            <div class="motor-stick-knob"></div>
+                        </div>
+                    </div>
+                    <div class="motor-stick-scale">
+                        <span>2000</span>
+                        <span>1500</span>
+                        <span>1000</span>
+                    </div>
+                </article>
+
+                <article class="motor-stick-card">
+                    <div class="motor-stick-head">
+                        <div>
+                            <h3>Right Motor</h3>
+                            <p id="rightMotorChannel">Main3 target</p>
+                        </div>
+                        <strong id="rightMotorValue">1500 us</strong>
+                    </div>
+                    <div class="motor-stick-shell">
+                        <div class="motor-stick-axis" id="rightMotorStick" role="slider" tabindex="0" aria-orientation="vertical" aria-valuemin="1000" aria-valuemax="2000" aria-valuenow="1500">
+                            <div class="motor-stick-track"></div>
+                            <div class="motor-stick-centerline"></div>
+                            <div class="motor-stick-knob"></div>
+                        </div>
+                    </div>
+                    <div class="motor-stick-scale">
+                        <span>2000</span>
+                        <span>1500</span>
+                        <span>1000</span>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="panel panel-span-all panel-logs panel-logs-bottom">
+            <div class="section-header">
+                <div>
+                    <h2>Logs</h2>
+                    <p class="panel-subtitle">Server and control activity.</p>
+                </div>
+                <button class="btn" id="logClear">Clear</button>
+            </div>
+
+            <div class="bottom-log-grid">
+                <article class="log-panel">
+                    <div class="log-panel-head">
+                        <h3>Server</h3>
+                    </div>
+                    <div id="overviewLogsServer" class="logs-box"></div>
+                </article>
+
+                <article class="log-panel">
+                    <div class="log-panel-head">
+                        <h3>Control</h3>
+                    </div>
+                    <div id="overviewLogsControl" class="logs-box"></div>
+                </article>
+            </div>
+        </section>
+    </main>
+
+    <div class="modal-backdrop" id="imuModal" aria-hidden="true">
+        <div class="modal-dialog panel" role="dialog" aria-modal="true" aria-labelledby="imuModalTitle">
+            <div class="section-header modal-header">
+                <div>
+                    <h2 id="imuModalTitle">IMU Calibration</h2>
+                    <p class="panel-subtitle">Start calibration and confirm each FCU-requested pose here.</p>
+                </div>
+                <button class="btn" id="imuModalClose" type="button">Close</button>
+            </div>
+            <div class="calibration-board">
+                <div class="button-row">
+                    <button class="btn btn-primary" id="imuStartAccel" type="button">Start 6-Point</button>
+                    <button class="btn" id="imuStartLevel" type="button">Start Level</button>
+                    <button class="btn btn-warning" id="imuConfirmPose" type="button" disabled>Waiting for FCU</button>
+                </div>
+                <div class="calibration-readout">
+                    <div class="stat-card">
+                        <span class="label">Mode</span>
+                        <span class="value" id="imuCalMode">Idle</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="label">Status</span>
+                        <span class="value" id="imuCalStatus">Idle</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="label">Pose</span>
+                        <span class="value" id="imuCalStep">Waiting for FCU</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="label">Last ACK</span>
+                        <span class="value" id="imuCalAck">--</span>
+                    </div>
+                </div>
+                <div class="pose-grid">
+                    <div class="pose-card" data-step="LEVEL"><strong>LEVEL</strong><span>Level</span></div>
+                    <div class="pose-card" data-step="LEFT"><strong>LEFT</strong><span>Left side down</span></div>
+                    <div class="pose-card" data-step="RIGHT"><strong>RIGHT</strong><span>Right side down</span></div>
+                    <div class="pose-card" data-step="NOSEDOWN"><strong>NOSEDOWN</strong><span>Nose down</span></div>
+                    <div class="pose-card" data-step="NOSEUP"><strong>NOSEUP</strong><span>Nose up</span></div>
+                    <div class="pose-card" data-step="BACK"><strong>BACK</strong><span>Tail down</span></div>
+                </div>
+                <div class="progress-track">
+                    <span class="progress-fill" id="imuCalProgressBar"></span>
+                </div>
+                <p class="tip" id="imuCalProgressText">0%</p>
+                <p class="tip" id="imuCalHint">Waiting for the next FCU pose prompt.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js?v=20260528d"></script>
+    <script src="js/realtime_client.js?v=20260528d"></script>
+    <script src="js/common_ui.js?v=20260528d"></script>
+    <script src="js/page_overview.js?v=20260528d"></script>
+</body>
+</html>

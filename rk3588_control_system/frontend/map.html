@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rover Ground Station - GPS Map</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body data-page="map">
+    <header class="shell-header">
+        <div class="brand">
+            <h1>Rover Ground Station</h1>
+            <p>Navigation and Track View</p>
+        </div>
+        <nav class="main-nav">
+            <a href="/index.html" data-nav="dashboard">Dashboard</a>
+            <a href="/map.html" data-nav="map">GPS Map</a>
+        </nav>
+        <div class="header-status">
+            <span id="headerConnection" class="pill disconnected">Web offline</span>
+            <span id="headerPixhawk" class="pill">FCU offline</span>
+            <span id="headerTime" class="clock">00:00:00</span>
+        </div>
+    </header>
+
+    <main class="page-grid map-grid-page">
+        <section class="panel panel-hero panel-span-all">
+            <div class="eyebrow">Navigation View</div>
+            <div class="hero-grid">
+                <div>
+                    <h2>Tracking and Positioning</h2>
+                    <p class="hero-copy">Use this page to verify GPS lock, path continuity, and heading stability without cluttering the control surface.</p>
+                </div>
+                <div class="metrics-strip">
+                    <div class="metric-chip">
+                        <span class="label">Fix Status</span>
+                        <strong id="mapFixStatus">Awaiting fix</strong>
+                    </div>
+                    <div class="metric-chip">
+                        <span class="label">Heading</span>
+                        <strong id="mapHeadingQuick">0.0°</strong>
+                    </div>
+                    <div class="metric-chip">
+                        <span class="label">Satellites</span>
+                        <strong id="mapSatQuick">0 sat</strong>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel panel-map-full">
+            <div class="section-header">
+                <div>
+                    <h2>Live GPS Track</h2>
+                    <p class="panel-subtitle">The map follows the rover after a valid GPS fix is available.</p>
+                </div>
+            </div>
+            <div id="gpsMap" class="map-canvas"></div>
+            <p id="mapHint" class="tip">Awaiting valid GPS coordinates...</p>
+        </section>
+
+        <section class="panel">
+            <div class="section-header">
+                <div>
+                    <h2>Position Data</h2>
+                    <p class="panel-subtitle">Use these values to distinguish FCU GPS data from map-layer problems.</p>
+                </div>
+            </div>
+            <div class="stat-grid">
+                <div class="stat-card"><span class="label">Latitude</span><span class="value" id="mapLat">0.000000</span></div>
+                <div class="stat-card"><span class="label">Longitude</span><span class="value" id="mapLon">0.000000</span></div>
+                <div class="stat-card"><span class="label">Altitude</span><span class="value" id="mapAlt">0.0 m</span></div>
+                <div class="stat-card"><span class="label">Satellites</span><span class="value" id="mapSats">0</span></div>
+                <div class="stat-card"><span class="label">HDOP</span><span class="value" id="mapHdop">999</span></div>
+                <div class="stat-card"><span class="label">Heading</span><span class="value" id="mapYaw">0.0°</span></div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="section-header">
+                <div>
+                    <h2>Position Guide</h2>
+                    <p class="panel-subtitle">Use this panel to tell a weak GPS fix from a map-network issue.</p>
+                </div>
+            </div>
+            <div class="advisory-grid">
+                <article class="advisory-card">
+                    <h3>GPS Quality</h3>
+                    <p id="mapGuideText">At least 4 satellites are required. Lower HDOP is more stable.</p>
+                </article>
+                <article class="advisory-card">
+                    <h3>Map Network</h3>
+                    <p>If latitude, longitude, and heading update but the map stays blank, check OpenStreetMap access before checking the serial link.</p>
+                </article>
+            </div>
+        </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js?v=20260528"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="js/realtime_client.js?v=20260528"></script>
+    <script src="js/common_ui.js?v=20260528"></script>
+    <script src="js/page_map.js?v=20260528"></script>
+</body>
+</html>

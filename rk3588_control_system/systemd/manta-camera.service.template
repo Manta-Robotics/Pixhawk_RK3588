@@ -1,0 +1,17 @@
+[Unit]
+Description=Manta Camera Snapshot Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUN_USER__
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=/usr/bin/python3 __PROJECT_DIR__/scripts/camera_snapshot_server.py
+Restart=always
+RestartSec=2
+StandardOutput=append:__PROJECT_DIR__/logs/camera.log
+StandardError=append:__PROJECT_DIR__/logs/camera.log
+
+[Install]
+WantedBy=multi-user.target

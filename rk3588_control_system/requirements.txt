@@ -1,0 +1,25 @@
+# Python 3.8+ required
+
+# MAVLink communication
+pymavlink==2.4.36
+pyserial==3.5
+
+# Data processing
+numpy==1.24.3
+pandas==2.0.2
+
+# Web communication
+python-socketio==5.9.0
+python-engineio==4.7.1
+aiohttp==3.8.5
+
+# Logging and utilities
+python-dateutil==2.8.2
+pytz==2023.3
+
+# System monitoring
+psutil==5.9.5
+
+# Development
+pytest==7.4.0
+pylint==2.17.5

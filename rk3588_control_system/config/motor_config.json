@@ -1,0 +1,52 @@
+{
+  "motors": [
+    {
+      "channel": 1,
+      "name": "左电机_Main1",
+      "type": "brushless",
+      "direction": "cw",
+      "min_pwm": 1000,
+      "max_pwm": 2000,
+      "center_pwm": 1500,
+      "enabled": true
+    },
+    {
+      "channel": 2,
+      "name": "预留_Main2",
+      "type": "brushless",
+      "direction": "ccw",
+      "min_pwm": 1000,
+      "max_pwm": 2000,
+      "center_pwm": 1500,
+      "enabled": false
+    },
+    {
+      "channel": 3,
+      "name": "右电机_Main3",
+      "type": "brushless",
+      "direction": "cw",
+      "min_pwm": 1000,
+      "max_pwm": 2000,
+      "center_pwm": 1500,
+      "enabled": true
+    },
+    {
+      "channel": 4,
+      "name": "预留_Main4",
+      "type": "brushless",
+      "direction": "ccw",
+      "min_pwm": 1000,
+      "max_pwm": 2000,
+      "center_pwm": 1500,
+      "enabled": false
+    }
+  ],
+  "brushless_config": {
+    "protocol": "PWM",
+    "frequency": 400,
+    "idle_pwm": 1000,
+    "max_pwm": 2000,
+    "center_pwm": 1500,
+    "bidirectional": true
+  }
+}

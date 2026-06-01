@@ -1,0 +1,33 @@
+{
+  "name": "rk3588-pixhawk-control",
+  "version": "1.0.0",
+  "description": "RK3588 Pixhawk 6X Control System with Web Dashboard",
+  "main": "backend/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "RK3588",
+    "Pixhawk",
+    "UAV",
+    "Control",
+    "Dashboard"
+  ],
+  "author": "Manta Robotic",
+  "license": "MIT",
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "socket.io": "^4.5.4"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
