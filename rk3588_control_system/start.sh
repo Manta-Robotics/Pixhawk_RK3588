@@ -20,6 +20,7 @@ read_interface_ipv4() {
 NODE_PID=""
 PYTHON_PID=""
 CAMERA_PID=""
+GIMBAL_STREAM_PID=""
 TAIL_PID=""
 
 # Prefer user-local Node 20 if installed
@@ -37,6 +38,7 @@ SYSTEMD_SERVICES=(
     manta-backend.service
     manta-bridge.service
     manta-camera.service
+    manta-gimbal-stream.service
     manta-hotspot.service
     manta-captive-portal.service
 )
@@ -106,6 +108,10 @@ BRIDGE_COMMAND_PORT=$(grep -o '"bridge_command_port"[^,]*' config/system.config.
 BRIDGE_COMMAND_PORT=${BRIDGE_COMMAND_PORT:-14551}
 CAMERA_PORT=$(grep -o '"camera_port"[^,]*' config/system.config.json | grep -o '[0-9]*' | head -n 1)
 CAMERA_PORT=${CAMERA_PORT:-8090}
+GIMBAL_VIDEO_PORT=$(grep -o '"udp_video_port"[^,]*' config/system.config.json | grep -o '[0-9]*' | head -n 1)
+GIMBAL_VIDEO_PORT=${GIMBAL_VIDEO_PORT:-9554}
+GIMBAL_PROXY_PORT=$(grep -o '"proxy_port"[^,]*' config/system.config.json | grep -o '[0-9]*' | head -n 1)
+GIMBAL_PROXY_PORT=${GIMBAL_PROXY_PORT:-8091}
 
 echo ""
 echo -e "${YELLOW}🔄 Checking for existing processes on port $WEB_PORT...${NC}"
@@ -152,6 +158,21 @@ fi
 
 pkill -f "python3 backend/mavlink_bridge.py" 2>/dev/null || true
 pkill -f "python3 scripts/camera_snapshot_server.py" 2>/dev/null || true
+pkill -f "python3 scripts/gimbal_udp_stream_server.py" 2>/dev/null || true
+
+echo -e "${YELLOW}🔄 Checking for stale gimbal video proxy processes...${NC}"
+GIMBAL_VIDEO_PIDS=$(lsof -t -iUDP:$GIMBAL_VIDEO_PORT 2>/dev/null | tr '\n' ' ')
+GIMBAL_PROXY_PIDS=$(lsof -t -iTCP:$GIMBAL_PROXY_PORT -sTCP:LISTEN 2>/dev/null | tr '\n' ' ')
+if [ -n "$GIMBAL_VIDEO_PIDS$GIMBAL_PROXY_PIDS" ]; then
+    echo -e "${YELLOW}⚠️  Found gimbal video process(es): $GIMBAL_VIDEO_PIDS $GIMBAL_PROXY_PIDS${NC}"
+    kill $GIMBAL_VIDEO_PIDS $GIMBAL_PROXY_PIDS 2>/dev/null || true
+    sleep 1
+    for pid in $GIMBAL_VIDEO_PIDS $GIMBAL_PROXY_PIDS; do
+        if ps -p "$pid" > /dev/null 2>&1; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+fi
 
 echo ""
 echo -e "${GREEN}🚀 Starting Node.js backend server...${NC}"
@@ -199,6 +220,20 @@ else
 fi
 
 echo ""
+echo -e "${GREEN}🚀 Starting gimbal UDP stream proxy service...${NC}"
+python3 scripts/gimbal_udp_stream_server.py > logs/gimbal_stream.log 2>&1 &
+GIMBAL_STREAM_PID=$!
+echo "$GIMBAL_STREAM_PID" > .pids_gimbal_stream
+echo -e "${GREEN}✅ Gimbal stream proxy started (PID: $GIMBAL_STREAM_PID)${NC}"
+sleep 2
+
+if ps -p $GIMBAL_STREAM_PID > /dev/null; then
+    echo -e "${GREEN}✅ Gimbal stream proxy is running${NC}"
+else
+    echo -e "${YELLOW}⚠️  Gimbal stream proxy may not have started. Check logs/gimbal_stream.log${NC}"
+fi
+
+echo ""
 echo "════════════════════════════════════════════════════════════"
 echo -e "${GREEN}✅ All services started successfully!${NC}"
 echo "════════════════════════════════════════════════════════════"
@@ -223,23 +258,27 @@ echo "  PID: $NODE_PID"
 echo ""
 echo "  Python MAVLink Bridge: PID $PYTHON_PID"
 echo "  Camera Snapshot: PID $CAMERA_PID (http://127.0.0.1:$CAMERA_PORT/snapshot.jpg)"
+echo "  Gimbal Stream: PID $GIMBAL_STREAM_PID (http://127.0.0.1:8091/stream.mjpg)"
 echo ""
 echo "📋 Logs:"
 echo "  Server:  tail -f logs/server.log"
 echo "  MAVLink: tail -f logs/mavlink.log"
 echo "  Camera:  tail -f logs/camera.log"
+echo "  Gimbal:  tail -f logs/gimbal_stream.log"
 echo "  System:  tail -f logs/system.log"
 echo ""
 echo "🛑 To stop services:"
 echo "  kill $NODE_PID  # Stop Node.js"
 echo "  kill $PYTHON_PID  # Stop Python"
 echo "  kill $CAMERA_PID  # Stop camera snapshot service"
+echo "  kill $GIMBAL_STREAM_PID  # Stop gimbal stream proxy"
 echo "  Or run: bash stop.sh"
 echo ""
 echo "💡 Monitor logs:"
 echo "  tail -f logs/server.log"
 echo "  tail -f logs/mavlink.log"
 echo "  tail -f logs/camera.log"
+echo "  tail -f logs/gimbal_stream.log"
 echo "  bash scripts/status_report.sh"
 echo "  watch -n 2 bash scripts/status_report.sh"
 echo ""
@@ -248,6 +287,7 @@ echo ""
 echo "$NODE_PID" > .pids_node
 echo "$PYTHON_PID" > .pids_python
 echo "$CAMERA_PID" > .pids_camera
+echo "$GIMBAL_STREAM_PID" > .pids_gimbal_stream
 
 echo "📌 Basic status report:"
 bash scripts/status_report.sh || true

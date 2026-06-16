@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manta Gimbal</title>
+    <link rel="stylesheet" href="css/style.css?v=20260617c">
+</head>
+<body data-page="gimbal">
+    <header class="shell-header shell-header-compact">
+        <div class="brand brand-compact">
+            <h1>Manta Gimbal</h1>
+            <p>Electro Optical Pod</p>
+        </div>
+        <nav class="main-nav" aria-label="Main navigation">
+            <a href="index.html" data-nav="dashboard">Dashboard</a>
+            <a href="gimbal.html" data-nav="gimbal">Gimbal</a>
+            <a href="map.html" data-nav="map">Map</a>
+        </nav>
+        <div class="header-status">
+            <span id="headerConnection" class="pill disconnected">WEB OFF</span>
+            <span id="headerPixhawk" class="pill">FCU OFF</span>
+            <span id="headerTime" class="clock">00:00:00</span>
+        </div>
+    </header>
+
+    <main class="page-grid gimbal-grid">
+        <section class="panel panel-span-all gimbal-console">
+            <div class="gimbal-toolbar">
+                <div class="segmented-control" role="tablist" aria-label="Gimbal mode">
+                    <button id="gimbalModeClick" class="active" type="button">Click Center</button>
+                    <button id="gimbalModeTrack" type="button">Swimmer Track</button>
+                </div>
+                <div class="button-row compact-action-row">
+                    <button class="btn btn-primary" id="gimbalConnect" type="button">Connect</button>
+                    <button class="btn btn-danger" id="gimbalStop" type="button">Stop</button>
+                    <button class="btn" id="gimbalHome" type="button">Center</button>
+                    <button class="btn" id="gimbalAutofocus" type="button">Zoom Reset</button>
+                    <button class="btn" id="gimbalOsdHide" type="button">Hide OSD</button>
+                    <button class="btn btn-warning" id="gimbalTrackToggle" type="button">Track</button>
+                </div>
+            </div>
+
+            <div class="gimbal-layout">
+                <div class="camera-shell camera-shell-focus gimbal-view" id="gimbalView">
+                    <img id="gimbalCameraFeed" class="camera-feed" alt="Gimbal video feed">
+                    <canvas id="gimbalOverlay" class="vision-overlay"></canvas>
+                    <div class="camera-placeholder" id="gimbalCameraPlaceholder">
+                        <strong>Gimbal</strong>
+                        <span id="gimbalCameraMessage">Waiting for the gimbal UDP video stream.</span>
+                    </div>
+                    <div class="camera-overlay">
+                        <span class="attitude-badge" id="gimbalModeBadge">CLICK</span>
+                        <span class="camera-meta" id="gimbalCameraSource">Source pending</span>
+                    </div>
+                </div>
+
+                <aside class="gimbal-side">
+                    <div class="stat-grid gimbal-stat-grid">
+                        <article class="stat-card compact-stat-card"><span class="label">Serial</span><span class="value" id="gimbalSerial">--</span></article>
+                        <article class="stat-card compact-stat-card"><span class="label">Status</span><span class="value" id="gimbalStatus">Idle</span></article>
+                        <article class="stat-card compact-stat-card"><span class="label">Mode</span><span class="value" id="gimbalModeText">Click</span></article>
+                        <article class="stat-card compact-stat-card"><span class="label">Target</span><span class="value" id="gimbalTarget">0 / 0</span></article>
+                        <article class="stat-card compact-stat-card"><span class="label">Command</span><span class="value" id="gimbalCommand">Idle</span></article>
+                        <article class="stat-card compact-stat-card"><span class="label">Video</span><span class="value" id="gimbalVideo">--</span></article>
+                    </div>
+                    <div class="gimbal-reticle-card">
+                        <div class="gimbal-reticle-mini"><span></span></div>
+                    </div>
+                </aside>
+            </div>
+        </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js?v=20260617c"></script>
+    <script src="js/realtime_client.js?v=20260617c"></script>
+    <script src="js/common_ui.js?v=20260617c"></script>
+    <script src="js/page_gimbal.js?v=20260617c"></script>
+</body>
+</html>

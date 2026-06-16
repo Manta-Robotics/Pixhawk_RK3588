@@ -24,11 +24,17 @@ SUBSYSTEMS=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666
 SUBSYSTEMS=="usb", SUBSYSTEM=="usb_device", MODE="0666"
 KERNEL=="ttyUSB[0-9]*", MODE="0666"
 KERNEL=="ttyACM[0-9]*", MODE="0666"
+KERNEL=="ttyS[0-9]*", MODE="0666"
 EOF
 
 # Reload udev rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
+if [ ! -e /dev/ttyS3 ] && [ -f /boot/firmware/ubuntuEnv.txt ]; then
+	echo "ℹ️  /dev/ttyS3 is not present. Enabling UART3 overlay for the gimbal port..."
+	sudo bash "$(cd "$(dirname "$0")" && pwd)/enable_gimbal_uart.sh"
+fi
+
 echo "✅ Serial port permissions configured"
-echo "ℹ️  Please logout and login again for changes to take effect"
+echo "ℹ️  If /dev/ttyS3 was missing, reboot before testing gimbal control"

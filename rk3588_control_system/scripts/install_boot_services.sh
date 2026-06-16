@@ -34,8 +34,9 @@ install -d "$PROJECT_DIR/logs"
 chown -R "$RUN_USER":"$RUN_USER" "$PROJECT_DIR/logs"
 
 bash "$PROJECT_DIR/scripts/enable_camera_overlay.sh"
+bash "$PROJECT_DIR/scripts/enable_gimbal_uart.sh"
 
-for template in manta-backend manta-bridge manta-camera manta-hotspot manta-captive-portal; do
+for template in manta-backend manta-bridge manta-camera manta-gimbal-stream manta-hotspot manta-captive-portal; do
     sed \
         -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
         -e "s|__RUN_USER__|$RUN_USER|g" \
@@ -47,7 +48,7 @@ address=/#/$HOTSPOT_PORTAL_IP
 EOF
 
 systemctl daemon-reload
-systemctl enable manta-backend.service manta-bridge.service manta-camera.service manta-hotspot.service manta-captive-portal.service
+systemctl enable manta-backend.service manta-bridge.service manta-camera.service manta-gimbal-stream.service manta-hotspot.service manta-captive-portal.service
 
 echo "[install-boot] Installed boot services and captive portal settings."
 echo "[install-boot] Hotspot SSID    : $HOTSPOT_SSID"
@@ -57,4 +58,4 @@ else
     echo "[install-boot] Hotspot password: $HOTSPOT_PASSWORD"
 fi
 echo "[install-boot] Dashboard URL   : http://$HOTSPOT_PORTAL_IP:3000"
-echo "[install-boot] Reboot the LubanCat to apply the configured camera overlay and hotspot changes."
+echo "[install-boot] Reboot the LubanCat to apply the configured camera/UART overlays and hotspot changes."

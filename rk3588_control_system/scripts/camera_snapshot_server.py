@@ -26,12 +26,13 @@ FRAME_STALL_SECONDS = max(1.0, float(CAMERA.get('stall_reconnect_seconds', 3.0))
 SENSOR_CONTROLS = CAMERA.get('sensor_controls', {}) if isinstance(CAMERA.get('sensor_controls', {}), dict) else {}
 _REAPPLY_RAW = CAMERA.get('sensor_control_reapply_seconds', [1.5, 4.0])
 SENSOR_REAPPLY = [float(x) for x in (_REAPPLY_RAW if isinstance(_REAPPLY_RAW, list) else [])]
+SENSOR_ENFORCE_SECONDS = max(0.2, float(CAMERA.get('sensor_control_enforce_seconds', 1.0)))
 SNAPSHOT_FILTER = str(CAMERA.get('snapshot_filter', '')).strip()
 FORCED_DEVICE = str(CAMERA.get('device', 'auto'))
 FRAME_LOCK = threading.Lock()
 FRAME_CACHE = {'timestamp': 0.0, 'bytes': b'', 'device': '', 'name': '', 'error': ''}
 FRAME_READY = threading.Event()
-CONTROL_DEVICE = None
+CONTROL_DEVICE_MAP = {}
 
 
 def enumerate_video_devices():
@@ -77,33 +78,30 @@ def select_camera_device():
 
 
 def find_control_device(control_names):
-    global CONTROL_DEVICE
-
-    if CONTROL_DEVICE:
-        return CONTROL_DEVICE
-
+    """Return mapping {control_name: subdev_path}. Each control may live on a different subdev."""
     requested = [name for name in control_names if name]
     if not requested:
-        return None
+        return {}
 
-    for device in sorted(Path('/dev').glob('v4l-subdev*')):
-        result = subprocess.run(
-            ['v4l2-ctl', '-d', str(device), '--list-ctrls'],
-            capture_output=True,
-            text=True,
-
-
-            check=False
-        )
-        if result.returncode != 0:
-            continue
-
-        output = result.stdout
-        if all(name in output for name in requested):
-            CONTROL_DEVICE = str(device)
-            return CONTROL_DEVICE
-
-    return None
+    missing = [name for name in requested if name not in CONTROL_DEVICE_MAP]
+    if missing:
+        for device in sorted(Path('/dev').glob('v4l-subdev*')):
+            result = subprocess.run(
+                ['v4l2-ctl', '-d', str(device), '--list-ctrls'],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                continue
+            output = result.stdout
+            for name in list(missing):
+                if name not in CONTROL_DEVICE_MAP and name in output:
+                    CONTROL_DEVICE_MAP[name] = str(device)
+                    missing.remove(name)
+            if not missing:
+                break
+    return {name: CONTROL_DEVICE_MAP[name] for name in requested if name in CONTROL_DEVICE_MAP}
 
 
 def normalize_control_value(value):
@@ -117,12 +115,12 @@ def normalize_control_value(value):
             return text
 
 
-def read_sensor_controls(control_device):
-    if not control_device or not SENSOR_CONTROLS:
-        return {}
+def read_sensor_controls(control_device, names):
+    if not control_device or not names:
+        return None
 
     result = subprocess.run(
-        ['v4l2-ctl', '-d', control_device, '--get-ctrl', ','.join(SENSOR_CONTROLS.keys())],
+        ['v4l2-ctl', '-d', control_device, '--get-ctrl', ','.join(names)],
         capture_output=True,
         text=True,
         check=False
@@ -147,33 +145,36 @@ def apply_sensor_controls(force=False):
     if not SENSOR_CONTROLS:
         return False
 
-    control_device = find_control_device(SENSOR_CONTROLS.keys())
-    if not control_device:
+    device_map = find_control_device(SENSOR_CONTROLS.keys())
+    if not device_map:
         return False
 
-    assignments = []
-    desired_controls = {}
+    # Group desired controls by the subdev that exposes them.
+    grouped = {}
     for name, value in SENSOR_CONTROLS.items():
-        if value is None:
+        if value is None or name not in device_map:
             continue
-        desired_controls[name] = normalize_control_value(value)
-        assignments.append(f'{name}={value}')
+        device = device_map[name]
+        grouped.setdefault(device, {})[name] = normalize_control_value(value)
 
-    if not assignments:
+    if not grouped:
         return False
 
-    if not force:
-        current_controls = read_sensor_controls(control_device)
-        if current_controls and all(current_controls.get(name) == desired_controls.get(name) for name in desired_controls):
-            return False
-
-    subprocess.run(
-        ['v4l2-ctl', '-d', control_device, '--set-ctrl', ','.join(assignments)],
-        capture_output=True,
-        text=True,
-        check=False
-    )
-    return True
+    changed = False
+    for device, desired in grouped.items():
+        if not force:
+            current = read_sensor_controls(device, list(desired.keys()))
+            if current and all(current.get(n) == desired.get(n) for n in desired):
+                continue
+        assignments = [f'{n}={v}' for n, v in desired.items()]
+        subprocess.run(
+            ['v4l2-ctl', '-d', device, '--set-ctrl', ','.join(assignments)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        changed = True
+    return changed
 
 
 def capture_snapshot():
@@ -270,12 +271,18 @@ def capture_loop():
 
             frame_buffer = bytearray()
             last_frame_at = time.time()
+            next_enforce_at = time.time() + SENSOR_ENFORCE_SECONDS
             while True:
                 if process.poll() is not None:
                     break
 
                 if not process.stdout:
                     break
+
+                now = time.time()
+                if now >= next_enforce_at:
+                    apply_sensor_controls(force=False)
+                    next_enforce_at = now + SENSOR_ENFORCE_SECONDS
 
                 ready, _, _ = select.select([process.stdout.fileno()], [], [], 0.6)
                 if not ready:

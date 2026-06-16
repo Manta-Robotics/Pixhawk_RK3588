@@ -16,6 +16,7 @@ SYSTEMD_SERVICES=(
     manta-backend.service
     manta-bridge.service
     manta-camera.service
+    manta-gimbal-stream.service
     manta-hotspot.service
     manta-captive-portal.service
 )
@@ -57,6 +58,10 @@ BRIDGE_TELEMETRY_PORT=$(grep -o '"bridge_telemetry_port"[^,]*' config/system.con
 BRIDGE_TELEMETRY_PORT=${BRIDGE_TELEMETRY_PORT:-14552}
 CAMERA_PORT=$(grep -o '"camera_port"[^,]*' config/system.config.json | grep -o '[0-9]*' | head -n 1)
 CAMERA_PORT=${CAMERA_PORT:-8090}
+GIMBAL_VIDEO_PORT=$(grep -o '"udp_video_port"[^,]*' config/system.config.json | grep -o '[0-9]*' | head -n 1)
+GIMBAL_VIDEO_PORT=${GIMBAL_VIDEO_PORT:-9554}
+GIMBAL_PROXY_PORT=$(grep -o '"proxy_port"[^,]*' config/system.config.json | grep -o '[0-9]*' | head -n 1)
+GIMBAL_PROXY_PORT=${GIMBAL_PROXY_PORT:-8091}
 
 check_systemd_conflict
 
@@ -111,16 +116,20 @@ clear_listeners() {
 stop_pid_file .pids_node "Node.js server"
 stop_pid_file .pids_python "Python bridge"
 stop_pid_file .pids_camera "camera snapshot service"
+stop_pid_file .pids_gimbal_stream "gimbal stream proxy"
 
 echo ""
 echo "🔍 Checking for lingering processes..."
 pkill -f "node backend/server.js" 2>/dev/null || true
 pkill -f "python3 backend/mavlink_bridge.py" 2>/dev/null || true
 pkill -f "python3 scripts/camera_snapshot_server.py" 2>/dev/null || true
+pkill -f "python3 scripts/gimbal_udp_stream_server.py" 2>/dev/null || true
 
 clear_listeners tcp "$WEB_PORT"
 clear_listeners udp "$BRIDGE_COMMAND_PORT"
 clear_listeners udp "$BRIDGE_TELEMETRY_PORT"
 clear_listeners tcp "$CAMERA_PORT"
+clear_listeners udp "$GIMBAL_VIDEO_PORT"
+clear_listeners tcp "$GIMBAL_PROXY_PORT"
 
 echo "✅ All services stopped"

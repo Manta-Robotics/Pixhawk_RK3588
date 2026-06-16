@@ -1827,3 +1827,101 @@ body[data-page="dashboard"] .dashboard-grid-compact {
     position: absolute; inset: 0; width: 100%; height: 100%;
     pointer-events: none; transform: scaleX(-1); transform-origin: center;
 }
+
+.gimbal-grid {
+    grid-template-columns: 1fr;
+}
+
+.gimbal-console {
+    padding: 14px;
+}
+
+.gimbal-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+
+.gimbal-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.55fr);
+    gap: 14px;
+    align-items: stretch;
+}
+
+.gimbal-view {
+    cursor: crosshair;
+}
+
+.gimbal-view .camera-feed,
+.gimbal-view .vision-overlay {
+    transform: none;
+}
+
+.gimbal-side {
+    display: grid;
+    gap: 14px;
+    align-content: start;
+}
+
+.gimbal-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.gimbal-reticle-card {
+    min-height: 220px;
+    border: 1px solid rgba(126, 176, 210, 0.22);
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, rgba(17, 39, 57, 0.72), rgba(12, 28, 41, 0.62));
+    display: grid;
+    place-items: center;
+}
+
+.gimbal-reticle-mini {
+    position: relative;
+    width: min(180px, 70%);
+    aspect-ratio: 1 / 1;
+    border: 1px solid rgba(124, 224, 255, 0.28);
+    border-radius: 50%;
+}
+
+.gimbal-reticle-mini::before,
+.gimbal-reticle-mini::after,
+.gimbal-reticle-mini span::before {
+    content: "";
+    position: absolute;
+    background: rgba(124, 224, 255, 0.62);
+}
+
+.gimbal-reticle-mini::before {
+    left: 50%;
+    top: 10%;
+    bottom: 10%;
+    width: 1px;
+}
+
+.gimbal-reticle-mini::after {
+    top: 50%;
+    left: 10%;
+    right: 10%;
+    height: 1px;
+}
+
+.gimbal-reticle-mini span::before {
+    left: 50%;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(126, 217, 165, 0.82);
+}
+
+@media (max-width: 920px) {
+    .gimbal-layout {
+        grid-template-columns: 1fr;
+    }
+}

@@ -128,7 +128,7 @@
                     if (typeof b.active === "boolean" && b.active !== visionActive) {
                         applyVisionState(b.active);
                     }
-                    if (b.detections) drawVisionDetections(b.detections);
+                    if (visionActive && b.detections) drawVisionDetections(b.detections);
                 })
                 .catch(function () {});
         }, 250);
@@ -161,21 +161,32 @@
             canvas.width = cw; canvas.height = ch;
         }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        if (!det || !det.rects || !det.w || !det.h) return;
+        if (!det || !det.w || !det.h) return;
         var sx = canvas.width / det.w;
         var sy = canvas.height / det.h;
-        ctx.lineWidth = Math.max(2, Math.round(canvas.width / 200));
-        ctx.strokeStyle = "#00ff66";
-        ctx.fillStyle = "rgba(0,255,102,0.85)";
-        ctx.font = "bold " + Math.max(12, Math.round(canvas.width / 40)) + "px sans-serif";
-        det.rects.forEach(function (r) {
+        var rects = det.rects || [];
+        var conf = typeof det.conf === "number" ? det.conf : null;
+
+        ctx.lineWidth = Math.max(2, Math.round(canvas.width / 220));
+        ctx.strokeStyle = "rgba(0,255,102,0.9)";
+        ctx.setLineDash([]);
+        rects.forEach(function (r) {
             var x = r[0] * sx, y = r[1] * sy, w = r[2] * sx, h = r[3] * sy;
             ctx.strokeRect(x, y, w, h);
+        });
+
+        if (rects.length) {
+            var first = rects[0];
+            var lx = first[0] * sx;
+            var ly = first[1] * sy;
+            ctx.font = "bold " + Math.max(12, Math.round(canvas.width / 40)) + "px sans-serif";
+            ctx.fillStyle = "rgba(0,255,102,0.95)";
+            var label = "HAND" + (conf !== null ? " " + Math.round(conf * 100) + "%" : "");
             ctx.save();
             ctx.scale(-1, 1);
-            ctx.fillText("PERSON", -(x + w) + 4, y - 4);
+            ctx.fillText(label, -(lx + first[2] * sx) + 4, ly - 4);
             ctx.restore();
-        });
+        }
     }
 
     function clamp(value, min, max) {
