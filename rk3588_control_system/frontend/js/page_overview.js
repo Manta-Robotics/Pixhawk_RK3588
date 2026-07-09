@@ -517,6 +517,10 @@
         }
 
         function releaseStick(pointerId) {
+            if (typeof pointerId !== "undefined" && activePointerByStick[side] !== pointerId) {
+                return;
+            }
+
             if (activePointerByStick[side] === null) {
                 return;
             }
@@ -529,6 +533,11 @@
         }
 
         axis.addEventListener("pointerdown", function (event) {
+            if (activePointerByStick[side] !== null) {
+                return;
+            }
+
+            event.preventDefault();
             activePointerByStick[side] = event.pointerId;
             axis.setPointerCapture(event.pointerId);
             axis.classList.add("active");
@@ -539,24 +548,31 @@
             if (activePointerByStick[side] !== event.pointerId) {
                 return;
             }
+            event.preventDefault();
             updateFromPointer(event);
         });
 
         axis.addEventListener("pointerup", function (event) {
+            event.preventDefault();
             releaseStick(event.pointerId);
         });
 
         axis.addEventListener("pointercancel", function (event) {
+            event.preventDefault();
             releaseStick(event.pointerId);
         });
 
-        axis.addEventListener("lostpointercapture", function () {
+        axis.addEventListener("lostpointercapture", function (event) {
             if (activePointerByStick[side] !== null) {
-                releaseStick();
+                releaseStick(event.pointerId);
             }
         });
 
         axis.addEventListener("touchstart", function (event) {
+            if (typeof window.PointerEvent !== "undefined") {
+                return;
+            }
+
             var touch = event.changedTouches && event.changedTouches[0];
             if (!touch) {
                 return;
@@ -569,6 +585,10 @@
         }, { passive: false });
 
         axis.addEventListener("touchmove", function (event) {
+            if (typeof window.PointerEvent !== "undefined") {
+                return;
+            }
+
             var touch = getActiveTouch(event);
             if (!touch) {
                 return;
@@ -579,6 +599,10 @@
         }, { passive: false });
 
         axis.addEventListener("touchend", function (event) {
+            if (typeof window.PointerEvent !== "undefined") {
+                return;
+            }
+
             var touch = getActiveTouch(event);
             if (!touch) {
                 return;
@@ -590,6 +614,10 @@
         }, { passive: false });
 
         axis.addEventListener("touchcancel", function (event) {
+            if (typeof window.PointerEvent !== "undefined") {
+                return;
+            }
+
             var touch = getActiveTouch(event);
             if (!touch) {
                 return;
