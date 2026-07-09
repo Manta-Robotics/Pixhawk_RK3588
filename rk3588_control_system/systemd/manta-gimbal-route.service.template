@@ -1,0 +1,13 @@
+[Unit]
+Description=Manta gimbal eth0 host route
+After=network-pre.target
+Wants=network-pre.target
+Before=manta-gimbal-stream.service manta-backend.service
+
+[Service]
+Type=oneshot
+ExecStart=__PROJECT_DIR__/scripts/manta_gimbal_route.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
