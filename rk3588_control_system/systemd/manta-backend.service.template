@@ -10,6 +10,8 @@ WorkingDirectory=__PROJECT_DIR__
 ExecStart=/bin/bash __PROJECT_DIR__/scripts/systemd_backend.sh
 Restart=always
 RestartSec=2
+TimeoutStopSec=6
+KillMode=control-group
 StandardOutput=append:__PROJECT_DIR__/logs/server.log
 StandardError=append:__PROJECT_DIR__/logs/server.log
 

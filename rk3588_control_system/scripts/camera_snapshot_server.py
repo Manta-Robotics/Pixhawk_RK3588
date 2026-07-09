@@ -374,11 +374,19 @@ class SnapshotHandler(BaseHTTPRequestHandler):
 
         if path == '/healthz':
             with FRAME_LOCK:
+                frame_age = time.time() - FRAME_CACHE['timestamp'] if FRAME_CACHE['timestamp'] else None
+                ok = bool(
+                    FRAME_CACHE['bytes']
+                    and not FRAME_CACHE['error']
+                    and frame_age is not None
+                    and frame_age <= max(FRAME_STALL_SECONDS * 2.0, FRAME_CACHE_SECONDS + 2.0)
+                )
                 payload = {
-                    'ok': True,
+                    'ok': ok,
                     'cachedDevice': FRAME_CACHE['device'],
                     'cachedName': FRAME_CACHE['name'],
                     'lastError': FRAME_CACHE['error'],
+                    'lastFrameAgeSeconds': frame_age,
                     'videoDevices': enumerate_video_devices()
                 }
             self._send_json(payload)

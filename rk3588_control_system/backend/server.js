@@ -495,6 +495,32 @@ function buildDirectCameraUrl(req, pathname) {
   return `${protocol}://${hostname}:${SNAPSHOT_PORT}${pathname}`;
 }
 
+function readLocalCameraHealth() {
+  const url = `http://127.0.0.1:${SNAPSHOT_PORT}/healthz`;
+  try {
+    const result = spawnSync('curl', ['-sS', '--max-time', '0.6', url], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024
+    });
+    if (result.status !== 0) {
+      const message = String(result.stderr || result.stdout || '').trim() || `Camera health check failed with exit ${result.status}`;
+      return { ok: false, message };
+    }
+    const payload = JSON.parse(String(result.stdout || '{}'));
+    return {
+      ok: Boolean(payload.ok),
+      message: String(payload.lastError || payload.message || ''),
+      cachedDevice: String(payload.cachedDevice || ''),
+      cachedName: String(payload.cachedName || ''),
+      lastFrameAgeSeconds: typeof payload.lastFrameAgeSeconds === 'number' && Number.isFinite(payload.lastFrameAgeSeconds)
+        ? payload.lastFrameAgeSeconds
+        : null
+    };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+
 function readCameraState(connectivity, req = null) {
   const directStreamUrl = buildDirectCameraUrl(req, '/stream.mjpg');
   const directOpenUrl = buildDirectCameraUrl(req, '/stream.mjpg');
@@ -505,6 +531,8 @@ function readCameraState(connectivity, req = null) {
   const overlay = String(cameraConfig.overlay || '');
   const sensor = String(cameraConfig.sensor || 'camera');
   const port = String(cameraConfig.port || '');
+  const isLocalCameraTransport = String(cameraConfig.transport || '').trim().toLowerCase() === 'local';
+  const localHealth = isLocalCameraTransport ? readLocalCameraHealth() : null;
   const isLocalProxySource = sourceUrl.startsWith('/');
   const usesDirectCameraUrl = Boolean(directStreamUrl);
   let hostname = '';
@@ -520,6 +548,8 @@ function readCameraState(connectivity, req = null) {
 
   if (cameraConfig.enabled === false) {
     reason = 'Camera is disabled in config.';
+  } else if (isLocalCameraTransport && localHealth && !localHealth.ok) {
+    reason = localHealth.message || 'Local camera stream is not producing JPEG frames.';
   } else if (isLocalProxySource) {
     reason = 'Using the local camera proxy stream.';
   } else if (usesDirectCameraUrl) {
@@ -550,10 +580,15 @@ function readCameraState(connectivity, req = null) {
     sourceUrl,
     openUrl,
     refreshMs: Number(cameraConfig.refresh_ms || 1500),
-    online: Boolean((connectivity && connectivity.wireless && connectivity.wireless.online) || (connectivity && connectivity.ethernet && connectivity.ethernet.online)),
+    online: cameraConfig.enabled !== false && (
+      isLocalCameraTransport
+        ? Boolean(localHealth && localHealth.ok)
+        : Boolean((connectivity && connectivity.wireless && connectivity.wireless.online) || (connectivity && connectivity.ethernet && connectivity.ethernet.online))
+    ),
     host: MANTA_HOST,
     hostState,
     localVideoDevices,
+    localHealth,
     reason
   };
 }
@@ -869,7 +904,9 @@ function rememberGimbalRx(data) {
     hex: chunk.toString('hex'),
     updatedAt: Date.now()
   };
-  addLog('GIMBAL_RX', gimbalLastRx.ascii || gimbalLastRx.hex);
+  if (process.env.MANTA_LOG_GIMBAL_RX === '1') {
+    addLog('GIMBAL_RX', gimbalLastRx.ascii || gimbalLastRx.hex);
+  }
   emitGimbalState();
 }
 

@@ -193,8 +193,8 @@
     },
     "face": {
       "enabled": true,
-      "detector": "yolo_face",
-      "model": "scripts/models/yolov8n-face-lindevs.pt",
+      "detector": "haar_face",
+      "model": "scripts/models/haarcascade_frontalface_default.xml",
       "tracker": "scripts/bytetrack_swimmer.yaml",
       "source": "http://127.0.0.1:8091/stream.mjpg",
       "conf": 0.35,

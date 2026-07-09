@@ -26,6 +26,7 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = PROJECT_ROOT / "scripts" / "models" / "version-slim-320_without_postprocessing.onnx"
+DEFAULT_HAAR_CASCADE = PROJECT_ROOT / "scripts" / "models" / "haarcascade_frontalface_default.xml"
 DEFAULT_SOURCE = "http://127.0.0.1:8091/stream.mjpg"
 
 
@@ -290,11 +291,29 @@ class YoloFaceDetector:
 
 class HaarFaceDetector:
     def __init__(self, conf: float) -> None:
-        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+        cascade_path = self._resolve_cascade_path()
         self.cascade = cv2.CascadeClassifier(str(cascade_path))
         if self.cascade.empty():
             raise RuntimeError(f"Cannot load Haar cascade: {cascade_path}")
         self.conf = float(conf)
+
+    @staticmethod
+    def _resolve_cascade_path() -> Path:
+        candidates = [DEFAULT_HAAR_CASCADE]
+        cv2_data = getattr(cv2, "data", None)
+        cv2_haarcascades = getattr(cv2_data, "haarcascades", "") if cv2_data else ""
+        if cv2_haarcascades:
+            candidates.append(Path(cv2_haarcascades) / "haarcascade_frontalface_default.xml")
+        candidates.extend([
+            Path("/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"),
+            Path("/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml"),
+            Path("/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"),
+        ])
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        searched = ", ".join(str(path) for path in candidates)
+        raise RuntimeError(f"Cannot find Haar cascade. Searched: {searched}")
 
     def detect(self, frame: np.ndarray) -> tuple[list[list[float]], list[float], list[int | None]]:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -593,7 +612,10 @@ def run(args: argparse.Namespace) -> None:
     requested_detector = str(args.detector or "auto").strip().lower()
     detector_name = "ultra_face"
     try:
-        if requested_detector in {"yolo", "yolo_face", "yolov8", "yolov8_face"} or model_path.suffix.lower() == ".pt":
+        if requested_detector in {"haar", "haar_face", "opencv_haar"}:
+            detector_name = "haar_face"
+            detector = HaarFaceDetector(args.conf)
+        elif requested_detector in {"yolo", "yolo_face", "yolov8", "yolov8_face"} or model_path.suffix.lower() == ".pt":
             detector_name = "yolo_face"
             tracker_path = resolve_path(args.tracker) if args.tracker else None
             detector = YoloFaceDetector(model_path, args.conf, args.iou, tracker_path, args.imgsz, args.detector_threads)
