@@ -12,7 +12,7 @@ from pymavlink import mavutil
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_DIR / 'config' / 'system.config.json'
 EXPECTED_PARAMS = {
-    'PILOT_STEER_TYPE': 0,
+    'PILOT_STEER_TYPE': 1,
     'RC1_REVERSED': 0,
     'RC3_REVERSED': 0,
     'SERVO1_FUNCTION': 73,
