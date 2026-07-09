@@ -2403,12 +2403,14 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
   systemState.motorStatus[`ch${validChannel}`] = validPwm;
   const leftPwm = toPwm(systemState.motorStatus[leftKey] ?? PWM_CENTER);
   const rightPwm = toPwm(systemState.motorStatus[rightKey] ?? PWM_CENTER);
+  const throttlePwm = toPwm((leftPwm + rightPwm) / 2);
+  const steeringPwm = toPwm(PWM_CENTER + (rightPwm - leftPwm) / 2);
 
   sendMavlinkCommand('ROVER_DRIVE', {
     throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
-    throttlePwm: rightPwm,
+    throttlePwm,
     steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
-    steeringPwm: leftPwm
+    steeringPwm
   });
 
   io.emit('motor_update', {
@@ -2419,7 +2421,7 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
 
   addLog(
     'MOTOR',
-    `${sourceLabel} set Main${validChannel}=${validPwm}us via independent Pixhawk paddle (left=${leftPwm}, right=${rightPwm})`
+    `${sourceLabel} set Main${validChannel}=${validPwm}us via Pixhawk mixer (left=${leftPwm}, right=${rightPwm})`
   );
   return { ok: true };
 }
@@ -2434,12 +2436,16 @@ function normalizeRoverControl(input = {}) {
   const throttleScale = (PWM_MAX - PWM_CENTER) / Math.max(Math.abs(ROVER_THROTTLE_MIN), Math.abs(ROVER_THROTTLE_MAX));
   const steeringScale = (PWM_MAX - PWM_CENTER) / Math.max(Math.abs(ROVER_STEERING_MIN), Math.abs(ROVER_STEERING_MAX));
 
+  const throttleInputPwm = toPwm(PWM_CENTER + throttle * throttleScale);
+  const steeringInputPwm = toPwm(PWM_CENTER + steering * steeringScale);
   const leftPwm = toPwm(PWM_CENTER + throttle * throttleScale - steering * steeringScale);
   const rightPwm = toPwm(PWM_CENTER + throttle * throttleScale + steering * steeringScale);
 
   return {
     throttle,
     steering,
+    throttleInputPwm,
+    steeringInputPwm,
     leftPwm,
     rightPwm,
     clamped: throttle !== throttleRaw || steering !== steeringRaw
@@ -2453,8 +2459,8 @@ function applyRoverControl(controlInput = {}, sourceLabel = 'WEB') {
     steering: normalized.steering,
     throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
     steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
-    throttlePwm: normalized.rightPwm,
-    steeringPwm: normalized.leftPwm
+    throttlePwm: normalized.throttleInputPwm,
+    steeringPwm: normalized.steeringInputPwm
   });
 
   systemState.roverControl = {

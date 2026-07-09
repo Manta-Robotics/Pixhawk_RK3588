@@ -248,7 +248,7 @@ class MAVLinkBridge:
             return
 
         target_params = {
-            'PILOT_STEER_TYPE': 1,
+            'PILOT_STEER_TYPE': 0,
             f'RC{self.rover_steering_input_channel}_REVERSED': 0,
             f'RC{self.rover_throttle_input_channel}_REVERSED': 0,
             f'SERVO{self.rover_left_output_channel}_FUNCTION': 73,

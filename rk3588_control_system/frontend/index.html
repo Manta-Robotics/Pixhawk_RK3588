@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manta Control</title>
-    <link rel="stylesheet" href="css/style.css?v=20260528d">
+    <link rel="stylesheet" href="css/style.css?v=20260715b">
 </head>
 <body data-page="dashboard">
     <header class="shell-header shell-header-compact">
@@ -178,48 +178,36 @@
                 <article class="stat-card compact-stat-card compact-mode-card"><span class="label">Mode Mirror</span><span class="value" id="dashHeroModeMirror">MANUAL</span></article>
             </div>
 
-            <div class="twin-stick-grid dashboard-stick-grid control-stick-grid">
-                <article class="motor-stick-card">
+            <div class="drive-joystick-layout">
+                <article class="drive-joystick-card">
                     <div class="motor-stick-head">
                         <div>
-                            <h3>Left Motor</h3>
-                            <p id="leftMotorChannel">Main1 target</p>
+                            <h3>360° Drive</h3>
+                            <p>Up/down throttle · left/right steering</p>
                         </div>
-                        <strong id="leftMotorValue">1500 us</strong>
+                        <strong id="driveJoystickReadout">T 0 · S 0</strong>
                     </div>
-                    <div class="motor-stick-shell">
-                        <div class="motor-stick-axis" id="leftMotorStick" role="slider" tabindex="0" aria-orientation="vertical" aria-valuemin="1000" aria-valuemax="2000" aria-valuenow="1500">
-                            <div class="motor-stick-track"></div>
-                            <div class="motor-stick-centerline"></div>
-                            <div class="motor-stick-knob"></div>
-                        </div>
-                    </div>
-                    <div class="motor-stick-scale">
-                        <span>2000</span>
-                        <span>1500</span>
-                        <span>1000</span>
-                    </div>
-                </article>
 
-                <article class="motor-stick-card">
-                    <div class="motor-stick-head">
+                    <div class="drive-joystick-shell">
+                        <div class="drive-joystick-pad" id="driveJoystick" role="application" tabindex="0" aria-label="360 degree drive joystick" aria-valuetext="Throttle 0, steering 0">
+                            <span class="drive-direction drive-forward">FWD</span>
+                            <span class="drive-direction drive-reverse">REV</span>
+                            <span class="drive-direction drive-left">LEFT</span>
+                            <span class="drive-direction drive-right">RIGHT</span>
+                            <div class="drive-joystick-ring"></div>
+                            <div class="drive-joystick-knob"></div>
+                        </div>
+                    </div>
+
+                    <div class="drive-joystick-values">
                         <div>
-                            <h3>Right Motor</h3>
-                            <p id="rightMotorChannel">Main3 target</p>
+                            <span id="leftMotorChannel">Main1 target</span>
+                            <strong id="leftMotorValue">1500 us</strong>
                         </div>
-                        <strong id="rightMotorValue">1500 us</strong>
-                    </div>
-                    <div class="motor-stick-shell">
-                        <div class="motor-stick-axis" id="rightMotorStick" role="slider" tabindex="0" aria-orientation="vertical" aria-valuemin="1000" aria-valuemax="2000" aria-valuenow="1500">
-                            <div class="motor-stick-track"></div>
-                            <div class="motor-stick-centerline"></div>
-                            <div class="motor-stick-knob"></div>
+                        <div>
+                            <span id="rightMotorChannel">Main3 target</span>
+                            <strong id="rightMotorValue">1500 us</strong>
                         </div>
-                    </div>
-                    <div class="motor-stick-scale">
-                        <span>2000</span>
-                        <span>1500</span>
-                        <span>1000</span>
                     </div>
                 </article>
             </div>
@@ -305,6 +293,6 @@
     <script src="/socket.io/socket.io.js?v=20260528d"></script>
     <script src="js/realtime_client.js?v=20260528d"></script>
     <script src="js/common_ui.js?v=20260528d"></script>
-    <script src="js/page_overview.js?v=20260715a"></script>
+    <script src="js/page_overview.js?v=20260715b"></script>
 </body>
 </html>
