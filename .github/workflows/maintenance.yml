@@ -1,0 +1,39 @@
+name: Maintenance checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - codex/manta-new-board-migration
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maintenance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rk3588_control_system
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: rk3588_control_system/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run maintenance checks
+        run: npm run maintenance
