@@ -23,10 +23,13 @@ CAMERA_PID=""
 GIMBAL_STREAM_PID=""
 TAIL_PID=""
 
-# Prefer user-local Node 20 if installed
-if [ -d "/home/cat/.local/node20/bin" ]; then
-    export PATH="/home/cat/.local/node20/bin:$PATH"
-fi
+# Prefer the board-wide Node 20 install, then the current user's local install.
+for node_dir in "/opt/node20/bin" "$HOME/.local/node20/bin"; do
+    if [ -d "$node_dir" ]; then
+        export PATH="$node_dir:$PATH"
+        break
+    fi
+done
 
 # Colors for output
 GREEN='\033[0;32m'

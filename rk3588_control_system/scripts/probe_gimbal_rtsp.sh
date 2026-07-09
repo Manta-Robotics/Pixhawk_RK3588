@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-IFACE="${GIMBAL_IFACE:-eth1}"
-HOST="${1:-192.168.144.25}"
-LOCAL_CIDR="${GIMBAL_LOCAL_CIDR:-192.168.144.100/24}"
+IFACE="${GIMBAL_IFACE:-eth0}"
+HOST="${1:-192.168.144.108}"
+LOCAL_CIDR="${GIMBAL_LOCAL_CIDR:-192.168.144.101/24}"
 
 if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     ip addr show dev "$IFACE" | grep -q "${LOCAL_CIDR%/*}" || ip addr add "$LOCAL_CIDR" dev "$IFACE" 2>/dev/null || true
