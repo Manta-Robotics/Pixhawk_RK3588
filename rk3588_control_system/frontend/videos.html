@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manta Videos</title>
+    <link rel="stylesheet" href="css/style.css?v=20260701ui">
+</head>
+<body data-page="videos">
+    <header class="shell-header shell-header-compact">
+        <div class="brand brand-compact">
+            <h1>Manta Videos</h1>
+            <p>Clean Local Recordings</p>
+        </div>
+        <nav class="main-nav" aria-label="Main navigation">
+            <a href="index.html" data-nav="dashboard">Dashboard</a>
+            <a href="gimbal.html" data-nav="gimbal">Gimbal</a>
+            <a href="videos.html" data-nav="videos">Videos</a>
+            <a href="map.html" data-nav="map">Map</a>
+        </nav>
+        <div class="header-status">
+            <span id="headerConnection" class="pill disconnected">WEB OFF</span>
+            <span id="headerPixhawk" class="pill">FCU OFF</span>
+            <span id="headerTime" class="clock">00:00:00</span>
+        </div>
+    </header>
+
+    <main class="page-grid video-grid">
+        <section class="panel panel-span-all video-console">
+            <div class="video-toolbar">
+                <div>
+                    <h2>Recordings</h2>
+                    <p class="panel-subtitle">Clean local MP4 files saved by date and time.</p>
+                </div>
+                <button class="btn" id="videosRefresh" type="button">Refresh</button>
+            </div>
+            <div class="video-layout">
+                <div class="video-player-shell">
+                    <video id="videoPreview" controls playsinline></video>
+                    <div class="camera-placeholder" id="videoPlaceholder">
+                        <strong>No Video Selected</strong>
+                        <span>Select a recording from the list.</span>
+                    </div>
+                </div>
+                <div class="video-list" id="videoList"></div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js?v=20260618bt"></script>
+    <script src="js/realtime_client.js?v=20260618bt"></script>
+    <script src="js/common_ui.js?v=20260618bt"></script>
+    <script src="js/page_videos.js?v=20260702wifiurl"></script>
+</body>
+</html>

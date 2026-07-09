@@ -1,5 +1,5 @@
 [Unit]
-Description=Manta Gimbal UDP Stream Proxy
+Description=Manta Gimbal RTSP Stream Proxy
 After=network-online.target
 Wants=network-online.target
 
@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=__RUN_USER__
 WorkingDirectory=__PROJECT_DIR__
-ExecStart=/usr/bin/python3 __PROJECT_DIR__/scripts/gimbal_udp_stream_server.py
+ExecStart=/usr/bin/python3 __PROJECT_DIR__/scripts/gimbal_rtsp_stream_server.py
 Restart=always
 RestartSec=2
 StandardOutput=append:__PROJECT_DIR__/logs/gimbal_stream.log

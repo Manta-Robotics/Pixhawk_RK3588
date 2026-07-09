@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manta Gimbal</title>
-    <link rel="stylesheet" href="css/style.css?v=20260617c">
+    <link rel="stylesheet" href="css/style.css?v=20260701gimbalpro">
 </head>
 <body data-page="gimbal">
     <header class="shell-header shell-header-compact">
@@ -15,6 +15,7 @@
         <nav class="main-nav" aria-label="Main navigation">
             <a href="index.html" data-nav="dashboard">Dashboard</a>
             <a href="gimbal.html" data-nav="gimbal">Gimbal</a>
+            <a href="videos.html" data-nav="videos">Videos</a>
             <a href="map.html" data-nav="map">Map</a>
         </nav>
         <div class="header-status">
@@ -27,17 +28,28 @@
     <main class="page-grid gimbal-grid">
         <section class="panel panel-span-all gimbal-console">
             <div class="gimbal-toolbar">
-                <div class="segmented-control" role="tablist" aria-label="Gimbal mode">
-                    <button id="gimbalModeClick" class="active" type="button">Click Center</button>
-                    <button id="gimbalModeTrack" type="button">Swimmer Track</button>
+                <div class="gimbal-control-group gimbal-mode-group">
+                    <span class="toolbar-label">Mode</span>
+                    <div class="segmented-control gimbal-mode-tabs" role="tablist" aria-label="Gimbal mode">
+                        <button id="gimbalModeClick" class="active" type="button">Click Center</button>
+                        <button id="gimbalModeFace" type="button">Face Track</button>
+                        <button id="gimbalModeSwimmer" type="button">Swimmer Track</button>
+                    </div>
                 </div>
-                <div class="button-row compact-action-row">
-                    <button class="btn btn-primary" id="gimbalConnect" type="button">Connect</button>
-                    <button class="btn btn-danger" id="gimbalStop" type="button">Stop</button>
-                    <button class="btn" id="gimbalHome" type="button">Center</button>
-                    <button class="btn" id="gimbalAutofocus" type="button">Zoom Reset</button>
-                    <button class="btn" id="gimbalOsdHide" type="button">Hide OSD</button>
-                    <button class="btn btn-warning" id="gimbalTrackToggle" type="button">Track</button>
+                <div class="gimbal-control-group gimbal-action-group">
+                    <span class="toolbar-label">Control</span>
+                    <div class="button-row compact-action-row">
+                        <button class="btn btn-primary" id="gimbalConnect" type="button">Connect</button>
+                        <button class="btn btn-danger" id="gimbalStop" type="button">Stop</button>
+                        <button class="btn" id="gimbalHome" type="button">Home</button>
+                        <button class="btn btn-record" id="gimbalRecordToggle" type="button">Record</button>
+                        <label class="switch-control" title="Camera OSD">
+                            <span>OSD</span>
+                            <input id="gimbalOsdToggle" type="checkbox">
+                            <i></i>
+                        </label>
+                        <a class="btn" href="videos.html">Videos</a>
+                    </div>
                 </div>
             </div>
 
@@ -47,7 +59,7 @@
                     <canvas id="gimbalOverlay" class="vision-overlay"></canvas>
                     <div class="camera-placeholder" id="gimbalCameraPlaceholder">
                         <strong>Gimbal</strong>
-                        <span id="gimbalCameraMessage">Waiting for the gimbal UDP video stream.</span>
+                        <span id="gimbalCameraMessage">Waiting for the gimbal RTSP video stream.</span>
                     </div>
                     <div class="camera-overlay">
                         <span class="attitude-badge" id="gimbalModeBadge">CLICK</span>
@@ -60,7 +72,7 @@
                         <article class="stat-card compact-stat-card"><span class="label">Serial</span><span class="value" id="gimbalSerial">--</span></article>
                         <article class="stat-card compact-stat-card"><span class="label">Status</span><span class="value" id="gimbalStatus">Idle</span></article>
                         <article class="stat-card compact-stat-card"><span class="label">Mode</span><span class="value" id="gimbalModeText">Click</span></article>
-                        <article class="stat-card compact-stat-card"><span class="label">Target</span><span class="value" id="gimbalTarget">0 / 0</span></article>
+                        <article class="stat-card compact-stat-card"><span class="label">Target/Error</span><span class="value" id="gimbalTarget">No target</span></article>
                         <article class="stat-card compact-stat-card"><span class="label">Command</span><span class="value" id="gimbalCommand">Idle</span></article>
                         <article class="stat-card compact-stat-card"><span class="label">Video</span><span class="value" id="gimbalVideo">--</span></article>
                     </div>
@@ -72,9 +84,9 @@
         </section>
     </main>
 
-    <script src="/socket.io/socket.io.js?v=20260617c"></script>
-    <script src="js/realtime_client.js?v=20260617c"></script>
-    <script src="js/common_ui.js?v=20260617c"></script>
-    <script src="js/page_gimbal.js?v=20260617c"></script>
+    <script src="/socket.io/socket.io.js?v=20260618bt"></script>
+    <script src="js/realtime_client.js?v=20260618bt"></script>
+    <script src="js/common_ui.js?v=20260618bt"></script>
+    <script src="js/page_gimbal.js?v=20260701gimbalpro"></script>
 </body>
 </html>
