@@ -12,7 +12,7 @@ import fs from 'fs';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import dgram from 'dgram';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import net from 'net';
 import os from 'os';
 import http from 'http';
@@ -38,6 +38,7 @@ const motorConfig = readJsonFile('config/motor_config.json', { motors: [] });
 const LOGS_DIR = path.resolve(PROJECT_ROOT, config.logs_dir || './logs');
 const SYSTEM_LOG_FILE = path.join(LOGS_DIR, 'system.log');
 const FLIGHT_CSV_FILE = path.join(LOGS_DIR, 'flight_data.csv');
+const RECORDINGS_DIR = path.resolve(PROJECT_ROOT, (config.recordings && config.recordings.dir) || './recordings/gimbal');
 const THERMAL_CLASS_DIR = '/sys/class/thermal';
 const NETWORK_CLASS_DIR = '/sys/class/net';
 
@@ -76,6 +77,10 @@ const IMU_CALIBRATION_POSITIONS = {
 
 if (!fs.existsSync(LOGS_DIR)) {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
+}
+
+if (!fs.existsSync(RECORDINGS_DIR)) {
+  fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 }
 
 if (!fs.existsSync(FLIGHT_CSV_FILE)) {
@@ -139,21 +144,85 @@ const GIMBAL_CLICK_PITCH_FOV_DEG = Math.max(1, Number(GIMBAL_AXIS.click_pitch_fo
 const GIMBAL_CLICK_DURATION_SCALE = Math.max(0.1, Number(GIMBAL_AXIS.click_duration_scale || 1.0));
 const GIMBAL_CLICK_EXTRA_MS = Math.max(0, Number(GIMBAL_AXIS.click_extra_ms || 0));
 const GIMBAL_TRACK_RATE_GAIN = Number(GIMBAL_AXIS.track_rate_gain || 0.06);
+const GIMBAL_TRACK_ANGLE_GAIN = Number(GIMBAL_AXIS.track_angle_gain || 2.0);
 const GIMBAL_DEADZONE_PX = Math.max(0, Number(GIMBAL_AXIS.deadzone_px || 12));
+const GIMBAL_TRACK_HOLD_ZONE_PX = Math.max(GIMBAL_DEADZONE_PX, Number(GIMBAL_AXIS.track_hold_zone_px || 42));
+const GIMBAL_TRACK_FAST_ZONE_PX = Math.max(GIMBAL_TRACK_HOLD_ZONE_PX + 1, Number(GIMBAL_AXIS.track_fast_zone_px || 260));
 const GIMBAL_RATE_SLEW_DPS = Math.max(1, Number(GIMBAL_AXIS.rate_slew_dps || 8));
+const GIMBAL_TRACK_HOLD_MS = Math.max(120, Number(GIMBAL_AXIS.track_hold_ms || 340));
+const GIMBAL_TRACK_PULSE_MS = Math.max(60, Number(GIMBAL_AXIS.track_pulse_ms || 120));
+const GIMBAL_TRACK_COOLDOWN_MS = Math.max(80, Number(GIMBAL_AXIS.track_cooldown_ms || 380));
+const GIMBAL_TRACK_CONFIRM_FRAMES = Math.max(1, Number(GIMBAL_AXIS.track_confirm_frames || 2));
+const GIMBAL_TRACK_MIN_RATE_DPS = Math.max(1, Number(GIMBAL_AXIS.track_min_rate_dps || 7));
+const GIMBAL_TRACK_MAX_PULSE_RATE_DPS = Math.max(GIMBAL_TRACK_MIN_RATE_DPS, Number(GIMBAL_AXIS.track_max_pulse_rate_dps || 24));
+const GIMBAL_TRACK_CONTROL_MODE = String(GIMBAL_AXIS.track_control_mode || 'smooth_rate').trim().toLowerCase();
+const GIMBAL_TRACK_TARGET_TIMEOUT_MS = Math.max(200, Number(GIMBAL_AXIS.track_target_timeout_ms || 650));
+const GIMBAL_TRACK_RATE_STEP_DPS = Math.max(0.2, Number(GIMBAL_AXIS.track_rate_step_dps || 1.2));
+const GIMBAL_TRACK_MINOR_AXIS_SCALE = Math.max(0, Math.min(1, Number(GIMBAL_AXIS.track_minor_axis_scale ?? 0.45)));
+const GIMBAL_TRACK_HOLD_ENTER_PX = Math.max(2, Number(GIMBAL_AXIS.track_hold_enter_px || 24));
+const GIMBAL_TRACK_HOLD_EXIT_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_px || 44));
+const GIMBAL_TRACK_HOLD_ENTER_X_PX = Math.max(2, Number(GIMBAL_AXIS.track_hold_enter_x_px || GIMBAL_TRACK_HOLD_ENTER_PX));
+const GIMBAL_TRACK_HOLD_ENTER_Y_PX = Math.max(2, Number(GIMBAL_AXIS.track_hold_enter_y_px || GIMBAL_TRACK_HOLD_ENTER_PX));
+const GIMBAL_TRACK_HOLD_EXIT_X_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_X_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_x_px || GIMBAL_TRACK_HOLD_EXIT_PX));
+const GIMBAL_TRACK_HOLD_EXIT_Y_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_Y_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_y_px || GIMBAL_TRACK_HOLD_EXIT_PX));
+const GIMBAL_TRACK_HOLD_SPEED_PX_S = Math.max(1, Number(GIMBAL_AXIS.track_hold_speed_px_s || 55));
+const GIMBAL_TRACK_HOLD_ENTER_SPEED_PX_S = Math.max(1, Number(GIMBAL_AXIS.track_hold_enter_speed_px_s || GIMBAL_TRACK_HOLD_SPEED_PX_S));
+const GIMBAL_TRACK_HOLD_EXIT_SPEED_PX_S = Math.max(GIMBAL_TRACK_HOLD_ENTER_SPEED_PX_S + 1, Number(GIMBAL_AXIS.track_hold_exit_speed_px_s || GIMBAL_TRACK_HOLD_SPEED_PX_S * 1.25));
+const GIMBAL_TRACK_NEAR_GAIN = Math.max(0.1, Number(GIMBAL_AXIS.track_near_angle_gain || 0.9));
+const GIMBAL_TRACK_FAR_GAIN = Math.max(GIMBAL_TRACK_NEAR_GAIN, Number(GIMBAL_AXIS.track_far_angle_gain || GIMBAL_TRACK_ANGLE_GAIN));
+const GIMBAL_TRACK_FEEDFORWARD_GAIN = Math.max(0, Number(GIMBAL_AXIS.track_feedforward_gain ?? 0.28));
+const GIMBAL_TRACK_VELOCITY_ALPHA = clamp(Number(GIMBAL_AXIS.track_velocity_alpha ?? 0.62), 0.05, 1);
+const GIMBAL_TRACK_VELOCITY_DEADBAND_PX_S = Math.max(0, Number(GIMBAL_AXIS.track_velocity_deadband_px_s ?? 18));
+const GIMBAL_TRACK_VELOCITY_DECAY = clamp(Number(GIMBAL_AXIS.track_velocity_decay ?? 0.86), 0.1, 1);
+const GIMBAL_TRACK_GYRO_DAMPING = Math.max(0, Number(GIMBAL_AXIS.track_gyro_damping ?? 0.55));
+const GIMBAL_TRACK_PREDICTION_MS = Math.max(0, Number(GIMBAL_AXIS.track_prediction_ms || 180));
+const GIMBAL_TRACK_LATENCY_LEAD_MS = Math.max(0, Number(GIMBAL_AXIS.track_latency_lead_ms || 0));
+const GIMBAL_TRACK_DETECTOR_AGE_LEAD = clamp(Number(GIMBAL_AXIS.track_detector_age_lead ?? 0), 0, 1.5);
+const GIMBAL_TRACK_SPEED_LEAD_MS = Math.max(0, Number(GIMBAL_AXIS.track_speed_lead_ms || 0));
+const GIMBAL_TRACK_FAST_SPEED_PX_S = Math.max(1, Number(GIMBAL_AXIS.track_fast_speed_px_s || 900));
+const GIMBAL_TRACK_RECOVERY_MS = Math.max(500, Number(GIMBAL_AXIS.track_recovery_ms || 2000));
+const GIMBAL_TRACK_PREDICTION_MAX_RATE_DPS = Math.max(1, Number(GIMBAL_AXIS.track_prediction_max_rate_dps || 14));
+const GIMBAL_TRACK_MAX_ACCEL_DPS2 = Math.max(1, Number(GIMBAL_AXIS.track_max_accel_dps2 || 120));
+const GIMBAL_TRACK_MAX_JERK_DPS3 = Math.max(1, Number(GIMBAL_AXIS.track_max_jerk_dps3 || 720));
+const GIMBAL_TRACK_BRAKE_ACCEL_DPS2 = Math.max(GIMBAL_TRACK_MAX_ACCEL_DPS2, Number(GIMBAL_AXIS.track_brake_accel_dps2 || 220));
+const GIMBAL_TRACK_BRAKE_JERK_DPS3 = Math.max(GIMBAL_TRACK_MAX_JERK_DPS3, Number(GIMBAL_AXIS.track_brake_jerk_dps3 || 1400));
+const GIMBAL_TRACK_RESPONSE_SECONDS = Math.max(0.04, Number(GIMBAL_AXIS.track_response_seconds || 0.16));
+const GIMBAL_TRACK_COUNTER_BRAKE_MS = clamp(Math.round(Number(GIMBAL_AXIS.track_counter_brake_ms || 120)), 0, 360);
+const GIMBAL_TRACK_OUTPUT_DEADBAND_DPS = Math.max(0, Number(GIMBAL_AXIS.track_output_deadband_dps ?? 0));
+const GIMBAL_TRACK_COUNTER_BRAKE_GAIN = Math.max(0, Number(GIMBAL_AXIS.track_counter_brake_gain ?? 0.18));
+const GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS = Math.max(0.5, Number(GIMBAL_AXIS.track_counter_brake_min_dps || 7));
+const GIMBAL_TRACK_COUNTER_BRAKE_MAX_DPS = Math.max(GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS, Number(GIMBAL_AXIS.track_counter_brake_max_dps || 18));
+const GIMBAL_YAW_MIN_DEG = Number(GIMBAL_AXIS.yaw_min_deg ?? -150);
+const GIMBAL_YAW_MAX_DEG = Number(GIMBAL_AXIS.yaw_max_deg ?? 150);
+const GIMBAL_PITCH_MIN_DEG = Number(GIMBAL_AXIS.pitch_min_deg ?? -150);
+const GIMBAL_PITCH_MAX_DEG = Number(GIMBAL_AXIS.pitch_max_deg ?? 150);
+const GIMBAL_SOFT_LIMIT_BRAKE_DEG = Math.max(0.5, Number(GIMBAL_AXIS.soft_limit_brake_deg || 8));
 const GIMBAL_CLICK_TARGET_HOLD_MS = Math.max(40, Number(GIMBAL_AXIS.click_target_hold_ms || 120));
 const GIMBAL_CLICK_CONTROL_MODE = String(GIMBAL_AXIS.click_control_mode || 'rate').trim().toLowerCase();
 const GIMBAL_CLICK_HOLD_MIN_MS = Math.max(60, Number(GIMBAL_AXIS.click_hold_min_ms || 120));
 const GIMBAL_CLICK_HOLD_MAX_MS = Math.max(GIMBAL_CLICK_HOLD_MIN_MS, Number(GIMBAL_AXIS.click_hold_max_ms || 520));
+const gimbalCalibration = gimbalConfig.calibration || {};
+const GIMBAL_CALIB_WIDTH = Math.max(1, Number(gimbalCalibration.width || 1920));
+const GIMBAL_CALIB_HEIGHT = Math.max(1, Number(gimbalCalibration.height || 1080));
+const GIMBAL_CALIB_FX = Number(gimbalCalibration.fx || ((GIMBAL_CALIB_WIDTH * 0.5) / Math.tan((GIMBAL_CLICK_YAW_FOV_DEG * Math.PI / 180) * 0.5)));
+const GIMBAL_CALIB_FY = Number(gimbalCalibration.fy || ((GIMBAL_CALIB_HEIGHT * 0.5) / Math.tan((GIMBAL_CLICK_PITCH_FOV_DEG * Math.PI / 180) * 0.5)));
+const GIMBAL_CALIB_CX = Number(gimbalCalibration.cx ?? (GIMBAL_CALIB_WIDTH * 0.5));
+const GIMBAL_CALIB_CY = Number(gimbalCalibration.cy ?? (GIMBAL_CALIB_HEIGHT * 0.5));
+const GIMBAL_CALIB_DIST = Array.isArray(gimbalCalibration.distortion)
+  ? gimbalCalibration.distortion.map((value) => Number(value) || 0)
+  : [0, 0, 0, 0, 0];
 const gimbalVideoConfig = gimbalConfig.video || {};
 const GIMBAL_STREAM_PROXY_PORT = Number(gimbalVideoConfig.proxy_port || 8091);
 const GIMBAL_LOCAL_STREAM_URL = String(gimbalVideoConfig.local_stream_url || `http://127.0.0.1:${GIMBAL_STREAM_PROXY_PORT}/stream.mjpg`);
 const GIMBAL_VIDEO_TRANSPORT = String(gimbalVideoConfig.transport || '').trim().toLowerCase();
-const GIMBAL_RTSP_INPUT = String(gimbalVideoConfig.rtsp_input || gimbalVideoConfig.input_url || '').trim();
-const GIMBAL_UDP_INPUT = String(gimbalVideoConfig.udp_input || 'udp://0.0.0.0:9554');
-const GIMBAL_VIDEO_INPUT = GIMBAL_RTSP_INPUT && (GIMBAL_VIDEO_TRANSPORT === 'rtsp' || GIMBAL_RTSP_INPUT.startsWith('rtsp://')) ? GIMBAL_RTSP_INPUT : GIMBAL_UDP_INPUT;
+const GIMBAL_RTSP_INPUT = String(gimbalVideoConfig.recognition_input || gimbalVideoConfig.rtsp_input || gimbalVideoConfig.input_url || '').trim();
+const GIMBAL_VIDEO_INPUT = GIMBAL_RTSP_INPUT || String(gimbalVideoConfig.input_url || '').trim();
+const GIMBAL_RECORD_INPUT = String(gimbalVideoConfig.record_input || gimbalVideoConfig.recording_input || GIMBAL_VIDEO_INPUT).trim();
+const GIMBAL_RECORD_STREAM_INDEX = clamp(Math.round(Number(gimbalVideoConfig.record_stream_index || 1)), 0, 3);
+const GIMBAL_RECORD_STREAM_QUALITY = clamp(Math.round(Number(gimbalVideoConfig.record_stream_quality || 0)), 0, 5);
 const gimbalFocusConfig = gimbalConfig.focus || {};
 let gimbalStream = null;
+let gimbalReadStream = null;
 let gimbalCommandTimer = null;
 let gimbalHoldUntil = 0;
 let gimbalLastFrame = Buffer.alloc(GIMBAL_FRAME_LENGTH, 0);
@@ -165,6 +234,28 @@ let gimbalLastRateX = 0;
 let gimbalLastRateY = 0;
 let gimbalStopFramesRemaining = 0;
 let gimbalPendingHomeSource = '';
+let gimbalTrackNextMoveAt = 0;
+let gimbalTrackLastDirection = '';
+let gimbalTrackDirectionCount = 0;
+let gimbalTrackDesiredRateX = 0;
+let gimbalTrackDesiredRateY = 0;
+let gimbalTrackRateAccelX = 0;
+let gimbalTrackRateAccelY = 0;
+let gimbalTrackFilteredVx = 0;
+let gimbalTrackFilteredVy = 0;
+let gimbalTrackLastMovingDesiredX = 0;
+let gimbalTrackLastMovingDesiredY = 0;
+let gimbalTrackCounterBrakeUntil = 0;
+let gimbalTrackCounterBrakeX = 0;
+let gimbalTrackCounterBrakeY = 0;
+let gimbalTrackCounterBrakeSettled = true;
+let gimbalTrackCommandPauseUntil = 0;
+let gimbalTrackTarget = null;
+let gimbalTrackHolding = true;
+let gimbalTrackLastTargetAt = 0;
+let gimbalRxBuffer = Buffer.alloc(0);
+let gimbalFeedbackParseBuffer = Buffer.alloc(0);
+let gimbalLastRx = { ascii: '', hex: '', updatedAt: null };
 const gimbalState = {
   enabled: Boolean(gimbalConfig.enabled),
   connected: false,
@@ -174,14 +265,22 @@ const gimbalState = {
   mode: 'idle',
   lastCommand: 'idle',
   lastError: '',
+  lastRx: null,
+  feedback: null,
+  limits: {
+    yawMinDeg: GIMBAL_YAW_MIN_DEG,
+    yawMaxDeg: GIMBAL_YAW_MAX_DEG,
+    pitchMinDeg: GIMBAL_PITCH_MIN_DEG,
+    pitchMaxDeg: GIMBAL_PITCH_MAX_DEG
+  },
+  trackMode: 'face',
   lastTarget: null,
   trackingActive: false,
   trackWorkerActive: false,
   trackStatus: { locked: false, status: 'idle', message: 'idle', detections: 0, updatedAt: null },
   videoSource: String(gimbalVideoConfig.source_url || '/api/gimbal/stream'),
-  videoTransport: GIMBAL_VIDEO_INPUT.startsWith('rtsp://') ? 'rtsp' : 'udp',
+  videoTransport: 'rtsp',
   videoInput: GIMBAL_VIDEO_INPUT,
-  udpVideo: GIMBAL_UDP_INPUT,
   updatedAt: Date.now()
 };
 const GIMBAL_AUTO_CONNECT = gimbalConfig.auto_connect === true;
@@ -700,8 +799,95 @@ function buildGimbalJsonFrame(payloadText) {
 
 function emitGimbalState() {
   updateGimbalDiagnostics();
+  gimbalState.lastRx = gimbalLastRx.updatedAt ? gimbalLastRx : null;
   gimbalState.updatedAt = Date.now();
   io.emit('gimbal_state', { ...gimbalState });
+}
+
+function parseGimbalFeedbackFrames() {
+  while (gimbalFeedbackParseBuffer.length >= 2) {
+    const headerIndex = gimbalFeedbackParseBuffer.indexOf(Buffer.from([0xfc, 0x2c]));
+    if (headerIndex < 0) {
+      gimbalFeedbackParseBuffer = gimbalFeedbackParseBuffer.subarray(Math.max(0, gimbalFeedbackParseBuffer.length - 1));
+      return;
+    }
+    if (headerIndex > 0) gimbalFeedbackParseBuffer = gimbalFeedbackParseBuffer.subarray(headerIndex);
+    if (gimbalFeedbackParseBuffer.length < 64) return;
+
+    const frame = gimbalFeedbackParseBuffer.subarray(0, 64);
+    if (frame[63] !== 0xf0) {
+      gimbalFeedbackParseBuffer = gimbalFeedbackParseBuffer.subarray(1);
+      continue;
+    }
+    if (frame[2] !== 0x01) {
+      gimbalFeedbackParseBuffer = gimbalFeedbackParseBuffer.subarray(1);
+      continue;
+    }
+    let checksum = 0;
+    for (let index = 2; index <= 61; index += 1) checksum ^= frame[index];
+    const checksumValid = (checksum & 0xff) === frame[62];
+    const updatedAt = Date.now();
+    const status2 = frame.readUInt16LE(6);
+    gimbalState.feedback = {
+      payloadType: frame[2],
+      selfTest: frame[3],
+      status: frame.readUInt16LE(4),
+      status2,
+      cameraRecording: Boolean(status2 & (1 << 4)),
+      tfCardInserted: Boolean(status2 & (1 << 6)),
+      servoMode: frame[8],
+      yawDeg: frame.readInt16LE(9) / 100,
+      pitchDeg: frame.readInt16LE(11) / 100,
+      rollDeg: frame.readInt16LE(13) / 100,
+      laserRangeM: frame.readUInt16LE(16),
+      gyroYawDps: frame.readInt16LE(41) / 100,
+      gyroPitchDps: frame.readInt16LE(43) / 100,
+      gyroRollDps: frame.readInt16LE(45) / 100,
+      displaySource: frame[47],
+      digitalZoom: frame[48] / 10,
+      checksumValid,
+      updatedAt
+    };
+    gimbalFeedbackParseBuffer = gimbalFeedbackParseBuffer.subarray(64);
+  }
+}
+
+function rememberGimbalRx(data) {
+  if (!data || data.length === 0) return;
+  const chunk = Buffer.from(data);
+  gimbalRxBuffer = Buffer.concat([gimbalRxBuffer, chunk]);
+  if (gimbalRxBuffer.length > 8192) {
+    gimbalRxBuffer = gimbalRxBuffer.subarray(gimbalRxBuffer.length - 8192);
+  }
+  gimbalFeedbackParseBuffer = Buffer.concat([gimbalFeedbackParseBuffer, chunk]);
+  if (gimbalFeedbackParseBuffer.length > 4096) {
+    gimbalFeedbackParseBuffer = gimbalFeedbackParseBuffer.subarray(gimbalFeedbackParseBuffer.length - 4096);
+  }
+  parseGimbalFeedbackFrames();
+  gimbalLastRx = {
+    ascii: chunk.toString('utf8').replace(/\0/g, ''),
+    hex: chunk.toString('hex'),
+    updatedAt: Date.now()
+  };
+  addLog('GIMBAL_RX', gimbalLastRx.ascii || gimbalLastRx.hex);
+  emitGimbalState();
+}
+
+function openGimbalReadStream() {
+  if (gimbalReadStream) return;
+  try {
+    gimbalReadStream = fs.createReadStream(GIMBAL_SERIAL_PORT, { flags: 'r' });
+    gimbalReadStream.on('data', rememberGimbalRx);
+    gimbalReadStream.on('error', (error) => {
+      addLog('GIMBAL_ERR', `read stream: ${error.message}`);
+      gimbalReadStream = null;
+    });
+    gimbalReadStream.on('close', () => {
+      gimbalReadStream = null;
+    });
+  } catch (error) {
+    addLog('GIMBAL_ERR', `open read stream: ${error.message}`);
+  }
 }
 
 function configureGimbalSerial() {
@@ -739,6 +925,7 @@ function openGimbalPort(source = 'auto') {
       gimbalState.connected = true;
       gimbalState.lastError = '';
       addLog('GIMBAL', `Serial opened ${GIMBAL_SERIAL_PORT} @ ${GIMBAL_BAUD_RATE}`);
+      openGimbalReadStream();
       emitGimbalState();
         if (gimbalPendingHomeSource) {
           const pendingSource = gimbalPendingHomeSource;
@@ -808,6 +995,13 @@ function disconnectGimbalPort() {
   gimbalLastFrame = buildGimbalFrame();
   gimbalLastRateX = 0;
   gimbalLastRateY = 0;
+  gimbalTrackDesiredRateX = 0;
+  gimbalTrackDesiredRateY = 0;
+  gimbalTrackRateAccelX = 0;
+  gimbalTrackRateAccelY = 0;
+  gimbalTrackTarget = null;
+  gimbalTrackHolding = true;
+  gimbalTrackLastTargetAt = 0;
   gimbalStopFramesRemaining = 0;
   if (gimbalCommandTimer) {
     clearInterval(gimbalCommandTimer);
@@ -817,19 +1011,292 @@ function disconnectGimbalPort() {
     try { gimbalStream.end(); } catch (_) {}
     gimbalStream = null;
   }
+  if (gimbalReadStream) {
+    try { gimbalReadStream.destroy(); } catch (_) {}
+    gimbalReadStream = null;
+  }
   gimbalState.connected = false;
   gimbalState.mode = 'idle';
   gimbalState.lastCommand = 'disconnected';
   emitGimbalState();
 }
 
+function smoothStep01(value) {
+  const x = clamp(value, 0, 1);
+  return x * x * (3 - 2 * x);
+}
+
+function applyGimbalSoftLimit(rate, angleDeg, minDeg, maxDeg) {
+  if (!Number.isFinite(angleDeg) || !Number.isFinite(rate) || rate === 0) return rate;
+  const brakeDeg = Math.max(
+    GIMBAL_SOFT_LIMIT_BRAKE_DEG,
+    clamp(Math.abs(rate) * 0.12 + 1.2, 1.5, 10)
+  );
+  if (rate > 0) {
+    const remaining = maxDeg - angleDeg;
+    if (remaining <= 0) return 0;
+    if (remaining < brakeDeg) return rate * smoothStep01(remaining / brakeDeg);
+  } else {
+    const remaining = angleDeg - minDeg;
+    if (remaining <= 0) return 0;
+    if (remaining < brakeDeg) return rate * smoothStep01(remaining / brakeDeg);
+  }
+  return rate;
+}
+
+function limitGimbalTrackRates(rateX, rateY) {
+  const feedback = gimbalState.feedback;
+  if (!feedback || !feedback.checksumValid || Date.now() - feedback.updatedAt > 300) {
+    return { x: rateX, y: rateY, limited: false };
+  }
+  const x = applyGimbalSoftLimit(rateX, feedback.yawDeg, GIMBAL_YAW_MIN_DEG, GIMBAL_YAW_MAX_DEG);
+  const y = applyGimbalSoftLimit(rateY, feedback.pitchDeg, GIMBAL_PITCH_MIN_DEG, GIMBAL_PITCH_MAX_DEG);
+  return { x, y, limited: x !== rateX || y !== rateY };
+}
+
+function computeGimbalTrackDesiredRate(now) {
+  if (!gimbalTrackTarget || !gimbalTrackLastTargetAt) {
+    return { x: 0, y: 0, gated: true, stale: true };
+  }
+  const ageMs = now - gimbalTrackLastTargetAt;
+  if (ageMs > GIMBAL_TRACK_TARGET_TIMEOUT_MS) {
+    return { x: 0, y: 0, gated: true, stale: true };
+  }
+
+  const detectorAgeMs = Math.max(0, asFiniteNumber(gimbalTrackTarget.detectorAgeMs, 0));
+  const targetSpeed = Math.hypot(gimbalTrackTarget.vx, gimbalTrackTarget.vy);
+  const speedLeadMix = smoothStep01(targetSpeed / GIMBAL_TRACK_FAST_SPEED_PX_S);
+  const leadMs = clamp(
+    ageMs
+      + GIMBAL_TRACK_LATENCY_LEAD_MS
+      + detectorAgeMs * GIMBAL_TRACK_DETECTOR_AGE_LEAD
+      + GIMBAL_TRACK_SPEED_LEAD_MS * speedLeadMix,
+    0,
+    GIMBAL_TRACK_PREDICTION_MS
+  );
+  const predictionSeconds = leadMs / 1000;
+  const predictedX = clamp(gimbalTrackTarget.x + gimbalTrackTarget.vx * predictionSeconds, -GIMBAL_MAX_PIXEL_X, GIMBAL_MAX_PIXEL_X);
+  const predictedY = clamp(gimbalTrackTarget.y + gimbalTrackTarget.vy * predictionSeconds, -GIMBAL_MAX_PIXEL_Y, GIMBAL_MAX_PIXEL_Y);
+  const error = Math.max(Math.abs(predictedX), Math.abs(predictedY));
+  const inHoldEnterZone = Math.abs(predictedX) <= GIMBAL_TRACK_HOLD_ENTER_X_PX
+    && Math.abs(predictedY) <= GIMBAL_TRACK_HOLD_ENTER_Y_PX;
+  const outsideHoldExitZone = Math.abs(predictedX) >= GIMBAL_TRACK_HOLD_EXIT_X_PX
+    || Math.abs(predictedY) >= GIMBAL_TRACK_HOLD_EXIT_Y_PX;
+
+  if (gimbalTrackHolding) {
+    if (outsideHoldExitZone || targetSpeed >= GIMBAL_TRACK_HOLD_EXIT_SPEED_PX_S) {
+      gimbalTrackHolding = false;
+    }
+  } else if (inHoldEnterZone && targetSpeed <= GIMBAL_TRACK_HOLD_ENTER_SPEED_PX_S) {
+    gimbalTrackHolding = true;
+  }
+  if (gimbalTrackHolding) {
+    return { x: 0, y: 0, gated: true, predictedX, predictedY, targetSpeed, stale: false };
+  }
+
+  function softError(value) {
+    const deadband = GIMBAL_TRACK_HOLD_ENTER_PX * 0.65;
+    return Math.abs(value) <= deadband ? 0 : Math.sign(value) * (Math.abs(value) - deadband);
+  }
+  const activeX = softError(predictedX);
+  const activeY = softError(predictedY);
+  const angles = gimbalAnglesFromPixelDelta(activeX, activeY);
+  const gainMix = smoothStep01((error - GIMBAL_TRACK_HOLD_EXIT_PX) / Math.max(1, GIMBAL_TRACK_FAST_ZONE_PX - GIMBAL_TRACK_HOLD_EXIT_PX));
+  const angleGain = GIMBAL_TRACK_NEAR_GAIN + (GIMBAL_TRACK_FAR_GAIN - GIMBAL_TRACK_NEAR_GAIN) * gainMix;
+  const quality = Number.isFinite(gimbalTrackTarget.flowQuality) ? clamp(gimbalTrackTarget.flowQuality, 0, 1) : 1;
+  const coastScale = gimbalTrackTarget.coasting ? 0.30 : 1;
+  const feedforwardScale = GIMBAL_TRACK_FEEDFORWARD_GAIN * coastScale * (0.35 + 0.65 * quality);
+  const yawVelocityDps = Math.atan2(gimbalTrackTarget.vx, Math.max(GIMBAL_CALIB_FX, 1)) * 180 / Math.PI;
+  const pitchVelocityDps = Math.atan2(gimbalTrackTarget.vy, Math.max(GIMBAL_CALIB_FY, 1)) * 180 / Math.PI;
+  const feedback = gimbalState.feedback;
+  const feedbackFresh = feedback && feedback.checksumValid && now - feedback.updatedAt <= 300;
+  const gyroYawDps = feedbackFresh ? asFiniteNumber(feedback.gyroYawDps, 0) : 0;
+  const gyroPitchDps = feedbackFresh ? asFiniteNumber(feedback.gyroPitchDps, 0) : 0;
+  let rateX = angles.yawDeg * angleGain + yawVelocityDps * feedforwardScale - gyroYawDps * GIMBAL_TRACK_GYRO_DAMPING;
+  let rateY = angles.pitchDeg * angleGain + pitchVelocityDps * feedforwardScale - gyroPitchDps * GIMBAL_TRACK_GYRO_DAMPING;
+  const rateMagnitude = Math.hypot(rateX, rateY);
+  if (rateMagnitude > GIMBAL_MAX_RATE_DPS) {
+    rateX *= GIMBAL_MAX_RATE_DPS / rateMagnitude;
+    rateY *= GIMBAL_MAX_RATE_DPS / rateMagnitude;
+  }
+  const limited = limitGimbalTrackRates(rateX, rateY);
+  rateX = limited.x;
+  rateY = limited.y;
+  if (gimbalTrackTarget.coasting) {
+    const recoveryProgress = clamp(gimbalTrackTarget.predictionAgeMs / GIMBAL_TRACK_RECOVERY_MS, 0, 1);
+    const recoveryRateLimit = GIMBAL_TRACK_PREDICTION_MAX_RATE_DPS * (1 - recoveryProgress * 0.65);
+    const recoveryMagnitude = Math.hypot(rateX, rateY);
+    if (recoveryMagnitude > recoveryRateLimit) {
+      rateX *= recoveryRateLimit / recoveryMagnitude;
+      rateY *= recoveryRateLimit / recoveryMagnitude;
+    }
+  }
+  return {
+    x: rateX,
+    y: rateY,
+    gated: false,
+    predictedX,
+    predictedY,
+    targetSpeed,
+    detectorAgeMs,
+    leadMs,
+    angleGain,
+    limited: limited.limited,
+    stale: false
+  };
+}
+
+function advanceGimbalTrackAxis(currentRate, currentAccel, desiredRate, dt) {
+  const braking = Math.abs(currentRate) > 0.5
+    && (Math.sign(desiredRate) !== Math.sign(currentRate) || Math.abs(desiredRate) < Math.abs(currentRate));
+  const accelLimit = braking ? GIMBAL_TRACK_BRAKE_ACCEL_DPS2 : GIMBAL_TRACK_MAX_ACCEL_DPS2;
+  const jerkLimit = braking ? GIMBAL_TRACK_BRAKE_JERK_DPS3 : GIMBAL_TRACK_MAX_JERK_DPS3;
+  const targetAccel = clamp(
+    (desiredRate - currentRate) / GIMBAL_TRACK_RESPONSE_SECONDS,
+    -accelLimit,
+    accelLimit
+  );
+  const maxAccelStep = jerkLimit * dt;
+  let accel = currentAccel + clamp(targetAccel - currentAccel, -maxAccelStep, maxAccelStep);
+  let rate = currentRate + accel * dt;
+  if ((desiredRate - currentRate) * (desiredRate - rate) <= 0) {
+    rate = desiredRate;
+    accel = 0;
+  }
+  if (Math.abs(desiredRate) < 0.01 && Math.abs(rate) < 0.35) {
+    rate = 0;
+    accel = 0;
+  }
+  if (GIMBAL_TRACK_OUTPUT_DEADBAND_DPS > 0
+    && Math.abs(desiredRate) < GIMBAL_TRACK_OUTPUT_DEADBAND_DPS
+    && Math.abs(rate) < GIMBAL_TRACK_OUTPUT_DEADBAND_DPS) {
+    rate = 0;
+    accel = 0;
+  }
+  return { rate, accel };
+}
+
+function resetGimbalTrackMotionState() {
+  gimbalTrackDesiredRateX = 0;
+  gimbalTrackDesiredRateY = 0;
+  gimbalTrackRateAccelX = 0;
+  gimbalTrackRateAccelY = 0;
+  gimbalTrackFilteredVx = 0;
+  gimbalTrackFilteredVy = 0;
+  gimbalTrackLastMovingDesiredX = 0;
+  gimbalTrackLastMovingDesiredY = 0;
+  gimbalTrackCounterBrakeUntil = 0;
+  gimbalTrackCounterBrakeX = 0;
+  gimbalTrackCounterBrakeY = 0;
+  gimbalTrackCounterBrakeSettled = true;
+}
+
+function applyGimbalTrackCounterBrake(desired, now) {
+  const rawMagnitude = Math.hypot(desired.x, desired.y);
+  if (rawMagnitude >= GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS) {
+    gimbalTrackLastMovingDesiredX = desired.x;
+    gimbalTrackLastMovingDesiredY = desired.y;
+    gimbalTrackCounterBrakeUntil = 0;
+    gimbalTrackCounterBrakeSettled = false;
+    return { ...desired, counterBrake: false };
+  }
+
+  if (
+    GIMBAL_TRACK_COUNTER_BRAKE_MS > 0
+    && !gimbalTrackCounterBrakeSettled
+    && now >= gimbalTrackCounterBrakeUntil
+  ) {
+    const lastMagnitude = Math.hypot(gimbalTrackLastMovingDesiredX, gimbalTrackLastMovingDesiredY);
+    if (lastMagnitude >= GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS) {
+      const brakeMagnitude = clamp(
+        lastMagnitude * GIMBAL_TRACK_COUNTER_BRAKE_GAIN,
+        GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS,
+        GIMBAL_TRACK_COUNTER_BRAKE_MAX_DPS
+      );
+      const scale = brakeMagnitude / Math.max(lastMagnitude, 1);
+      gimbalTrackCounterBrakeX = -gimbalTrackLastMovingDesiredX * scale;
+      gimbalTrackCounterBrakeY = -gimbalTrackLastMovingDesiredY * scale;
+      gimbalTrackCounterBrakeUntil = now + GIMBAL_TRACK_COUNTER_BRAKE_MS;
+      gimbalTrackCounterBrakeSettled = true;
+    }
+  }
+
+  if (now < gimbalTrackCounterBrakeUntil) {
+    return {
+      ...desired,
+      x: gimbalTrackCounterBrakeX,
+      y: gimbalTrackCounterBrakeY,
+      counterBrake: true
+    };
+  }
+
+  return { ...desired, counterBrake: false };
+}
+
+function startGimbalCounterBrake(source = 'manual-stop', mode = 'brake') {
+  const currentMagnitude = Math.hypot(gimbalLastRateX, gimbalLastRateY);
+  if (GIMBAL_TRACK_COUNTER_BRAKE_MS <= 0 || currentMagnitude < GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS) {
+    return false;
+  }
+  const brakeMagnitude = clamp(
+    currentMagnitude * GIMBAL_TRACK_COUNTER_BRAKE_GAIN,
+    GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS,
+    GIMBAL_TRACK_COUNTER_BRAKE_MAX_DPS
+  );
+  const scale = brakeMagnitude / Math.max(currentMagnitude, 1);
+  const brakeX = Math.round(-gimbalLastRateX * scale);
+  const brakeY = Math.round(-gimbalLastRateY * scale);
+  const frame = buildGimbalFrame({ joystickCommand: 0x70, joystickX: brakeX, joystickY: brakeY });
+  setGimbalFrame(frame, `counter-brake:${source}`, mode, GIMBAL_TRACK_COUNTER_BRAKE_MS, {
+    x: brakeX,
+    y: brakeY,
+    source,
+    holdMs: GIMBAL_TRACK_COUNTER_BRAKE_MS
+  });
+  if (gimbalState.trackingActive && mode === 'track') {
+    gimbalTrackCommandPauseUntil = Date.now() + GIMBAL_TRACK_COUNTER_BRAKE_MS;
+  }
+  return true;
+}
+
 function startGimbalLoop() {
   if (gimbalCommandTimer) return;
   gimbalLastFrame = buildGimbalFrame();
   gimbalCommandTimer = setInterval(() => {
-    if (gimbalHoldUntil && Date.now() > gimbalHoldUntil) {
+    const now = Date.now();
+    if (gimbalState.trackingActive && now < gimbalTrackCommandPauseUntil) {
+      gimbalTrackDesiredRateX = 0;
+      gimbalTrackDesiredRateY = 0;
+      gimbalTrackRateAccelX = 0;
+      gimbalTrackRateAccelY = 0;
+      gimbalLastRateX = 0;
+      gimbalLastRateY = 0;
+      gimbalTxEnabled = true;
+      gimbalStopFramesRemaining = 0;
+    } else if (gimbalState.trackingActive) {
       gimbalHoldUntil = 0;
-      gimbalLastFrame = buildGimbalFrame({ joystickCommand: 0x00, joystickX: 0, joystickY: 0 });
+      const desired = applyGimbalTrackCounterBrake(computeGimbalTrackDesiredRate(now), now);
+      gimbalTrackDesiredRateX = desired.x;
+      gimbalTrackDesiredRateY = desired.y;
+      const dt = GIMBAL_COMMAND_INTERVAL_MS / 1000;
+      const nextX = advanceGimbalTrackAxis(gimbalLastRateX, gimbalTrackRateAccelX, gimbalTrackDesiredRateX, dt);
+      const nextY = advanceGimbalTrackAxis(gimbalLastRateY, gimbalTrackRateAccelY, gimbalTrackDesiredRateY, dt);
+      gimbalLastRateX = nextX.rate;
+      gimbalLastRateY = nextY.rate;
+      gimbalTrackRateAccelX = nextX.accel;
+      gimbalTrackRateAccelY = nextY.accel;
+      gimbalLastFrame = buildGimbalFrame({
+        joystickCommand: 0x70,
+        joystickX: Math.round(gimbalLastRateX),
+        joystickY: Math.round(gimbalLastRateY)
+      });
+      gimbalTxEnabled = true;
+      gimbalStopFramesRemaining = 0;
+    } else if (gimbalHoldUntil && now > gimbalHoldUntil) {
+      gimbalHoldUntil = 0;
+      gimbalLastFrame = buildGimbalFrame({ joystickCommand: 0x70, joystickX: 0, joystickY: 0 });
+      gimbalLastRateX = 0;
+      gimbalLastRateY = 0;
       gimbalState.mode = gimbalState.trackingActive ? 'track' : 'idle';
       gimbalState.lastCommand = gimbalState.trackingActive ? 'track' : 'idle';
       if (!gimbalState.trackingActive) {
@@ -865,6 +1332,7 @@ function setGimbalFrame(frame, label, mode, holdMs = 0, target = null) {
 
 function stopGimbalTracking(resetState = true) {
   gimbalTrackStopRequested = true;
+  const shouldCounterBrake = resetState && Math.hypot(gimbalLastRateX, gimbalLastRateY) >= GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS;
   if (gimbalTrackRestartTimer) {
     clearTimeout(gimbalTrackRestartTimer);
     gimbalTrackRestartTimer = null;
@@ -875,16 +1343,25 @@ function stopGimbalTracking(resetState = true) {
   gimbalState.trackingActive = false;
   gimbalState.trackWorkerActive = false;
   gimbalState.trackStatus = { locked: false, status: 'idle', message: 'idle', detections: 0, updatedAt: Date.now() };
+  gimbalState.lastTarget = null;
+  gimbalTrackTarget = null;
+  gimbalTrackHolding = true;
+  gimbalTrackLastTargetAt = 0;
+  gimbalTrackCommandPauseUntil = 0;
   if (resetState) {
-    gimbalTxEnabled = false;
-    gimbalState.mode = 'idle';
-    gimbalState.lastTarget = null;
-    gimbalLastFrame = buildGimbalFrame();
+    const braked = shouldCounterBrake && startGimbalCounterBrake('track-stop', 'brake');
+    resetGimbalTrackMotionState();
+    if (!braked) {
+      gimbalTxEnabled = false;
+      gimbalState.mode = 'idle';
+      gimbalLastFrame = buildGimbalFrame();
+      gimbalStopFramesRemaining = 0;
+    }
     gimbalLastRateX = 0;
     gimbalLastRateY = 0;
-    gimbalStopFramesRemaining = 0;
     emitGimbalState();
   }
+  cleanupStaleGimbalTrackWorkers('stop');
   return { ok: true };
 }
 
@@ -892,7 +1369,8 @@ function updateGimbalTrackStatus(update = {}) {
   const next = {
     locked: false,
     status: 'lost',
-    message: 'can not find swimmer',
+    mode: gimbalState.trackMode,
+    message: gimbalTrackLostMessage(),
     detections: 0,
     workerActive: isGimbalTrackingActive(),
     updatedAt: Date.now(),
@@ -909,10 +1387,20 @@ function updateGimbalTrackStatus(update = {}) {
 }
 
 function holdGimbalTrackIdle(source = 'swimmer-lost') {
-  gimbalLastRateX = 0;
-  gimbalLastRateY = 0;
+  gimbalTrackDesiredRateX = 0;
+  gimbalTrackDesiredRateY = 0;
+  gimbalTrackRateAccelX = 0;
+  gimbalTrackRateAccelY = 0;
+  gimbalTrackTarget = null;
+  gimbalTrackHolding = true;
+  gimbalTrackLastTargetAt = 0;
+  gimbalTrackLastDirection = '';
+  gimbalTrackDirectionCount = 0;
+  if (startGimbalCounterBrake(source, 'track')) {
+    return gimbalLastFrame;
+  }
   const frame = buildGimbalFrame({ joystickCommand: 0x70, joystickX: 0, joystickY: 0 });
-  setGimbalFrame(frame, source, 'track', 0, { locked: false, status: 'lost', message: 'can not find swimmer' });
+  setGimbalFrame(frame, source, 'track', 0, { locked: false, status: 'lost', mode: gimbalState.trackMode, message: gimbalTrackLostMessage() });
   return frame;
 }
 
@@ -924,21 +1412,35 @@ function sendGimbalCancelTrack(source = 'web') {
   return { command: 0x3b, holdMs: 180 };
 }
 
-function sendGimbalHome(source = 'web') {
-  stopGimbalTracking(false);
-  sendGimbalDetectorPaused(true, `${source}:prehome`);
-  sendGimbalCancelTrack(`${source}:prehome`);
+function sendGimbalHome(source = 'web', options = {}) {
+  const preserveTracking = Boolean(options.preserveTracking && gimbalState.trackingActive);
+  if (!preserveTracking) {
+    stopGimbalTracking(false);
+    sendGimbalDetectorPaused(true, `${source}:prehome`);
+    sendGimbalCancelTrack(`${source}:prehome`);
+  } else {
+    gimbalTrackCommandPauseUntil = Date.now() + 900;
+    gimbalTrackTarget = null;
+    gimbalTrackHolding = true;
+    gimbalTrackLastTargetAt = 0;
+    resetGimbalTrackMotionState();
+    gimbalLastRateX = 0;
+    gimbalLastRateY = 0;
+    gimbalState.lastTarget = null;
+  }
   gimbalHoldUntil = 0;
   gimbalStopFramesRemaining = 0;
-  gimbalLastRateX = 0;
-  gimbalLastRateY = 0;
+  if (!preserveTracking) {
+    gimbalLastRateX = 0;
+    gimbalLastRateY = 0;
+  }
   const disableFrame = buildGimbalFrame({ joystickCommand: 0x00, joystickX: 0, joystickY: 0 });
   writeGimbalFrameBurst(disableFrame, 5);
   const frame = buildGimbalFrame({ command: 0x71 });
-  setGimbalFrame(frame, `home:${source}`, 'home', 900, null);
+  setGimbalFrame(frame, `home:${source}`, preserveTracking ? 'track' : 'home', 900, null);
   writeGimbalFrameBurst(frame, 3);
   gimbalState.connected = Boolean(gimbalStream);
-  addLog('GIMBAL', `Home command sent (${source})`);
+  addLog('GIMBAL', `Home command sent (${source}) preserveTracking=${preserveTracking}`);
 }
 
 function stopGimbalSerial(source = 'web') {
@@ -951,6 +1453,8 @@ function stopGimbalSerial(source = 'web') {
   gimbalLastFrame = buildGimbalFrame({ joystickCommand: 0x00, joystickX: 0, joystickY: 0 });
   gimbalLastRateX = 0;
   gimbalLastRateY = 0;
+  resetGimbalTrackMotionState();
+  gimbalTrackCommandPauseUntil = 0;
   gimbalStopFramesRemaining = 5;
   gimbalState.mode = 'idle';
   gimbalState.lastCommand = `stop:${source}`;
@@ -1000,24 +1504,44 @@ function sendGimbalClickTarget(dx, dy, holdMs = null) {
     return { ...delta, controlMode: 'point_track', command: 0x3a, holdMs: clickHoldMs };
   }
 
-  const yawDeg = (delta.x / GIMBAL_MAX_PIXEL_X) * (GIMBAL_CLICK_YAW_FOV_DEG * 0.5);
-  const pitchDeg = (delta.y / GIMBAL_MAX_PIXEL_Y) * (GIMBAL_CLICK_PITCH_FOV_DEG * 0.5);
-  const angleYaw = clamp(Math.round(yawDeg * 100), -15000, 15000);
-  const anglePitch = clamp(Math.round(pitchDeg * 100), -15000, 15000);
-  const maxAngle = Math.max(Math.abs(yawDeg), Math.abs(pitchDeg));
+  const ray = gimbalAnglesFromPixelDelta(delta.x, delta.y);
+  const feedback = gimbalState.feedback;
+  const feedbackFresh = feedback && feedback.checksumValid && Date.now() - feedback.updatedAt <= 500;
+  const currentYawDeg = feedbackFresh ? asFiniteNumber(feedback.yawDeg, 0) : 0;
+  const currentPitchDeg = feedbackFresh ? asFiniteNumber(feedback.pitchDeg, 0) : 0;
+  const targetYawDeg = clamp(currentYawDeg + ray.yawDeg, GIMBAL_YAW_MIN_DEG, GIMBAL_YAW_MAX_DEG);
+  const targetPitchDeg = clamp(currentPitchDeg + ray.pitchDeg, GIMBAL_PITCH_MIN_DEG, GIMBAL_PITCH_MAX_DEG);
+  const angleYaw = Math.round(targetYawDeg * 100);
+  const anglePitch = Math.round(targetPitchDeg * 100);
+  const maxAngle = Math.max(Math.abs(ray.yawDeg), Math.abs(ray.pitchDeg));
   const clickHoldMs = holdMs === null
     ? clamp(Math.round(maxAngle * 55 + 480), 480, 2200)
     : Math.max(120, Number(holdMs || 900));
   const frame = buildGimbalFrame({ command: 0x72, param1: angleYaw, param2: anglePitch });
-  setGimbalFrame(frame, 'guided-angle', 'click', clickHoldMs, { ...delta, controlMode: 'guided_angle', command: 0x72, yawDeg, pitchDeg, angleYaw, anglePitch, holdMs: clickHoldMs });
+  const target = {
+    ...delta,
+    controlMode: 'guided_angle',
+    command: 0x72,
+    offsetYawDeg: ray.yawDeg,
+    offsetPitchDeg: ray.pitchDeg,
+    currentYawDeg,
+    currentPitchDeg,
+    targetYawDeg,
+    targetPitchDeg,
+    angleYaw,
+    anglePitch,
+    feedbackFresh: Boolean(feedbackFresh),
+    limited: targetYawDeg !== currentYawDeg + ray.yawDeg || targetPitchDeg !== currentPitchDeg + ray.pitchDeg,
+    holdMs: clickHoldMs
+  };
+  setGimbalFrame(frame, 'guided-angle', 'click', clickHoldMs, target);
   writeGimbalFrameBurst(frame, 5);
-  addLog('GIMBAL', `Guided angle 72H dx=${delta.x} dy=${delta.y} yawDeg=${yawDeg.toFixed(2)} pitchDeg=${pitchDeg.toFixed(2)} holdMs=${clickHoldMs}`);
-  return { ...delta, controlMode: 'guided_angle', command: 0x72, yawDeg, pitchDeg, angleYaw, anglePitch, holdMs: clickHoldMs };
+  addLog('GIMBAL', `Guided angle 72H dx=${delta.x} dy=${delta.y} current=${currentYawDeg.toFixed(2)},${currentPitchDeg.toFixed(2)} target=${targetYawDeg.toFixed(2)},${targetPitchDeg.toFixed(2)} holdMs=${clickHoldMs}`);
+  return target;
 }
 
 function planGimbalClickMove(dx, dy) {
-  const yawDeg = (dx / GIMBAL_MAX_PIXEL_X) * (GIMBAL_CLICK_YAW_FOV_DEG * 0.5);
-  const pitchDeg = (dy / GIMBAL_MAX_PIXEL_Y) * (GIMBAL_CLICK_PITCH_FOV_DEG * 0.5);
+  const { yawDeg, pitchDeg } = gimbalAnglesFromPixelDelta(dx, dy);
   const maxAngle = Math.max(Math.abs(yawDeg), Math.abs(pitchDeg));
   if (maxAngle < 0.01) {
     return { rateX: 0, rateY: 0, holdMs: GIMBAL_CLICK_HOLD_MIN_MS, yawDeg, pitchDeg };
@@ -1031,6 +1555,37 @@ function planGimbalClickMove(dx, dy) {
     GIMBAL_CLICK_HOLD_MAX_MS
   );
   return { rateX, rateY, holdMs, yawDeg, pitchDeg };
+}
+
+function undistortNormalizedPoint(xd, yd) {
+  const [k1 = 0, k2 = 0, p1 = 0, p2 = 0, k3 = 0] = GIMBAL_CALIB_DIST;
+  if (!k1 && !k2 && !p1 && !p2 && !k3) {
+    return { x: xd, y: yd };
+  }
+  let x = xd;
+  let y = yd;
+  for (let index = 0; index < 6; index += 1) {
+    const r2 = x * x + y * y;
+    const radial = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
+    const tx = 2 * p1 * x * y + p2 * (r2 + 2 * x * x);
+    const ty = p1 * (r2 + 2 * y * y) + 2 * p2 * x * y;
+    x = (xd - tx) / Math.max(radial, 1e-6);
+    y = (yd - ty) / Math.max(radial, 1e-6);
+  }
+  return { x, y };
+}
+
+function gimbalAnglesFromPixelDelta(dx, dy) {
+  const centerU = GIMBAL_CALIB_CX;
+  const centerV = GIMBAL_CALIB_CY;
+  const u = centerU + asFiniteNumber(dx, 0);
+  const v = centerV + asFiniteNumber(dy, 0);
+  const xd = (u - GIMBAL_CALIB_CX) / Math.max(GIMBAL_CALIB_FX, 1e-6);
+  const yd = (v - GIMBAL_CALIB_CY) / Math.max(GIMBAL_CALIB_FY, 1e-6);
+  const ray = undistortNormalizedPoint(xd, yd);
+  const yawDeg = Math.atan2(ray.x, 1) * 180 / Math.PI;
+  const pitchDeg = Math.atan2(ray.y, Math.sqrt(ray.x * ray.x + 1)) * 180 / Math.PI;
+  return { yawDeg, pitchDeg, rayX: ray.x, rayY: ray.y, fx: GIMBAL_CALIB_FX, fy: GIMBAL_CALIB_FY };
 }
 
 function sendGimbalZoomReset(source = 'web') {
@@ -1057,12 +1612,77 @@ function sendGimbalOsd(mode = 0, source = 'web') {
   return { command: 0x37, osdMode, holdMs: 240 };
 }
 
+function sendGimbalRecordCommand(action = 'start', source = 'web') {
+  const mode = action === 'stop' || Number(action) === 2 ? 2 : 1;
+  const frame = buildGimbalFrame({ command: 0x33, param1: mode, param2: 0 });
+  setGimbalFrame(frame, `record:${mode}:${source}`, 'record', 240, { command: 0x33, recordMode: mode });
+  writeGimbalFrameBurst(frame, 5);
+  addLog('GIMBAL', `Record command sent mode=${mode} (1=start, 2=stop)`);
+  return { command: 0x33, recordMode: mode, holdMs: 240 };
+}
+
+function sendGimbalStreamProfile(streamIndex = GIMBAL_RECORD_STREAM_INDEX, quality = GIMBAL_RECORD_STREAM_QUALITY, source = 'web') {
+  const stream = clamp(Math.round(asFiniteNumber(streamIndex, GIMBAL_RECORD_STREAM_INDEX)), 0, 3);
+  const compression = clamp(Math.round(asFiniteNumber(quality, GIMBAL_RECORD_STREAM_QUALITY)), 0, 5);
+  const param1 = (stream << 8) | compression;
+  const frame = buildGimbalFrame({ command: 0x2f, param1, param2: 0 });
+  setGimbalFrame(frame, `stream-profile:${stream}:${compression}:${source}`, 'camera', 260, {
+    command: 0x2f,
+    compression,
+    streamIndex: stream,
+    streamName: stream === 1 ? 'live/0' : (stream === 2 ? 'live/1' : (stream === 3 ? 'live/2' : 'default'))
+  });
+  writeGimbalFrameBurst(frame, 5);
+  addLog('GIMBAL', `Stream profile sent command=0x2f compression=${compression} stream=${stream}`);
+  return { command: 0x2f, compression, streamIndex: stream, param1, holdMs: 260 };
+}
+
+function sendGimbalLaserRange(mode = 'single', source = 'web') {
+  const normalized = String(mode || 'single').trim().toLowerCase();
+  const command = normalized === 'continuous' || normalized === 'start'
+    ? 0x3e
+    : (normalized === 'stop' || normalized === 'end' ? 0x3f : 0x3d);
+  const label = command === 0x3e ? 'laser-range-continuous' : (command === 0x3f ? 'laser-range-stop' : 'laser-range-single');
+  const frame = buildGimbalFrame({ command, param1: 0, param2: 0 });
+  setGimbalFrame(frame, `${label}:${source}`, 'laser', 260, { command, mode: normalized });
+  writeGimbalFrameBurst(frame, 5);
+  addLog('GIMBAL', `Laser range command sent command=0x${command.toString(16)} mode=${normalized}`);
+  return { command, mode: normalized, holdMs: 260 };
+}
+
 function sendGimbalJsonCommand(payloadText, source = 'web') {
   const { frame, payloadLength } = buildGimbalJsonFrame(payloadText);
   setGimbalFrame(frame, `json:${source}`, 'json', 240, { command: 0x90, payload: payloadText, payloadLength });
   writeGimbalFrameBurst(frame, 3);
   addLog('GIMBAL', `JSON command sent payload=${payloadText}`);
   return { command: 0x90, payload: payloadText, payloadLength, holdMs: 240 };
+}
+
+function waitForGimbalRx(previousLength, timeoutMs = 900) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    let lastLength = gimbalRxBuffer.length;
+    let lastGrowthAt = 0;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (gimbalRxBuffer.length > lastLength) {
+        lastLength = gimbalRxBuffer.length;
+        lastGrowthAt = now;
+      }
+      const hasData = gimbalRxBuffer.length > previousLength;
+      const quietEnough = hasData && lastGrowthAt && now - lastGrowthAt >= 250;
+      if (quietEnough || now - startedAt >= timeoutMs) {
+        clearInterval(timer);
+        const rx = gimbalRxBuffer.subarray(previousLength);
+        resolve({
+          ascii: rx.toString('utf8').replace(/\0/g, ''),
+          hex: rx.toString('hex'),
+          bytes: rx.length,
+          timeout: rx.length === 0
+        });
+      }
+    }, 50);
+  });
 }
 
 function sendGimbalDetectorPaused(paused, source = 'web') {
@@ -1080,8 +1700,19 @@ function slewGimbalRate(nextX, nextY) {
 }
 
 function gimbalRateFromDelta(dx, dy, gain, useSlew = true) {
-  const rawX = Math.abs(dx) < GIMBAL_DEADZONE_PX ? 0 : dx * gain;
-  const rawY = Math.abs(dy) < GIMBAL_DEADZONE_PX ? 0 : dy * gain;
+  function activeError(value) {
+    const abs = Math.abs(value);
+    if (abs <= GIMBAL_TRACK_HOLD_ZONE_PX) return 0;
+    const trimmed = abs - GIMBAL_TRACK_HOLD_ZONE_PX;
+    const normalized = Math.min(1, trimmed / Math.max(1, GIMBAL_TRACK_FAST_ZONE_PX - GIMBAL_TRACK_HOLD_ZONE_PX));
+    const boost = 0.65 + normalized * normalized * 0.75;
+    return Math.sign(value) * trimmed * boost;
+  }
+  const activeDx = activeError(dx);
+  const activeDy = activeError(dy);
+  const angles = gimbalAnglesFromPixelDelta(activeDx, activeDy);
+  const rawX = activeDx === 0 ? 0 : angles.yawDeg * GIMBAL_TRACK_ANGLE_GAIN;
+  const rawY = activeDy === 0 ? 0 : angles.pitchDeg * GIMBAL_TRACK_ANGLE_GAIN;
   const rate = {
     x: clamp(Math.round(rawX), -GIMBAL_MAX_RATE_DPS, GIMBAL_MAX_RATE_DPS),
     y: clamp(Math.round(rawY), -GIMBAL_MAX_RATE_DPS, GIMBAL_MAX_RATE_DPS)
@@ -1089,62 +1720,210 @@ function gimbalRateFromDelta(dx, dy, gain, useSlew = true) {
   return useSlew ? slewGimbalRate(rate.x, rate.y) : rate;
 }
 
-function sendGimbalTrackDelta(dx, dy, source = 'track') {
+function sendGimbalTrackDelta(dx, dy, vx = 0, vy = 0, metadata = {}) {
   const delta = normalizeGimbalDelta(dx, dy);
-  const rate = gimbalRateFromDelta(delta.x, delta.y, GIMBAL_TRACK_RATE_GAIN);
-  const frame = buildGimbalFrame({ joystickCommand: 0x70, joystickX: rate.x, joystickY: rate.y });
-  setGimbalFrame(frame, source, 'track', 0, { ...delta, rateX: rate.x, rateY: rate.y });
-  return { ...delta, rateX: rate.x, rateY: rate.y };
+  const now = Date.now();
+  let measuredVx = asFiniteNumber(vx, 0) * GIMBAL_YAW_SIGN;
+  let measuredVy = asFiniteNumber(vy, 0) * GIMBAL_PITCH_SIGN;
+  if (Math.abs(measuredVx) < GIMBAL_TRACK_VELOCITY_DEADBAND_PX_S) measuredVx = 0;
+  if (Math.abs(measuredVy) < GIMBAL_TRACK_VELOCITY_DEADBAND_PX_S) measuredVy = 0;
+  const velocityAlpha = Boolean(metadata.coasting)
+    ? Math.min(GIMBAL_TRACK_VELOCITY_ALPHA, 0.22)
+    : GIMBAL_TRACK_VELOCITY_ALPHA;
+  gimbalTrackFilteredVx = gimbalTrackFilteredVx * (1 - velocityAlpha) + measuredVx * velocityAlpha;
+  gimbalTrackFilteredVy = gimbalTrackFilteredVy * (1 - velocityAlpha) + measuredVy * velocityAlpha;
+  if (Boolean(metadata.coasting)) {
+    gimbalTrackFilteredVx *= GIMBAL_TRACK_VELOCITY_DECAY;
+    gimbalTrackFilteredVy *= GIMBAL_TRACK_VELOCITY_DECAY;
+  }
+  gimbalTrackTarget = {
+    x: delta.x,
+    y: delta.y,
+    vx: gimbalTrackFilteredVx,
+    vy: gimbalTrackFilteredVy,
+    rawVx: measuredVx,
+    rawVy: measuredVy,
+    flowQuality: Number(metadata.flow_quality),
+    coasting: Boolean(metadata.coasting),
+    predictionAgeMs: Math.max(0, asFiniteNumber(metadata.prediction_age_ms, 0)),
+    detectorAgeMs: Math.max(0, asFiniteNumber(metadata.detector_age_ms, 0))
+  };
+  gimbalTrackLastTargetAt = now;
+  const desired = computeGimbalTrackDesiredRate(now);
+  gimbalTrackDesiredRateX = desired.x;
+  gimbalTrackDesiredRateY = desired.y;
+  gimbalState.mode = 'track';
+  gimbalState.lastCommand = `${gimbalState.trackMode || 'target'}-track`;
+  startGimbalLoop();
+  gimbalTxEnabled = true;
+  return {
+    ...delta,
+    rateX: Math.round(gimbalLastRateX),
+    rateY: Math.round(gimbalLastRateY),
+    desiredRateX: Math.round(desired.x * 10) / 10,
+    desiredRateY: Math.round(desired.y * 10) / 10,
+    predictedX: Math.round(asFiniteNumber(desired.predictedX, delta.x)),
+    predictedY: Math.round(asFiniteNumber(desired.predictedY, delta.y)),
+    targetSpeed: Math.round(asFiniteNumber(desired.targetSpeed, 0)),
+    rawVx: Math.round(asFiniteNumber(gimbalTrackTarget.rawVx, 0) * 10) / 10,
+    rawVy: Math.round(asFiniteNumber(gimbalTrackTarget.rawVy, 0) * 10) / 10,
+    filteredVx: Math.round(asFiniteNumber(gimbalTrackTarget.vx, 0) * 10) / 10,
+    filteredVy: Math.round(asFiniteNumber(gimbalTrackTarget.vy, 0) * 10) / 10,
+    leadMs: Math.round(asFiniteNumber(desired.leadMs, 0)),
+    detectorAgeMs: Math.round(asFiniteNumber(desired.detectorAgeMs, 0)),
+    angleGain: Math.round(asFiniteNumber(desired.angleGain, 0) * 100) / 100,
+    limited: Boolean(desired.limited),
+    smooth: true,
+    gated: Boolean(desired.gated),
+    axis: Math.abs(delta.x) >= Math.abs(delta.y) ? 'x' : 'y'
+  };
 }
 
 function isGimbalTrackingActive() {
   return Boolean(gimbalTrackProcess && gimbalTrackProcess.exitCode === null && !gimbalTrackProcess.killed);
 }
 
-function startGimbalTracking() {
-  if (isGimbalTrackingActive()) return { ok: true, alreadyRunning: true };
-  const script = path.join(PROJECT_ROOT, 'scripts', 'infer_video.py');
-  if (!fs.existsSync(script)) return { ok: false, error: 'infer_video swimmer tracker script not found' };
+function cleanupStaleGimbalTrackWorkers(reason = 'cleanup') {
+  const scriptMarkers = [
+    path.join(PROJECT_ROOT, 'scripts', 'infer_video.py'),
+    path.join(PROJECT_ROOT, 'scripts', 'face_track.py')
+  ];
+  const protectedPid = gimbalTrackProcess && gimbalTrackProcess.pid ? Number(gimbalTrackProcess.pid) : 0;
+  for (const marker of scriptMarkers) {
+    const result = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' });
+    const pids = String(result.stdout || '')
+      .split(/\s+/)
+      .map((value) => Number(value))
+      .filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid && pid !== protectedPid);
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGTERM');
+        addLog('GIMBAL_TRACK', `Killed stale tracker pid=${pid} reason=${reason}`);
+      } catch (error) {
+        addLog('GIMBAL_ERR', `Failed to kill stale tracker pid=${pid}: ${error.message}`);
+      }
+    }
+  }
+}
+
+function normalizeGimbalTrackMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return mode === 'swimmer' ? 'swimmer' : 'face';
+}
+
+function gimbalTrackLostMessage(mode = gimbalState.trackMode) {
+  return normalizeGimbalTrackMode(mode) === 'swimmer' ? 'can not find swimmer' : 'CAN NOT FIND FACE';
+}
+
+function startGimbalTracking(options = {}) {
+  const requestedMode = normalizeGimbalTrackMode(options.mode || options.detectorMode || options.target);
+  if (isGimbalTrackingActive()) return { ok: true, alreadyRunning: true, mode: gimbalState.trackMode };
   if (gimbalTrackRestartTimer) {
     clearTimeout(gimbalTrackRestartTimer);
     gimbalTrackRestartTimer = null;
   }
   gimbalTrackStopRequested = false;
-  const swimmer = gimbalConfig.swimmer || {};
-  const args = ['-u', script,
-    '--source', String(swimmer.source || 'http://127.0.0.1:8090/stream.mjpg'),
-    '--weights', String(swimmer.weights || 'scripts/best.pt'),
-    '--tracker', String(swimmer.tracker || 'scripts/bytetrack_swimmer.yaml'),
-    '--conf', String(swimmer.conf ?? 0.1),
-    '--iou', String(swimmer.iou ?? 0.5),
-    '--imgsz', String(swimmer.imgsz ?? 640),
-    '--device', String(swimmer.device ?? '0'),
-    '--loop-hz', String(swimmer.loop_hz ?? 10),
-    '--q', String(swimmer.q ?? 1.0),
-    '--r', String(swimmer.r ?? 50.0),
-    '--max-coast', String(swimmer.max_coast ?? 45),
-    '--reid-sim', String(swimmer.reid_sim ?? 0.5),
-    '--gate-dist', String(swimmer.gate_dist ?? 140.0),
-    '--gate-scale', String(swimmer.gate_scale ?? 2.2),
-    '--smooth-alpha', String(swimmer.smooth_alpha ?? 0.3),
-    '--max-center-speed', String(swimmer.max_center_speed ?? 800.0),
-    '--max-size-rate', String(swimmer.max_size_rate ?? 1.0),
-    '--hold-x-px', String(swimmer.hold_x_px ?? 500.0),
-    '--hold-y-px', String(swimmer.hold_y_px ?? 500.0),
-    '--hold-release', String(swimmer.hold_release ?? 300.0),
-    '--conf-lock', String(swimmer.conf_lock ?? 0.35),
-    '--size-tol', String(swimmer.size_tol ?? 0.35),
-    '--vft-alpha', String(swimmer.vft_alpha ?? 0.35),
-    '--deadzone-beta', String(swimmer.deadzone_beta ?? 0.15),
-    '--center-median-window', String(swimmer.center_median_window ?? 11)
-  ];
+  gimbalState.trackMode = requestedMode;
+  cleanupStaleGimbalTrackWorkers(`start-${requestedMode}`);
+  const sharedSource = 'http://127.0.0.1:8091/stream.mjpg';
+  let detector = requestedMode;
+  let source = sharedSource;
+  let trackerThreadLimit = 2;
+  let script;
+  let args;
+  if (requestedMode === 'swimmer') {
+    const swimmer = gimbalConfig.swimmer || {};
+    detector = String(swimmer.swimmer_detector || swimmer.detector || 'swimmer').trim().toLowerCase();
+    source = String(swimmer.source || sharedSource);
+    script = path.join(PROJECT_ROOT, 'scripts', 'infer_video.py');
+    if (!fs.existsSync(script)) return { ok: false, error: 'infer_video swimmer tracker script not found' };
+    const swimmerLoopHz = Math.max(1, Number(swimmer.loop_hz ?? 10) || 10);
+    const swimmerMaxCoastFrames = Number.isFinite(Number(swimmer.max_coast_seconds))
+      ? Math.max(1, Math.round(Number(swimmer.max_coast_seconds) * swimmerLoopHz))
+      : Math.max(1, Math.round(Number(swimmer.max_coast ?? 45) || 45));
+    trackerThreadLimit = Math.max(1, Math.round(Number(swimmer.detector_threads ?? 2) || 2));
+    args = ['-u', script,
+      '--source', source,
+      '--weights', String(swimmer.weights || 'scripts/best.pt'),
+      '--tracker', String(swimmer.tracker || 'scripts/bytetrack_swimmer.yaml'),
+      '--conf', String(swimmer.conf ?? 0.1),
+      '--iou', String(swimmer.iou ?? 0.5),
+      '--imgsz', String(swimmer.imgsz ?? 640),
+      '--device', String(swimmer.device ?? '0'),
+      '--loop-hz', String(swimmerLoopHz),
+      '--q', String(swimmer.q ?? 1.0),
+      '--r', String(swimmer.r ?? 50.0),
+      '--max-coast', String(swimmerMaxCoastFrames),
+      '--reid-sim', String(swimmer.reid_sim ?? 0.5),
+      '--gate-dist', String(swimmer.gate_dist ?? 140.0),
+      '--gate-scale', String(swimmer.gate_scale ?? 2.2),
+      '--smooth-alpha', String(swimmer.smooth_alpha ?? 0.3),
+      '--max-center-speed', String(swimmer.max_center_speed ?? 800.0),
+      '--max-size-rate', String(swimmer.max_size_rate ?? 1.0),
+      '--hold-x-px', String(swimmer.hold_x_px ?? 500.0),
+      '--hold-y-px', String(swimmer.hold_y_px ?? 500.0),
+      '--hold-release', String(swimmer.hold_release ?? 300.0),
+      '--conf-lock', String(swimmer.conf_lock ?? 0.35),
+      '--size-tol', String(swimmer.size_tol ?? 0.35),
+      '--vft-alpha', String(swimmer.vft_alpha ?? 0.35),
+      '--deadzone-beta', String(swimmer.deadzone_beta ?? 0.15),
+      '--center-median-window', String(swimmer.center_median_window ?? 11)
+    ];
+  } else {
+    const face = gimbalConfig.face || {};
+    detector = String(face.detector || 'yolo_face').trim().toLowerCase();
+    source = String(face.source || sharedSource);
+    script = path.join(PROJECT_ROOT, 'scripts', 'face_track.py');
+    if (!fs.existsSync(script)) return { ok: false, error: 'face tracker script not found' };
+    trackerThreadLimit = Math.max(1, Math.round(Number(face.detector_threads ?? 2) || 2));
+    args = ['-u', script,
+      '--source', source,
+      '--model', String(face.model || 'scripts/models/yolov8n-face-lindevs.pt'),
+      '--detector', detector,
+      '--conf', String(face.conf ?? 0.45),
+      '--iou', String(face.iou ?? 0.35),
+      '--imgsz', String(face.imgsz ?? 416),
+      '--loop-hz', String(face.loop_hz ?? 25),
+      '--input-width', String(face.input_width ?? 320),
+      '--input-height', String(face.input_height ?? 240),
+      '--smooth-alpha', String(face.smooth_alpha ?? 0.82),
+      '--max-center-speed', String(face.max_center_speed ?? 3300),
+      '--static-jitter-px', String(face.static_jitter_px ?? 6),
+      '--fast-move-px', String(face.fast_move_px ?? 55),
+      '--prediction-seconds', String(face.prediction_seconds ?? 0.07),
+      '--flow-scale', String(face.flow_scale ?? 0.35),
+      '--flow-threads', String(face.flow_threads ?? 2),
+      '--detector-threads', String(face.detector_threads ?? 2),
+      '--max-coast-seconds', String(face.max_coast_seconds ?? 2)
+    ];
+    if (face.tracker) {
+      args.push('--tracker', String(face.tracker));
+    }
+  }
   try {
-    const child = spawn(PYTHON_EXEC, args, { cwd: PROJECT_ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    const trackerThreadLimitText = String(trackerThreadLimit);
+    const childEnv = {
+      ...process.env,
+      MANTA_TRACK_THREADS: trackerThreadLimitText,
+      OMP_NUM_THREADS: trackerThreadLimitText,
+      OPENBLAS_NUM_THREADS: trackerThreadLimitText,
+      MKL_NUM_THREADS: trackerThreadLimitText,
+      VECLIB_MAXIMUM_THREADS: trackerThreadLimitText,
+      NUMEXPR_NUM_THREADS: trackerThreadLimitText,
+      TORCH_NUM_THREADS: trackerThreadLimitText,
+      OPENCV_OPENCL_RUNTIME: 'disabled'
+    };
+    const child = spawn(PYTHON_EXEC, args, { cwd: PROJECT_ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: childEnv });
     gimbalTrackProcess = child;
+    gimbalTrackTarget = null;
+    gimbalTrackHolding = true;
+    gimbalTrackLastTargetAt = 0;
+    gimbalTrackCommandPauseUntil = 0;
+    resetGimbalTrackMotionState();
     gimbalState.trackingActive = true;
     gimbalState.trackWorkerActive = true;
     gimbalState.mode = 'track';
-    updateGimbalTrackStatus({ status: 'starting', message: 'can not find swimmer', workerActive: true });
+    updateGimbalTrackStatus({ status: 'starting', mode: requestedMode, message: gimbalTrackLostMessage(), workerActive: true });
     let stdoutBuf = '';
     child.stdout.on('data', (data) => {
       stdoutBuf += String(data);
@@ -1153,11 +1932,15 @@ function startGimbalTracking() {
         const line = stdoutBuf.slice(0, index).trim();
         stdoutBuf = stdoutBuf.slice(index + 1);
         if (!line) continue;
+        if (child !== gimbalTrackProcess || gimbalTrackStopRequested || !gimbalState.trackingActive) {
+          continue;
+        }
         if (line.startsWith('TARGET:')) {
           try {
             const target = JSON.parse(line.slice(7));
-            const sent = sendGimbalTrackDelta(target.dx, target.dy, 'swimmer-track');
-            const message = { ...target, commandDx: sent.x, commandDy: sent.y, rateX: sent.rateX, rateY: sent.rateY, locked: true, message: 'SWIMMER LOCKED', workerActive: true, timestamp: Date.now() };
+            const sent = sendGimbalTrackDelta(target.dx, target.dy, target.vx, target.vy, target);
+            const lockedLabel = requestedMode === 'swimmer' ? 'SWIMMER LOCKED' : 'FACE LOCKED';
+            const message = { ...target, mode: requestedMode, commandDx: sent.x, commandDy: sent.y, predictedDx: sent.predictedX, predictedDy: sent.predictedY, targetSpeed: sent.targetSpeed, rawVx: sent.rawVx, rawVy: sent.rawVy, filteredVx: sent.filteredVx, filteredVy: sent.filteredVy, leadMs: sent.leadMs, detectorAgeMs: sent.detectorAgeMs, angleGain: sent.angleGain, rateX: sent.rateX, rateY: sent.rateY, desiredRateX: sent.desiredRateX ?? sent.rateX, desiredRateY: sent.desiredRateY ?? sent.rateY, holdMs: sent.holdMs || 0, axis: sent.axis || '', pulse: Boolean(sent.pulse), smooth: Boolean(sent.smooth), gated: Boolean(sent.gated), limited: Boolean(sent.limited), locked: true, message: target.message || lockedLabel, workerActive: true, timestamp: Date.now() };
             gimbalState.lastTarget = message;
             updateGimbalTrackStatus({ ...message, status: target.status || 'track', detections: Number(target.detections || 0) });
             io.emit('gimbal_target', message);
@@ -1167,8 +1950,8 @@ function startGimbalTracking() {
         } else if (line.startsWith('STATUS:')) {
           try {
             const status = JSON.parse(line.slice(7));
-            holdGimbalTrackIdle('swimmer-not-found');
-            updateGimbalTrackStatus({ ...status, locked: false, message: status.message || 'can not find swimmer', workerActive: true });
+            holdGimbalTrackIdle(`${requestedMode}-not-found`);
+            updateGimbalTrackStatus({ ...status, mode: requestedMode, locked: false, message: status.message || gimbalTrackLostMessage(), workerActive: true });
           } catch (error) {
             addLog('GIMBAL_ERR', `Invalid tracker status: ${error.message}`);
           }
@@ -1183,12 +1966,12 @@ function startGimbalTracking() {
       gimbalTrackProcess = null;
       gimbalState.trackWorkerActive = false;
       if (!gimbalTrackStopRequested && gimbalState.trackingActive) {
-        holdGimbalTrackIdle('swimmer-worker-exit');
-        updateGimbalTrackStatus({ status: 'worker_exit', message: 'can not find swimmer', code, signal: signalName || '', workerActive: false });
+        holdGimbalTrackIdle(`${requestedMode}-worker-exit`);
+        updateGimbalTrackStatus({ status: 'worker_exit', mode: requestedMode, message: gimbalTrackLostMessage(), code, signal: signalName || '', workerActive: false });
         gimbalTrackRestartTimer = setTimeout(() => {
           gimbalTrackRestartTimer = null;
           if (!gimbalTrackStopRequested && gimbalState.trackingActive) {
-            startGimbalTracking();
+            startGimbalTracking({ mode: gimbalState.trackMode });
           }
         }, 1000);
         return;
@@ -1200,8 +1983,8 @@ function startGimbalTracking() {
       }
       updateGimbalTrackStatus({ status: 'stopped', message: 'idle', workerActive: false });
     });
-    addLog('GIMBAL', 'Swimmer tracking started');
-    return { ok: true };
+    addLog('GIMBAL', `Tracking started mode=${requestedMode} detector=${detector} source=${source}`);
+    return { ok: true, mode: requestedMode, detector };
   } catch (error) {
     return { ok: false, error: error.message };
   }
@@ -1240,6 +2023,138 @@ function refreshHostBoardTemperature() {
     systemState.telemetry.temperature.hostBoard = nextTemperature;
     emitTelemetryUpdate();
   }
+}
+
+let gimbalRecordingProcess = null;
+let gimbalRecordingState = null;
+
+function recordingTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function sanitizeRecordingName(value, fallback = recordingTimestamp()) {
+  const raw = String(value || fallback).trim();
+  const cleaned = raw
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9._\-\u4e00-\u9fff]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/-+/g, '-')
+    .replace(/^[._-]+|[._-]+$/g, '');
+  return cleaned || fallback;
+}
+
+function uniqueRecordingPath(baseName) {
+  const safe = sanitizeRecordingName(baseName);
+  let candidate = path.join(RECORDINGS_DIR, `${safe}.mp4`);
+  let index = 2;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(RECORDINGS_DIR, `${safe}_${index}.mp4`);
+    index += 1;
+  }
+  return candidate;
+}
+
+function resolveRecordingPath(fileName) {
+  const base = path.basename(String(fileName || ''));
+  if (!base || !base.toLowerCase().endsWith('.mp4')) return null;
+  const resolved = path.resolve(RECORDINGS_DIR, base);
+  if (!resolved.startsWith(RECORDINGS_DIR + path.sep)) return null;
+  return resolved;
+}
+
+function publicBaseUrl(req) {
+  if (!req || !req.headers) return '';
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  return host ? `${proto}://${host}` : '';
+}
+
+function recordingFileInfo(filePath, baseUrl = '') {
+  const stat = fs.statSync(filePath);
+  const name = path.basename(filePath);
+  const streamPath = `/api/gimbal/recordings/${encodeURIComponent(name)}/stream`;
+  const downloadPath = `/api/gimbal/recordings/${encodeURIComponent(name)}/download`;
+  return {
+    name,
+    title: name.replace(/\.mp4$/i, ''),
+    size: stat.size,
+    modifiedAt: stat.mtime.toISOString(),
+    createdAt: stat.birthtime.toISOString(),
+    url: `${baseUrl}${streamPath}`,
+    downloadUrl: `${baseUrl}${downloadPath}`,
+    relativeUrl: streamPath,
+    relativeDownloadUrl: downloadPath
+  };
+}
+
+function listGimbalRecordings(baseUrl = '') {
+  if (!fs.existsSync(RECORDINGS_DIR)) return [];
+  return fs.readdirSync(RECORDINGS_DIR)
+    .filter((name) => name.toLowerCase().endsWith('.mp4'))
+    .map((name) => path.join(RECORDINGS_DIR, name))
+    .filter((filePath) => fs.existsSync(filePath))
+    .map((filePath) => recordingFileInfo(filePath, baseUrl))
+    .sort((a, b) => String(b.modifiedAt).localeCompare(String(a.modifiedAt)));
+}
+
+function isGimbalRecordingActive() {
+  return Boolean(gimbalRecordingProcess && gimbalRecordingProcess.exitCode === null && !gimbalRecordingProcess.killed);
+}
+
+function buildRecordingState() {
+  return {
+    active: isGimbalRecordingActive(),
+    current: gimbalRecordingState ? { ...gimbalRecordingState, path: undefined } : null,
+    directory: RECORDINGS_DIR,
+    input: GIMBAL_RECORD_INPUT
+  };
+}
+
+function startGimbalRecording(options = {}) {
+  if (isGimbalRecordingActive()) return { ok: true, alreadyRunning: true, recording: buildRecordingState().current };
+  const outputPath = uniqueRecordingPath(options.name || recordingTimestamp());
+  const input = String(options.input || GIMBAL_RECORD_INPUT || GIMBAL_VIDEO_INPUT);
+  const useRtsp = input.startsWith('rtsp://');
+  const args = ['-hide_banner', '-loglevel', 'warning', '-y'];
+  if (useRtsp) args.push('-rtsp_transport', String(gimbalVideoConfig.rtsp_transport || 'tcp'));
+  args.push('-i', input, '-map', '0:v:0', '-an', '-c:v', 'copy', '-movflags', '+faststart', outputPath);
+  try {
+    const child = spawn(FFMPEG_BIN, args, { cwd: PROJECT_ROOT, stdio: ['ignore', 'ignore', 'pipe'] });
+    gimbalRecordingProcess = child;
+    gimbalRecordingState = {
+      name: path.basename(outputPath),
+      title: path.basename(outputPath, '.mp4'),
+      path: outputPath,
+      input,
+      startedAt: new Date().toISOString()
+    };
+    child.stderr.on('data', (data) => addLog('GIMBAL_REC_ERR', String(data).trimEnd()));
+    child.on('exit', (code, signalName) => {
+      addLog('GIMBAL_REC', `Recording exited code=${code} signal=${signalName || ''}`);
+      gimbalRecordingProcess = null;
+      gimbalRecordingState = null;
+      io.emit('gimbal_recording_state', buildRecordingState());
+    });
+    addLog('GIMBAL_REC', `Recording started ${outputPath}`);
+    io.emit('gimbal_recording_state', buildRecordingState());
+    return { ok: true, recording: buildRecordingState().current };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+function stopGimbalRecording() {
+  if (isGimbalRecordingActive()) {
+    try { gimbalRecordingProcess.kill('SIGINT'); } catch (_) {}
+  }
+  const stopped = buildRecordingState().current;
+  gimbalRecordingProcess = null;
+  gimbalRecordingState = null;
+  io.emit('gimbal_recording_state', buildRecordingState());
+  return { ok: true, recording: stopped };
 }
 
 app.get('/api/camera/snapshot', async (req, res) => {
@@ -1830,9 +2745,12 @@ function stopVision() {
 }
 
 app.post('/api/vision/start', (_req, res) => {
-  const r = startVision();
-  if (!r.ok) return res.status(500).json({ success: false, message: r.error });
-  res.json({ success: true, active: true, alreadyRunning: Boolean(r.alreadyRunning) });
+  stopVision();
+  res.status(410).json({
+    success: false,
+    active: false,
+    message: 'Deprecated rover vision controller is disabled. Use /api/gimbal/track/start with mode face or swimmer.'
+  });
 });
 
 app.post('/api/vision/stop', (_req, res) => {
@@ -1847,6 +2765,85 @@ app.get('/api/vision/state', (_req, res) => {
 app.get('/api/gimbal/state', (_req, res) => {
   updateGimbalDiagnostics();
   res.json({ success: true, state: { ...gimbalState, trackingActive: Boolean(gimbalState.trackingActive), trackWorkerActive: isGimbalTrackingActive() } });
+});
+
+app.get('/api/gimbal/recording/state', (_req, res) => {
+  res.json({ success: true, state: buildRecordingState() });
+});
+
+app.post('/api/gimbal/recording/start', (req, res) => {
+  if (!gimbalStream || !gimbalState.connected) {
+    openGimbalPort('recording');
+  }
+  let protocol = null;
+  let streamProfile = null;
+  if (gimbalStream) {
+    sendGimbalOsd(0, 'recording');
+    streamProfile = sendGimbalStreamProfile(
+      req.body && Number.isFinite(Number(req.body.streamIndex)) ? Number(req.body.streamIndex) : GIMBAL_RECORD_STREAM_INDEX,
+      req.body && Number.isFinite(Number(req.body.quality)) ? Number(req.body.quality) : GIMBAL_RECORD_STREAM_QUALITY,
+      'recording'
+    );
+    protocol = sendGimbalRecordCommand('start', 'recording');
+  }
+  const result = startGimbalRecording(req.body || {});
+  if (!result.ok) {
+    res.status(500).json({ success: false, message: result.error, state: buildRecordingState() });
+    return;
+  }
+  res.json({ success: true, active: true, alreadyRunning: Boolean(result.alreadyRunning), protocol, streamProfile, recording: result.recording, state: buildRecordingState() });
+});
+
+app.post('/api/gimbal/recording/stop', (req, res) => {
+  let protocol = null;
+  if (gimbalStream) {
+    protocol = sendGimbalRecordCommand('stop', 'recording');
+  }
+  const result = stopGimbalRecording();
+  res.json({ success: true, active: false, protocol, recording: result.recording, state: buildRecordingState(), recordings: listGimbalRecordings(publicBaseUrl(req)) });
+});
+
+app.get('/api/gimbal/recordings', (req, res) => {
+  res.json({ success: true, recordings: listGimbalRecordings(publicBaseUrl(req)), recording: buildRecordingState() });
+});
+
+app.get('/api/gimbal/recordings/:name/stream', (req, res) => {
+  const filePath = resolveRecordingPath(req.params.name);
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).json({ success: false, message: 'Recording not found' });
+    return;
+  }
+  res.sendFile(filePath);
+});
+
+app.get('/api/gimbal/recordings/:name/download', (req, res) => {
+  const filePath = resolveRecordingPath(req.params.name);
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).json({ success: false, message: 'Recording not found' });
+    return;
+  }
+  res.download(filePath, path.basename(filePath));
+});
+
+app.patch('/api/gimbal/recordings/:name', (req, res) => {
+  const filePath = resolveRecordingPath(req.params.name);
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).json({ success: false, message: 'Recording not found' });
+    return;
+  }
+  const targetPath = uniqueRecordingPath((req.body && req.body.name) || path.basename(filePath, '.mp4'));
+  fs.renameSync(filePath, targetPath);
+  res.json({ success: true, recording: recordingFileInfo(targetPath, publicBaseUrl(req)), recordings: listGimbalRecordings(publicBaseUrl(req)) });
+});
+
+app.delete('/api/gimbal/recordings/:name', (req, res) => {
+  const filePath = resolveRecordingPath(req.params.name);
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).json({ success: false, message: 'Recording not found' });
+    return;
+  }
+  fs.unlinkSync(filePath);
+  res.json({ success: true, recordings: listGimbalRecordings(publicBaseUrl(req)) });
 });
 
 app.post('/api/gimbal/connect', (_req, res) => {
@@ -1866,7 +2863,7 @@ app.post('/api/gimbal/disconnect', (_req, res) => {
   res.json({ success: true, state: gimbalState });
 });
 
-app.post('/api/gimbal/home', (_req, res) => {
+app.post('/api/gimbal/home', (req, res) => {
   if (!gimbalStream || !gimbalState.connected) {
     gimbalPendingHomeSource = 'web';
     const opened = openGimbalPort('web');
@@ -1878,7 +2875,8 @@ app.post('/api/gimbal/home', (_req, res) => {
     res.json({ success: true, pending: true, state: gimbalState });
     return;
   }
-  sendGimbalHome('web');
+  const body = req.body || {};
+  sendGimbalHome('web', { preserveTracking: body.preserveTracking !== false });
   res.json({ success: true, state: gimbalState });
 });
 
@@ -1910,6 +2908,32 @@ app.post('/api/gimbal/osd', (req, res) => {
   const mode = req.body && Number.isFinite(Number(req.body.mode)) ? Number(req.body.mode) : 0;
   const result = sendGimbalOsd(mode, 'web');
   res.json({ success: true, result, state: gimbalState });
+});
+
+app.post('/api/gimbal/stream/profile', (req, res) => {
+  if (!gimbalStream || !gimbalState.connected) {
+    const opened = openGimbalPort('web');
+    if (!opened) {
+      res.status(500).json({ success: false, message: gimbalState.lastError || 'Gimbal serial open failed.', state: gimbalState });
+      return;
+    }
+  }
+  const body = req.body || {};
+  const result = sendGimbalStreamProfile(body.streamIndex, body.quality, 'web');
+  res.json({ success: true, result, state: gimbalState });
+});
+
+app.post('/api/gimbal/range', (req, res) => {
+  if (!gimbalStream || !gimbalState.connected) {
+    const opened = openGimbalPort('web');
+    if (!opened) {
+      res.status(500).json({ success: false, message: gimbalState.lastError || 'Gimbal serial open failed.', state: gimbalState });
+      return;
+    }
+  }
+  const body = req.body || {};
+  const result = sendGimbalLaserRange(body.mode || body.action || 'single', 'web');
+  res.json({ success: true, result, rangeM: gimbalState.feedback ? gimbalState.feedback.laserRangeM : null, state: gimbalState });
 });
 
 app.post('/api/gimbal/track/cancel', (_req, res) => {
@@ -1948,6 +2972,29 @@ app.post('/api/gimbal/detector/stop', (_req, res) => {
   res.json({ success: true, result, state: gimbalState });
 });
 
+app.post('/api/gimbal/json', async (req, res) => {
+  if (!gimbalStream || !gimbalState.connected) {
+    const opened = openGimbalPort('web');
+    if (!opened) {
+      res.status(500).json({ success: false, message: gimbalState.lastError || 'Gimbal serial open failed.', state: gimbalState });
+      return;
+    }
+  }
+  const body = req.body || {};
+  const payloadObject = body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)
+    ? body.payload
+    : body;
+  const payloadText = JSON.stringify(payloadObject);
+  if (payloadText.length > 35) {
+    res.status(400).json({ success: false, message: 'Gimbal JSON payload is limited to 35 ASCII bytes by the current frame format.', payloadText });
+    return;
+  }
+  const beforeLength = gimbalRxBuffer.length;
+  const result = sendGimbalJsonCommand(payloadText, 'api');
+  const rx = await waitForGimbalRx(beforeLength, Number(body.timeoutMs || 1200));
+  res.json({ success: true, result, rx, state: gimbalState });
+});
+
 app.post('/api/gimbal/click', (req, res) => {
   if (!gimbalStream || !gimbalState.connected) {
     const opened = openGimbalPort('web');
@@ -1968,7 +3015,7 @@ app.post('/api/gimbal/click', (req, res) => {
   res.json({ success: true, delta, state: gimbalState });
 });
 
-app.post('/api/gimbal/track/start', (_req, res) => {
+app.post('/api/gimbal/track/start', (req, res) => {
   if (!gimbalStream || !gimbalState.connected) {
     const opened = openGimbalPort('web');
     if (!opened) {
@@ -1980,12 +3027,13 @@ app.post('/api/gimbal/track/start', (_req, res) => {
     res.status(500).json({ success: false, message: 'Gimbal serial open failed.', state: gimbalState });
     return;
   }
-  const result = startGimbalTracking();
+  const body = req.body || {};
+  const result = startGimbalTracking({ mode: body.mode || body.target || body.detectorMode });
   if (!result.ok) {
     res.status(500).json({ success: false, message: result.error, state: gimbalState });
     return;
   }
-  res.json({ success: true, active: true, alreadyRunning: Boolean(result.alreadyRunning), state: gimbalState });
+  res.json({ success: true, active: true, alreadyRunning: Boolean(result.alreadyRunning), mode: result.mode || gimbalState.trackMode, detector: result.detector || '', state: gimbalState });
 });
 
 app.post('/api/gimbal/track/stop', (_req, res) => {
@@ -2211,9 +3259,20 @@ Press Ctrl+C to stop
   `);
 
   addLog('INFO', 'Server started successfully');
+  cleanupStaleGimbalTrackWorkers('server-start');
 });
 
+let shutdownStarted = false;
+
 function shutdown() {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  const forceExitTimer = setTimeout(() => {
+    console.error('[Shutdown] Force exit after timeout');
+    process.exit(0);
+  }, 2500);
+  forceExitTimer.unref();
+
   flushTelemetryCsv(true);
   addLog('INFO', 'Server shutting down');
 
@@ -2222,6 +3281,9 @@ function shutdown() {
   }
 
   stopGimbalTracking(false);
+  if (gimbalTrackProcess && gimbalTrackProcess.exitCode === null && !gimbalTrackProcess.killed) {
+    try { gimbalTrackProcess.kill('SIGKILL'); } catch (_) {}
+  }
 
   if (gimbalCommandTimer) {
     clearInterval(gimbalCommandTimer);
@@ -2229,7 +3291,13 @@ function shutdown() {
   }
 
   if (gimbalStream) {
-    try { gimbalStream.end(); } catch (_) {}
+    try { gimbalStream.destroy(); } catch (_) {}
+    gimbalStream = null;
+  }
+
+  if (gimbalReadStream) {
+    try { gimbalReadStream.destroy(); } catch (_) {}
+    gimbalReadStream = null;
   }
 
   try {
@@ -2246,6 +3314,7 @@ function shutdown() {
 
   httpServer.close(() => {
     console.log('[Server] Closed');
+    clearTimeout(forceExitTimer);
     process.exit(0);
   });
 }

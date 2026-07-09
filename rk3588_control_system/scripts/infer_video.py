@@ -190,6 +190,75 @@ class OutputLimiter:
         return res
 
 
+class TargetSignalFilter:
+    """Single filtered target signal shared by display, virtual crop, and gimbal control."""
+    def __init__(self, ema_alpha: float = 0.30,
+                 max_center_speed: float = 800.0,
+                 max_size_rate: float = 1.25,
+                 hold_x_px: float = 360.0,
+                 hold_y_px: float = 600.0,
+                 hold_release_px: float = 150.0) -> None:
+        self.ema_alpha = float(np.clip(ema_alpha, 0.02, 0.95))
+        self.size_alpha = min(self.ema_alpha * 0.35, 1.0)
+        self.max_center_speed = float(max_center_speed)
+        self.max_size_rate = float(max_size_rate)
+        self.hold_x_px = float(hold_x_px)
+        self.hold_y_px = float(hold_y_px)
+        self.hold_release_px = float(hold_release_px)
+        self.prev: np.ndarray | None = None
+        self.velocity = np.zeros(2, dtype=np.float32)
+        self.urgency = 0.0
+
+    def reset(self) -> None:
+        self.prev = None
+        self.velocity[:] = 0
+        self.urgency = 0.0
+
+    def apply(self, box: np.ndarray, dt: float, frame_w: int, frame_h: int) -> np.ndarray:
+        meas = np.asarray(box, dtype=np.float32).copy()
+        if self.prev is None:
+            self.prev = meas.copy()
+            self.velocity[:] = 0
+            self.urgency = 1.0
+            return meas
+
+        prev = self.prev.copy()
+        safe_dt = max(float(dt), 1e-3)
+        raw_error = meas[:2] - prev[:2]
+        abs_error = np.abs(raw_error)
+        jitter = np.array([
+            max(8.0, min(32.0, self.hold_x_px * 0.06)),
+            max(8.0, min(28.0, self.hold_y_px * 0.035)),
+        ], dtype=np.float32)
+        effective_error = np.sign(raw_error) * np.maximum(abs_error - jitter, 0.0)
+        err_norm = float(np.hypot(effective_error[0], effective_error[1]))
+
+        fast_radius = max(140.0, min(frame_w * 0.16, self.hold_release_px * 0.75))
+        urgency = float(np.clip(err_norm / fast_radius, 0.0, 1.0))
+        urgency = urgency * urgency * (3.0 - 2.0 * urgency)
+        self.urgency = urgency
+
+        alpha = self.ema_alpha + (0.78 - self.ema_alpha) * urgency
+        center_step = effective_error * alpha
+        max_speed = self.max_center_speed + (2600.0 - self.max_center_speed) * urgency
+        max_step = max(max_speed * safe_dt, 1.0)
+        step_norm = float(np.hypot(center_step[0], center_step[1]))
+        if step_norm > max_step and step_norm > 1e-6:
+            center_step *= max_step / step_norm
+
+        res = prev.copy()
+        res[:2] = prev[:2] + center_step
+
+        for i in (2, 3):
+            old = max(float(prev[i]), 1.0)
+            limited = float(np.clip(meas[i], old / self.max_size_rate, old * self.max_size_rate))
+            res[i] = old + self.size_alpha * (limited - old)
+
+        self.velocity = ((res[:2] - prev[:2]) / safe_dt).astype(np.float32)
+        self.prev = res.copy()
+        return res
+
+
 # ----------------------------------------------------------------------------
 # 目标锁定器 (单目标 + 轻量颜色 Re-ID 保锁)
 #   - 首次: 选 conf*sqrt(area) 最大者锁定其 tracker id
@@ -344,14 +413,13 @@ def run(args: argparse.Namespace) -> None:
 
     lock = TargetLock(reid_sim=args.reid_sim)
     kf = BoxKalman(q=args.q, r=args.r)
-    limiter = OutputLimiter(
+    target_filter = TargetSignalFilter(
         ema_alpha=args.smooth_alpha,
         max_center_speed=args.max_center_speed,
         max_size_rate=args.max_size_rate,
         hold_x_px=args.hold_x_px,
         hold_y_px=args.hold_y_px,
         hold_release_px=args.hold_release,
-        deadzone_beta=args.deadzone_beta,
     )
     center_hist: deque = deque(maxlen=max(int(args.center_median_window), 1))
     locked_wh = None
@@ -434,7 +502,7 @@ def run(args: argparse.Namespace) -> None:
         locked_id, locked_box, reacquired, locked_conf = lock.update(frame, ids, xyxy, confs)
         if reacquired:
             kf.reset()
-            limiter.reset()
+            target_filter.reset()
             center_hist.clear()
             locked_wh = None
 
@@ -449,9 +517,19 @@ def run(args: argparse.Namespace) -> None:
             measurement = np.array([raw_cx, raw_cy, locked_wh[0], locked_wh[1]], dtype=np.float32)
             conf_ok = float(locked_conf) >= args.conf_lock
             size_ok = size_within_tolerance(box_width, box_height, locked_wh, args.size_tol)
-            if conf_ok and size_ok and kf.is_measurement_valid(measurement, args.gate_dist, args.gate_scale):
+            gate_ok = kf.is_measurement_valid(measurement, args.gate_dist, args.gate_scale)
+            same_id_fast_move = (
+                not gate_ok
+                and conf_ok
+                and size_ok
+                and locked_id is not None
+                and (status in {"track", "init_pick"} or str(status).startswith("reid("))
+            )
+            if conf_ok and size_ok and (gate_ok or same_id_fast_move):
                 stable_box = kf.correct(measurement)
                 locked_wh = 0.95 * locked_wh + 0.05 * np.array([box_width, box_height], dtype=np.float32)
+                if same_id_fast_move:
+                    status = "track_fast"
             elif kf.initialized and kf.miss < args.max_coast:
                 stable_box = kf.coast()
                 status = "coast"
@@ -463,14 +541,14 @@ def run(args: argparse.Namespace) -> None:
         else:
             lock.reset()
             kf.reset()
-            limiter.reset()
+            target_filter.reset()
             center_hist.clear()
             locked_wh = None
             status = "lost"
 
         now = time.monotonic()
         if stable_box is not None and now - last_emit >= min_interval:
-            output_box = limiter.apply(stable_box, dt)
+            output_box = target_filter.apply(stable_box, dt, frame_width, frame_height)
             sx, sy, sw, sh = [float(value) for value in output_box]
             payload = {
                 "id": int(locked_id) if locked_id is not None else None,
@@ -485,10 +563,17 @@ def run(args: argparse.Namespace) -> None:
                 "frame_h": frame_height,
                 "dx": sx - frame_center_x,
                 "dy": sy - frame_center_y,
+                "vx": float(target_filter.velocity[0]),
+                "vy": float(target_filter.velocity[1]),
                 "conf": float(locked_conf),
                 "detections": int(len(ids)),
                 "locked": True,
                 "message": "SWIMMER LOCKED",
+                "detector": "yolo_swimmer",
+                "tracker": "bytetrack+target_filter",
+                "flow_quality": float(max(0.2, min(1.0, 0.55 + 0.45 * (1.0 - target_filter.urgency)))),
+                "coasting": status == "coast",
+                "prediction_age_ms": int(max(0, kf.miss) * dt * 1000.0),
                 "tracker_warning": tracker_warning,
             }
             print("TARGET:" + json.dumps(payload, separators=(",", ":")), flush=True)
