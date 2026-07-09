@@ -660,6 +660,10 @@ app.use((_req, res, next) => {
 });
 app.use(bodyParser.json({ limit: '1mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
+app.get(['/', '/index.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
+});
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
 
 const telemetryCsvBuffer = [];
