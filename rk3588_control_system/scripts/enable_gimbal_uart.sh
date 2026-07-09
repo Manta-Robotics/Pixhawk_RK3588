@@ -15,7 +15,7 @@ if [[ ! -f "$BOOT_ENV" ]]; then
     exit 1
 fi
 
-if grep -Eq "(^| )${UART_OVERLAY}( |$)" "$BOOT_ENV"; then
+if grep -E '^overlays=' "$BOOT_ENV" | grep -Eq "(^| )${UART_OVERLAY}( |$)"; then
     echo "[gimbal-uart] UART3 overlay already enabled: $UART_OVERLAY"
     exit 0
 fi
