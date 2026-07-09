@@ -45,11 +45,12 @@
     "portal_port": 80,
     "camera_port": 8090
   },
-  "camera": {
-    "enabled": true,
-    "label": "OV8858 Camera",
-    "transport": "local",
-    "sensor": "ov8858",
+    "camera": {
+      "enabled": true,
+      "label": "OV8858 Camera",
+      "transport": "local",
+      "proxy_host": "127.0.0.1",
+      "sensor": "ov8858",
     "port": "cam2",
     "boot_config": "/boot/firmware/ubuntuEnv.txt",
     "overlay": "rk3588-lubancat-5-cam2-ov8858-1632x1224-30fps-overlay",
@@ -179,8 +180,9 @@
       "hold_ms": 650
     },
     "video": {
-      "source_url": "/api/gimbal/stream",
-      "proxy_port": 8091,
+        "source_url": "/api/gimbal/stream",
+        "proxy_host": "127.0.0.1",
+        "proxy_port": 8091,
       "fps": 30,
       "low_latency": true,
       "transport": "rtsp",

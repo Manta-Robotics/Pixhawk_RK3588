@@ -17,6 +17,7 @@ CONFIG = json.loads((PROJECT_DIR / 'config' / 'system.config.json').read_text(en
 HOTSPOT = CONFIG.get('hotspot', {})
 CAMERA = CONFIG.get('camera', {})
 SNAPSHOT_PORT = int(HOTSPOT.get('camera_port', 8090))
+SNAPSHOT_HOST = str(HOTSPOT.get('camera_host', CAMERA.get('proxy_host', '127.0.0.1'))).strip() or '127.0.0.1'
 FRAME_WIDTH = int(CAMERA.get('width', 1920))
 FRAME_HEIGHT = int(CAMERA.get('height', 1080))
 FRAME_FPS = int(CAMERA.get('fps', 15))
@@ -475,6 +476,6 @@ class SnapshotHandler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     capture_thread = threading.Thread(target=capture_loop, name='camera-capture', daemon=True)
     capture_thread.start()
-    server = ThreadingHTTPServer(('0.0.0.0', SNAPSHOT_PORT), SnapshotHandler)
-    print(f'[camera] Listening on http://0.0.0.0:{SNAPSHOT_PORT}/snapshot.jpg and /stream.mjpg')
+    server = ThreadingHTTPServer((SNAPSHOT_HOST, SNAPSHOT_PORT), SnapshotHandler)
+    print(f'[camera] Listening on http://{SNAPSHOT_HOST}:{SNAPSHOT_PORT}/snapshot.jpg and /stream.mjpg')
     server.serve_forever()

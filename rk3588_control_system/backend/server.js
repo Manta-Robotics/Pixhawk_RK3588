@@ -384,7 +384,7 @@ function buildAccessUrls(connectivity) {
       label: candidate.label,
       ip,
       dashboardUrl: `http://${ip}:${WEB_PORT}`,
-      cameraUrl: `http://${ip}:${SNAPSHOT_PORT}/stream.mjpg`
+      cameraUrl: `http://${ip}:${WEB_PORT}/api/camera/stream`
     });
   });
 
@@ -522,8 +522,9 @@ function readLocalCameraHealth() {
 }
 
 function readCameraState(connectivity, req = null) {
-  const directStreamUrl = buildDirectCameraUrl(req, '/stream.mjpg');
-  const directOpenUrl = buildDirectCameraUrl(req, '/stream.mjpg');
+  const isLocalCameraTransport = String(cameraConfig.transport || '').trim().toLowerCase() === 'local';
+  const directStreamUrl = isLocalCameraTransport ? '' : buildDirectCameraUrl(req, '/stream.mjpg');
+  const directOpenUrl = isLocalCameraTransport ? '' : buildDirectCameraUrl(req, '/stream.mjpg');
   const sourceUrl = String(directStreamUrl || cameraConfig.source_url || `http://${MANTA_HOST}:8080/stream`);
   const openUrl = String(directOpenUrl || cameraConfig.open_url || `http://${MANTA_HOST}:8080`);
   const localVideoDevices = readLocalVideoDevices();
@@ -531,7 +532,6 @@ function readCameraState(connectivity, req = null) {
   const overlay = String(cameraConfig.overlay || '');
   const sensor = String(cameraConfig.sensor || 'camera');
   const port = String(cameraConfig.port || '');
-  const isLocalCameraTransport = String(cameraConfig.transport || '').trim().toLowerCase() === 'local';
   const localHealth = isLocalCameraTransport ? readLocalCameraHealth() : null;
   const isLocalProxySource = sourceUrl.startsWith('/');
   const usesDirectCameraUrl = Boolean(directStreamUrl);

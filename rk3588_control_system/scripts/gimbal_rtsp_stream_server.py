@@ -18,6 +18,7 @@ GIMBAL = CONFIG.get('gimbal', {}) if isinstance(CONFIG.get('gimbal', {}), dict) 
 VIDEO = GIMBAL.get('video', {}) if isinstance(GIMBAL.get('video', {}), dict) else {}
 
 PROXY_PORT = int(VIDEO.get('proxy_port', 8091))
+PROXY_HOST = str(VIDEO.get('proxy_host', '127.0.0.1')).strip() or '127.0.0.1'
 RTSP_INPUT = str(VIDEO.get('recognition_input', VIDEO.get('rtsp_input', VIDEO.get('input_url', '')))).strip()
 ENV_INPUT = str(os.environ.get('GIMBAL_VIDEO_INPUT', '')).strip()
 INPUT_URL = ENV_INPUT or RTSP_INPUT
@@ -240,7 +241,7 @@ class GimbalStreamHandler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     capture_thread = threading.Thread(target=capture_loop, name='gimbal-rtsp-capture', daemon=True)
     capture_thread.start()
-    server = ThreadingHTTPServer(('0.0.0.0', PROXY_PORT), GimbalStreamHandler)
+    server = ThreadingHTTPServer((PROXY_HOST, PROXY_PORT), GimbalStreamHandler)
     print(f'[gimbal-stream] Input: {INPUT_URL}')
-    print(f'[gimbal-stream] Listening on http://0.0.0.0:{PROXY_PORT}/stream.mjpg')
+    print(f'[gimbal-stream] Listening on http://{PROXY_HOST}:{PROXY_PORT}/stream.mjpg')
     server.serve_forever()
