@@ -9,7 +9,7 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
-RUN_USER="${SUDO_USER:-cat}"
+RUN_USER="${SUDO_USER:-$(id -un)}"
 
 eval "$(python3 - "$CONFIG_FILE" <<'PY'
 import json
