@@ -1,6 +1,6 @@
 {
   "serial_port": "/dev/ttyS1",
-  "baud_rate": 57600,
+  "baud_rate": 115200,
   "web_port": 3000,
   "web_host": "0.0.0.0",
   "telemetry_rate": 100,
