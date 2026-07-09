@@ -142,6 +142,8 @@ class MAVLinkBridge:
         heartbeat_interval: float,
         rover_left_output_channel: int,
         rover_right_output_channel: int,
+        rover_steering_input_channel: int,
+        rover_throttle_input_channel: int,
     ) -> None:
         self.serial_port = serial_port
         self.baudrate = baudrate
@@ -152,6 +154,8 @@ class MAVLinkBridge:
         self.heartbeat_interval = max(0.2, heartbeat_interval)
         self.rover_left_output_channel = max(1, min(32, int(rover_left_output_channel)))
         self.rover_right_output_channel = max(1, min(32, int(rover_right_output_channel)))
+        self.rover_steering_input_channel = max(1, min(8, int(rover_steering_input_channel)))
+        self.rover_throttle_input_channel = max(1, min(8, int(rover_throttle_input_channel)))
 
         self.master: Optional[mavutil.mavfile] = None
         self.connected = False
@@ -239,19 +243,24 @@ class MAVLinkBridge:
 
         return None
 
-    def _ensure_direct_motor_outputs(self) -> None:
+    def _ensure_rover_motor_outputs(self) -> None:
         if self.master is None:
             return
 
         target_params = {
-            f'SERVO{self.rover_left_output_channel}_FUNCTION': 0,
-            f'SERVO{self.rover_right_output_channel}_FUNCTION': 0,
+            'PILOT_STEER_TYPE': 0,
+            f'RC{self.rover_steering_input_channel}_REVERSED': 0,
+            f'RC{self.rover_throttle_input_channel}_REVERSED': 0,
+            f'SERVO{self.rover_left_output_channel}_FUNCTION': 73,
+            f'SERVO{self.rover_right_output_channel}_FUNCTION': 74,
+            f'SERVO{self.rover_left_output_channel}_REVERSED': 1,
+            f'SERVO{self.rover_right_output_channel}_REVERSED': 1,
         }
 
         for name, target_value in target_params.items():
             current_value = self._fetch_param(name)
             if current_value is None:
-                logger.warning('Unable to read %s while preparing direct motor control', name)
+                logger.warning('Unable to read %s while preparing Pixhawk rover output control', name)
                 continue
 
             if int(round(current_value)) == target_value:
@@ -259,14 +268,14 @@ class MAVLinkBridge:
 
             applied_value = self._set_param(name, float(target_value))
             if applied_value is None:
-                logger.warning('Unable to set %s=%s for direct motor control', name, target_value)
+                logger.warning('Unable to set %s=%s for Pixhawk rover output control', name, target_value)
                 continue
 
-            logger.warning('Updated %s from %s to %s for direct motor control', name, int(round(current_value)), int(round(applied_value)))
+            logger.warning('Updated %s from %s to %s for Pixhawk rover output control', name, int(round(current_value)), int(round(applied_value)))
             self._send_node_log(
                 'WARNING',
-                f'{name} changed from {int(round(current_value))} to {int(round(applied_value))} for direct motor PWM control',
-                key=f'direct-output:{name}',
+                f'{name} changed from {int(round(current_value))} to {int(round(applied_value))} for Pixhawk rover output control',
+                key=f'rover-output:{name}',
                 min_interval=1.0,
             )
 
@@ -345,7 +354,7 @@ class MAVLinkBridge:
                 key='connect-success',
                 min_interval=1.0,
             )
-            self._ensure_direct_motor_outputs()
+            self._ensure_rover_motor_outputs()
             self._configure_message_intervals()
             self._send_node_packet('connection', {'connected': True})
             return True
@@ -858,9 +867,7 @@ class MAVLinkBridge:
         params = packet.get('params', {}) or {}
 
         if command == 'MOTOR_CONTROL':
-            channel = int(params.get('channel', 0))
-            pwm = int(params.get('pwm', 1500))
-            self._send_motor_command(channel, pwm)
+            logger.warning('Ignored raw MOTOR_CONTROL; use ROVER_DRIVE so Pixhawk SERVO reversal remains authoritative')
             return
 
         if command == 'ROVER_DRIVE':
@@ -890,15 +897,15 @@ class MAVLinkBridge:
             return
 
         if command == 'EMERGENCY_STOP':
-            channels = params.get('channels', []) or []
-            pwm = int(params.get('pwm', 1000))
+            throttle_channel = int(params.get('throttleChannel', self.rover_throttle_input_channel))
+            steering_channel = int(params.get('steeringChannel', self.rover_steering_input_channel))
+            throttle_pwm = int(params.get('throttlePwm', 1500))
+            steering_pwm = int(params.get('steeringPwm', 1500))
 
-            for channel in channels:
-                try:
-                    self._send_motor_command(int(channel), pwm)
-                except (TypeError, ValueError):
-                    logger.warning('Invalid emergency stop channel: %s', channel)
-
+            self._send_rc_override({
+                throttle_channel: throttle_pwm,
+                steering_channel: steering_pwm,
+            })
             self._arm_disarm(False)
             return
 
@@ -1206,6 +1213,8 @@ def main() -> None:
     heartbeat_interval = float(config.get('heartbeat_interval', 1.0))
     rover_left_output_channel = int(config.get('rover_left_channel', 1))
     rover_right_output_channel = int(config.get('rover_right_channel', 3))
+    rover_steering_input_channel = int(config.get('rover_steering_input_channel', 1))
+    rover_throttle_input_channel = int(config.get('rover_throttle_input_channel', 3))
 
     logger.info('Bridge will keep retrying until Pixhawk heartbeat is received')
 
@@ -1220,6 +1229,8 @@ def main() -> None:
             heartbeat_interval=heartbeat_interval,
             rover_left_output_channel=rover_left_output_channel,
             rover_right_output_channel=rover_right_output_channel,
+            rover_steering_input_channel=rover_steering_input_channel,
+            rover_throttle_input_channel=rover_throttle_input_channel,
         )
 
         if bridge.connect(timeout=8.0):

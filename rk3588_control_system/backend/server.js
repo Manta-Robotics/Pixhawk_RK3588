@@ -2397,8 +2397,21 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
   }
 
   const { channel: validChannel, pwm: validPwm } = validation;
+  const leftKey = `ch${ROVER_LEFT_CHANNEL}`;
+  const rightKey = `ch${ROVER_RIGHT_CHANNEL}`;
+
   systemState.motorStatus[`ch${validChannel}`] = validPwm;
-  sendMavlinkCommand('MOTOR_CONTROL', { channel: validChannel, pwm: validPwm });
+  const leftPwm = toPwm(systemState.motorStatus[leftKey] ?? PWM_CENTER);
+  const rightPwm = toPwm(systemState.motorStatus[rightKey] ?? PWM_CENTER);
+  const throttlePwm = toPwm((leftPwm + rightPwm) / 2);
+  const steeringPwm = toPwm(PWM_CENTER + (rightPwm - leftPwm) / 2);
+
+  sendMavlinkCommand('ROVER_DRIVE', {
+    throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
+    throttlePwm,
+    steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
+    steeringPwm
+  });
 
   io.emit('motor_update', {
     channel: validChannel,
@@ -2406,7 +2419,10 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
     timestamp: new Date().toISOString()
   });
 
-  addLog('MOTOR', `${sourceLabel} set channel ${validChannel} => ${validPwm}us`);
+  addLog(
+    'MOTOR',
+    `${sourceLabel} set Main${validChannel}=${validPwm}us via Pixhawk mixer (left=${leftPwm}, right=${rightPwm})`
+  );
   return { ok: true };
 }
 
@@ -3208,18 +3224,18 @@ app.post('/api/emergency/stop', (req, res) => {
   addLog('CRITICAL', 'Emergency stop triggered');
 
   for (let channel = 1; channel <= 8; channel += 1) {
-    systemState.motorStatus[`ch${channel}`] = PWM_MIN;
+    systemState.motorStatus[`ch${channel}`] = PWM_CENTER;
   }
 
   systemState.roverControl = {
     throttle: 0,
     steering: 0,
-    leftPwm: PWM_MIN,
-    rightPwm: PWM_MIN
+    leftPwm: PWM_CENTER,
+    rightPwm: PWM_CENTER
   };
 
   sendMavlinkCommand('EMERGENCY_STOP', {
-    pwm: PWM_MIN,
+    pwm: PWM_CENTER,
     channels: [...enabledChannels],
     throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
     steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
@@ -3232,7 +3248,7 @@ app.post('/api/emergency/stop', (req, res) => {
   io.emit('aircraft_disarmed');
   io.emit('motor_update', {
     channel: 0,
-    pwm: PWM_MIN,
+    pwm: PWM_CENTER,
     timestamp: new Date().toISOString()
   });
 
