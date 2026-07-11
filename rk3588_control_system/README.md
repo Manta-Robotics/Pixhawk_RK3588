@@ -76,7 +76,7 @@ sudo journalctl -u manta-backend.service -f
 | 蓝牙 PAN | `http://10.43.0.1:3000` |
 | SSH/VSCode | SSH Host `manta` |
 
-手机连接 `Manta-Control` 后应手动打开 `http://10.42.0.1:3000`。热点会正确响应 Android、Apple 和 Windows 的连通性探测，防止设备因“无互联网”自动离开控制网络。
+手机连接 `Manta-Control` 后，Android、iOS 和 Windows 的连通性探测会触发控制入口；未自动弹出时可直接打开 `http://10.42.0.1:3000`。
 
 ## 6. 云台视频与录像
 
