@@ -15,16 +15,16 @@ DASHBOARD_PORT = int(CONFIG.get('web_port', 3000))
 TARGET_URL = f'http://{PORTAL_IP}:{DASHBOARD_PORT}'
 LISTEN_HOST = '0.0.0.0'
 
-APPLE_PROBE_PATHS = {'/hotspot-detect.html', '/library/test/success.html'}
-REDIRECT_PROBE_PATHS = {
-    '/generate_204',
-    '/gen_204',
-    '/connecttest.txt',
-    '/ncsi.txt',
-    '/success.txt',
-    '/mobile/status.php',
-    '/kindle-wifi/wifiredirect.html',
+CONNECTIVITY_RESPONSES = {
+    '/hotspot-detect.html': ('text/html; charset=utf-8', '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>'),
+    '/library/test/success.html': ('text/html; charset=utf-8', '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>'),
+    '/connecttest.txt': ('text/plain; charset=utf-8', 'Microsoft Connect Test'),
+    '/ncsi.txt': ('text/plain; charset=utf-8', 'Microsoft NCSI'),
+    '/success.txt': ('text/plain; charset=utf-8', 'success'),
+    '/mobile/status.php': ('text/plain; charset=utf-8', 'online'),
+    '/kindle-wifi/wifiredirect.html': ('text/plain; charset=utf-8', 'OK'),
 }
+NO_CONTENT_PATHS = {'/generate_204', '/gen_204'}
 
 PORTAL_HTML = f'''<!DOCTYPE html>
 <html lang="en">
@@ -94,14 +94,13 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
 
-        # Connectivity checks must not return their vendor success value. That
-        # is the signal Android, iOS and Windows use to open the portal UI.
-        if path in APPLE_PROBE_PATHS:
-            self._send_html(PORTAL_HTML)
+        if path in NO_CONTENT_PATHS:
+            self._send_no_content()
             return
 
-        if path in REDIRECT_PROBE_PATHS:
-            self._redirect(TARGET_URL)
+        if path in CONNECTIVITY_RESPONSES:
+            content_type, body = CONNECTIVITY_RESPONSES[path]
+            self._send_body(body.encode('utf-8'), content_type)
             return
 
         if path in ('/', '/index.html', '/portal'):
@@ -119,18 +118,18 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        if path in APPLE_PROBE_PATHS:
-            encoded = PORTAL_HTML.encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', str(len(encoded)))
+        if path in NO_CONTENT_PATHS:
+            self.send_response(204)
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             return
 
-        if path in REDIRECT_PROBE_PATHS:
-            self.send_response(302)
-            self.send_header('Location', TARGET_URL)
+        if path in CONNECTIVITY_RESPONSES:
+            content_type, body = CONNECTIVITY_RESPONSES[path]
+            encoded = body.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(encoded)))
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             return
