@@ -77,7 +77,7 @@
                 '<div class="video-meta">' + formatDate(item.modifiedAt) + ' · ' + formatSize(item.size) + '</div>' +
                 '<div class="video-actions">' +
                     '<button class="btn" type="button" data-action="rename">Rename</button>' +
-                    '<a class="btn" href="' + (item.relativeDownloadUrl || item.downloadUrl) + '" download="' + item.name + '" target="_blank" rel="noopener">Download</a>' +
+                    '<a class="btn" href="' + (item.relativeDownloadUrl || item.downloadUrl) + '" download="' + item.name + '">Download</a>' +
                     '<button class="btn btn-danger" type="button" data-action="delete">Delete</button>' +
                 '</div>' +
             '</article>';
