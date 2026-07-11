@@ -213,7 +213,11 @@
       "flow_scale": 0.35,
       "flow_threads": 2,
       "detector_threads": 2,
-      "max_coast_seconds": 2
+      "max_coast_seconds": 2,
+      "track_hold_enter_x_px": 120,
+      "track_hold_enter_y_px": 68,
+      "track_hold_exit_x_px": 240,
+      "track_hold_exit_y_px": 135
     },
     "swimmer": {
       "enabled": true,

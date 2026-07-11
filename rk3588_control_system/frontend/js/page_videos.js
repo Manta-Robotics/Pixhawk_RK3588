@@ -63,6 +63,11 @@
             render();
         });
     }
+    function downloadRecording(name) {
+        var item = recordings.find(function (entry) { return entry.name === name; });
+        var url = item && (item.relativeDownloadUrl || item.downloadUrl);
+        if (url) window.location.assign(url);
+    }
     function render() {
         var list = $("videoList");
         if (!list) return;
@@ -77,7 +82,7 @@
                 '<div class="video-meta">' + formatDate(item.modifiedAt) + ' · ' + formatSize(item.size) + '</div>' +
                 '<div class="video-actions">' +
                     '<button class="btn" type="button" data-action="rename">Rename</button>' +
-                    '<a class="btn" href="' + (item.relativeDownloadUrl || item.downloadUrl) + '" download>Download</a>' +
+                    '<button class="btn" type="button" data-action="download">Download</button>' +
                     '<button class="btn btn-danger" type="button" data-action="delete">Delete</button>' +
                 '</div>' +
             '</article>';
@@ -102,6 +107,7 @@
             var action = button.getAttribute("data-action");
             if (action === "select") selectRecording(name);
             if (action === "rename") renameRecording(name);
+            if (action === "download") downloadRecording(name);
             if (action === "delete") deleteRecording(name);
         });
         refresh();

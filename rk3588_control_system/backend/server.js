@@ -165,6 +165,11 @@ const GIMBAL_TRACK_HOLD_ENTER_X_PX = Math.max(2, Number(GIMBAL_AXIS.track_hold_e
 const GIMBAL_TRACK_HOLD_ENTER_Y_PX = Math.max(2, Number(GIMBAL_AXIS.track_hold_enter_y_px || GIMBAL_TRACK_HOLD_ENTER_PX));
 const GIMBAL_TRACK_HOLD_EXIT_X_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_X_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_x_px || GIMBAL_TRACK_HOLD_EXIT_PX));
 const GIMBAL_TRACK_HOLD_EXIT_Y_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_Y_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_y_px || GIMBAL_TRACK_HOLD_EXIT_PX));
+const GIMBAL_FACE_TRACK = gimbalConfig.face || {};
+const GIMBAL_FACE_TRACK_HOLD_ENTER_X_PX = Math.max(2, Number(GIMBAL_FACE_TRACK.track_hold_enter_x_px || GIMBAL_TRACK_HOLD_ENTER_X_PX));
+const GIMBAL_FACE_TRACK_HOLD_ENTER_Y_PX = Math.max(2, Number(GIMBAL_FACE_TRACK.track_hold_enter_y_px || GIMBAL_TRACK_HOLD_ENTER_Y_PX));
+const GIMBAL_FACE_TRACK_HOLD_EXIT_X_PX = Math.max(GIMBAL_FACE_TRACK_HOLD_ENTER_X_PX + 1, Number(GIMBAL_FACE_TRACK.track_hold_exit_x_px || GIMBAL_TRACK_HOLD_EXIT_X_PX));
+const GIMBAL_FACE_TRACK_HOLD_EXIT_Y_PX = Math.max(GIMBAL_FACE_TRACK_HOLD_ENTER_Y_PX + 1, Number(GIMBAL_FACE_TRACK.track_hold_exit_y_px || GIMBAL_TRACK_HOLD_EXIT_Y_PX));
 const GIMBAL_TRACK_HOLD_SPEED_PX_S = Math.max(1, Number(GIMBAL_AXIS.track_hold_speed_px_s || 55));
 const GIMBAL_TRACK_HOLD_ENTER_SPEED_PX_S = Math.max(1, Number(GIMBAL_AXIS.track_hold_enter_speed_px_s || GIMBAL_TRACK_HOLD_SPEED_PX_S));
 const GIMBAL_TRACK_HOLD_EXIT_SPEED_PX_S = Math.max(GIMBAL_TRACK_HOLD_ENTER_SPEED_PX_S + 1, Number(GIMBAL_AXIS.track_hold_exit_speed_px_s || GIMBAL_TRACK_HOLD_SPEED_PX_S * 1.25));
@@ -1114,11 +1119,16 @@ function computeGimbalTrackDesiredRate(now) {
   const predictionSeconds = leadMs / 1000;
   const predictedX = clamp(gimbalTrackTarget.x + gimbalTrackTarget.vx * predictionSeconds, -GIMBAL_MAX_PIXEL_X, GIMBAL_MAX_PIXEL_X);
   const predictedY = clamp(gimbalTrackTarget.y + gimbalTrackTarget.vy * predictionSeconds, -GIMBAL_MAX_PIXEL_Y, GIMBAL_MAX_PIXEL_Y);
+  const faceMode = gimbalState.trackMode === 'face';
+  const holdEnterX = faceMode ? GIMBAL_FACE_TRACK_HOLD_ENTER_X_PX : GIMBAL_TRACK_HOLD_ENTER_X_PX;
+  const holdEnterY = faceMode ? GIMBAL_FACE_TRACK_HOLD_ENTER_Y_PX : GIMBAL_TRACK_HOLD_ENTER_Y_PX;
+  const holdExitX = faceMode ? GIMBAL_FACE_TRACK_HOLD_EXIT_X_PX : GIMBAL_TRACK_HOLD_EXIT_X_PX;
+  const holdExitY = faceMode ? GIMBAL_FACE_TRACK_HOLD_EXIT_Y_PX : GIMBAL_TRACK_HOLD_EXIT_Y_PX;
   const error = Math.max(Math.abs(predictedX), Math.abs(predictedY));
-  const inHoldEnterZone = Math.abs(predictedX) <= GIMBAL_TRACK_HOLD_ENTER_X_PX
-    && Math.abs(predictedY) <= GIMBAL_TRACK_HOLD_ENTER_Y_PX;
-  const outsideHoldExitZone = Math.abs(predictedX) >= GIMBAL_TRACK_HOLD_EXIT_X_PX
-    || Math.abs(predictedY) >= GIMBAL_TRACK_HOLD_EXIT_Y_PX;
+  const inHoldEnterZone = Math.abs(predictedX) <= holdEnterX
+    && Math.abs(predictedY) <= holdEnterY;
+  const outsideHoldExitZone = Math.abs(predictedX) >= holdExitX
+    || Math.abs(predictedY) >= holdExitY;
 
   if (gimbalTrackHolding) {
     if (outsideHoldExitZone || targetSpeed >= GIMBAL_TRACK_HOLD_EXIT_SPEED_PX_S) {
@@ -1131,14 +1141,15 @@ function computeGimbalTrackDesiredRate(now) {
     return { x: 0, y: 0, gated: true, predictedX, predictedY, targetSpeed, stale: false };
   }
 
-  function softError(value) {
-    const deadband = GIMBAL_TRACK_HOLD_ENTER_PX * 0.65;
+  function softError(value, holdEnter) {
+    const deadband = holdEnter * 0.65;
     return Math.abs(value) <= deadband ? 0 : Math.sign(value) * (Math.abs(value) - deadband);
   }
-  const activeX = softError(predictedX);
-  const activeY = softError(predictedY);
+  const activeX = softError(predictedX, holdEnterX);
+  const activeY = softError(predictedY, holdEnterY);
   const angles = gimbalAnglesFromPixelDelta(activeX, activeY);
-  const gainMix = smoothStep01((error - GIMBAL_TRACK_HOLD_EXIT_PX) / Math.max(1, GIMBAL_TRACK_FAST_ZONE_PX - GIMBAL_TRACK_HOLD_EXIT_PX));
+  const holdExit = Math.max(holdExitX, holdExitY);
+  const gainMix = smoothStep01((error - holdExit) / Math.max(1, GIMBAL_TRACK_FAST_ZONE_PX - holdExit));
   const angleGain = GIMBAL_TRACK_NEAR_GAIN + (GIMBAL_TRACK_FAR_GAIN - GIMBAL_TRACK_NEAR_GAIN) * gainMix;
   const quality = Number.isFinite(gimbalTrackTarget.flowQuality) ? clamp(gimbalTrackTarget.flowQuality, 0, 1) : 1;
   const coastScale = gimbalTrackTarget.coasting ? 0.30 : 1;
