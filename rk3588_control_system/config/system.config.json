@@ -180,10 +180,15 @@
       "hold_ms": 650
     },
     "video": {
-        "source_url": "/api/gimbal/stream",
-        "proxy_host": "127.0.0.1",
-        "proxy_port": 8091,
+      "source_url": "/api/gimbal/stream",
+      "proxy_host": "127.0.0.1",
+      "proxy_port": 8091,
+      "local_stream_url": "http://127.0.0.1:8091/mobile.mjpg",
       "fps": 30,
+      "mobile_width": 960,
+      "mobile_height": 540,
+      "mobile_fps": 12,
+      "mobile_jpeg_quality": 68,
       "low_latency": true,
       "transport": "rtsp",
       "recognition_input": "rtsp://192.168.144.108/live/0",
@@ -191,6 +196,8 @@
       "record_input": "rtsp://192.168.144.108/live/0",
       "record_stream_index": 1,
       "record_stream_quality": 0,
+      "record_codec": "h264_rkmpp",
+      "record_bitrate": "12M",
       "rtsp_transport": "tcp"
     },
     "face": {

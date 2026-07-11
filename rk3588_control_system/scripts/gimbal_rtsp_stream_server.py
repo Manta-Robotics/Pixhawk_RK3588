@@ -12,6 +12,9 @@ from pathlib import Path
 from socketserver import ThreadingMixIn
 from urllib.parse import urlsplit
 
+import cv2
+import numpy as np
+
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 CONFIG = json.loads((PROJECT_DIR / 'config' / 'system.config.json').read_text(encoding='utf-8'))
 GIMBAL = CONFIG.get('gimbal', {}) if isinstance(CONFIG.get('gimbal', {}), dict) else {}
@@ -25,6 +28,10 @@ INPUT_URL = ENV_INPUT or RTSP_INPUT
 FRAME_FPS = int(VIDEO.get('fps', 25))
 LOW_LATENCY = bool(VIDEO.get('low_latency', True))
 FRAME_STALL_SECONDS = max(1.0, float(VIDEO.get('stall_reconnect_seconds', 2.0)))
+MOBILE_WIDTH = max(160, int(VIDEO.get('mobile_width', 960)))
+MOBILE_HEIGHT = max(90, int(VIDEO.get('mobile_height', 540)))
+MOBILE_FPS = max(1.0, float(VIDEO.get('mobile_fps', 12)))
+MOBILE_JPEG_QUALITY = min(95, max(35, int(VIDEO.get('mobile_jpeg_quality', 68))))
 
 if not INPUT_URL.lower().startswith('rtsp://'):
     raise SystemExit('gimbal video input must be an RTSP URL')
@@ -32,6 +39,27 @@ if not INPUT_URL.lower().startswith('rtsp://'):
 FRAME_LOCK = threading.Lock()
 FRAME_CACHE = {'timestamp': 0.0, 'bytes': b'', 'error': ''}
 FRAME_READY = threading.Event()
+MOBILE_FRAME_CACHE = {'timestamp': 0.0, 'bytes': b''}
+MOBILE_FRAME_READY = threading.Event()
+MOBILE_INTERVAL_SECONDS = 1.0 / MOBILE_FPS
+MOBILE_LAST_ENCODED_AT = 0.0
+
+
+def update_mobile_frame(payload: bytes, timestamp: float) -> None:
+    global MOBILE_LAST_ENCODED_AT
+    if timestamp - MOBILE_LAST_ENCODED_AT < MOBILE_INTERVAL_SECONDS:
+        return
+    image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return
+    resized = cv2.resize(image, (MOBILE_WIDTH, MOBILE_HEIGHT), interpolation=cv2.INTER_AREA)
+    ok, encoded = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, MOBILE_JPEG_QUALITY])
+    if not ok:
+        return
+    with FRAME_LOCK:
+        MOBILE_FRAME_CACHE.update({'timestamp': timestamp, 'bytes': encoded.tobytes()})
+    MOBILE_LAST_ENCODED_AT = timestamp
+    MOBILE_FRAME_READY.set()
 
 
 def build_capture_command() -> list[str]:
@@ -113,6 +141,7 @@ def capture_loop() -> None:
 
                     with FRAME_LOCK:
                         FRAME_CACHE.update({'timestamp': time.time(), 'bytes': payload, 'error': ''})
+                    update_mobile_frame(payload, time.time())
                     FRAME_READY.set()
                     last_frame_at = time.time()
 
@@ -170,8 +199,10 @@ class GimbalStreamHandler(BaseHTTPRequestHandler):
                 self._send_json({'ok': True, 'inputUrl': INPUT_URL, 'inputType': 'rtsp', 'lastError': FRAME_CACHE['error'], 'ready': bool(FRAME_CACHE['bytes'])})
             return
 
-        if path in ('/stream', '/stream.mjpg'):
-            if not FRAME_READY.wait(timeout=4):
+        if path in ('/stream', '/stream.mjpg', '/mobile', '/mobile.mjpg'):
+            mobile = path in ('/mobile', '/mobile.mjpg')
+            ready = MOBILE_FRAME_READY if mobile else FRAME_READY
+            if not ready.wait(timeout=4):
                 with FRAME_LOCK:
                     err = FRAME_CACHE['error'] or 'Gimbal stream not ready yet.'
                 self._send_json({'ok': False, 'message': err, 'inputUrl': INPUT_URL}, status=503)
@@ -188,8 +219,9 @@ class GimbalStreamHandler(BaseHTTPRequestHandler):
                 last_sent_at = 0.0
                 while True:
                     with FRAME_LOCK:
-                        frame = FRAME_CACHE['bytes']
-                        ts = FRAME_CACHE['timestamp']
+                        cache = MOBILE_FRAME_CACHE if mobile else FRAME_CACHE
+                        frame = cache['bytes']
+                        ts = cache['timestamp']
                         err = FRAME_CACHE['error']
 
                     if not frame:

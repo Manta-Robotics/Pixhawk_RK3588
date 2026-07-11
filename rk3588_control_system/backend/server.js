@@ -225,6 +225,8 @@ const GIMBAL_VIDEO_INPUT = GIMBAL_RTSP_INPUT || String(gimbalVideoConfig.input_u
 const GIMBAL_RECORD_INPUT = String(gimbalVideoConfig.record_input || gimbalVideoConfig.recording_input || GIMBAL_VIDEO_INPUT).trim();
 const GIMBAL_RECORD_STREAM_INDEX = clamp(Math.round(Number(gimbalVideoConfig.record_stream_index || 1)), 0, 3);
 const GIMBAL_RECORD_STREAM_QUALITY = clamp(Math.round(Number(gimbalVideoConfig.record_stream_quality || 0)), 0, 5);
+const GIMBAL_RECORD_CODEC = String(gimbalVideoConfig.record_codec || 'h264_rkmpp').trim() || 'h264_rkmpp';
+const GIMBAL_RECORD_BITRATE = String(gimbalVideoConfig.record_bitrate || '12M').trim();
 const gimbalFocusConfig = gimbalConfig.focus || {};
 let gimbalStream = null;
 let gimbalReadStream = null;
@@ -2168,7 +2170,11 @@ function startGimbalRecording(options = {}) {
   const useRtsp = input.startsWith('rtsp://');
   const args = ['-hide_banner', '-loglevel', 'warning', '-y'];
   if (useRtsp) args.push('-rtsp_transport', String(gimbalVideoConfig.rtsp_transport || 'tcp'));
-  args.push('-i', input, '-map', '0:v:0', '-an', '-c:v', 'copy', '-movflags', '+faststart', outputPath);
+  args.push('-i', input, '-map', '0:v:0', '-an', '-c:v', GIMBAL_RECORD_CODEC);
+  if (GIMBAL_RECORD_CODEC !== 'copy' && GIMBAL_RECORD_BITRATE) {
+    args.push('-b:v', GIMBAL_RECORD_BITRATE);
+  }
+  args.push('-movflags', '+faststart', outputPath);
   try {
     const child = spawn(FFMPEG_BIN, args, { cwd: PROJECT_ROOT, stdio: ['ignore', 'ignore', 'pipe'] });
     gimbalRecordingProcess = child;
