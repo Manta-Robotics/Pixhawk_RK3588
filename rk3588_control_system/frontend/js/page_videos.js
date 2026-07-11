@@ -1,6 +1,8 @@
 (function () {
     var recordings = [];
     var selectedName = "";
+    var preparedDownloads = Object.create(null);
+    var downloadStatus = Object.create(null);
 
     function $(id) { return document.getElementById(id); }
     function formatSize(bytes) {
@@ -63,6 +65,46 @@
             render();
         });
     }
+    function savePreparedDownload(name) {
+        var prepared = preparedDownloads[name];
+        if (!prepared) return;
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [prepared.file] })) {
+            navigator.share({ files: [prepared.file], title: name }).catch(function (error) {
+                if (error && error.name !== "AbortError") downloadStatus[name] = "Save failed";
+                render();
+            });
+            return;
+        }
+        var link = document.createElement("a");
+        link.href = prepared.url;
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    }
+    function prepareDownload(name, button) {
+        var item = recordings.find(function (entry) { return entry.name === name; });
+        if (!item || downloadStatus[name] === "Preparing...") return;
+        if (preparedDownloads[name]) {
+            savePreparedDownload(name);
+            return;
+        }
+        downloadStatus[name] = "Preparing...";
+        if (button) button.disabled = true;
+        render();
+        fetch(item.relativeDownloadUrl || item.downloadUrl).then(function (response) {
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            return response.blob();
+        }).then(function (blob) {
+            var file = new File([blob], name, { type: blob.type || "video/mp4" });
+            preparedDownloads[name] = { file: file, url: URL.createObjectURL(blob) };
+            downloadStatus[name] = "Save";
+            render();
+        }).catch(function () {
+            downloadStatus[name] = "Retry";
+            render();
+        });
+    }
     function render() {
         var list = $("videoList");
         if (!list) return;
@@ -77,7 +119,7 @@
                 '<div class="video-meta">' + formatDate(item.modifiedAt) + ' · ' + formatSize(item.size) + '</div>' +
                 '<div class="video-actions">' +
                     '<button class="btn" type="button" data-action="rename">Rename</button>' +
-                    '<a class="btn" href="' + (item.relativeDownloadUrl || item.downloadUrl) + '" download="' + item.name + '">Download</a>' +
+                    '<button class="btn" type="button" data-action="download"' + (downloadStatus[item.name] === "Preparing..." ? " disabled" : "") + '>' + (downloadStatus[item.name] || "Download") + '</button>' +
                     '<button class="btn btn-danger" type="button" data-action="delete">Delete</button>' +
                 '</div>' +
             '</article>';
@@ -102,6 +144,7 @@
             var action = button.getAttribute("data-action");
             if (action === "select") selectRecording(name);
             if (action === "rename") renameRecording(name);
+            if (action === "download") prepareDownload(name, button);
             if (action === "delete") deleteRecording(name);
         });
         refresh();
