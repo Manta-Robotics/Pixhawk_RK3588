@@ -17,22 +17,29 @@ import net from 'net';
 import os from 'os';
 import http from 'http';
 import https from 'https';
+import { validateSystemConfig } from '../scripts/validate_config.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
-function readJsonFile(relativePath, fallback) {
+function readJsonFile(relativePath, fallback, options = {}) {
   const filePath = path.join(PROJECT_ROOT, relativePath);
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
-    console.error(`[Config] Failed to read ${relativePath}: ${error.message}`);
+    const message = `[Config] Failed to read ${relativePath}: ${error.message}`;
+    if (options.required) throw new Error(message);
+    console.error(message);
     return fallback;
   }
 }
 
-const config = readJsonFile('config/system.config.json', {});
+const config = readJsonFile('config/system.config.json', {}, { required: true });
+const configErrors = validateSystemConfig(config);
+if (configErrors.length) {
+  throw new Error(`[Config] Invalid system.config.json:\n- ${configErrors.join('\n- ')}`);
+}
 const motorConfig = readJsonFile('config/motor_config.json', { motors: [] });
 
 const LOGS_DIR = path.resolve(PROJECT_ROOT, config.logs_dir || './logs');
@@ -112,6 +119,7 @@ if (!enabledChannels.has(ROVER_LEFT_CHANNEL) || !enabledChannels.has(ROVER_RIGHT
 }
 
 const app = express();
+app.disable('x-powered-by');
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -644,7 +652,13 @@ const systemState = {
 refreshPeripheralState();
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+app.use(bodyParser.json({ limit: '1mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
 
@@ -1910,9 +1924,9 @@ function startGimbalTracking(options = {}) {
       '--smooth-alpha', String(swimmer.smooth_alpha ?? 0.3),
       '--max-center-speed', String(swimmer.max_center_speed ?? 800.0),
       '--max-size-rate', String(swimmer.max_size_rate ?? 1.0),
-      '--hold-x-px', String(swimmer.hold_x_px ?? 500.0),
-      '--hold-y-px', String(swimmer.hold_y_px ?? 500.0),
-      '--hold-release', String(swimmer.hold_release ?? 300.0),
+      '--hold-x-px', String(swimmer.hold_x_px ?? 360.0),
+      '--hold-y-px', String(swimmer.hold_y_px ?? 600.0),
+      '--hold-release', String(swimmer.hold_release ?? 150.0),
       '--conf-lock', String(swimmer.conf_lock ?? 0.35),
       '--size-tol', String(swimmer.size_tol ?? 0.35),
       '--vft-alpha', String(swimmer.vft_alpha ?? 0.35),
@@ -3237,6 +3251,20 @@ app.get('/health', (req, res) => {
     runtime: {
       nodeVersion: process.version
     }
+  });
+});
+
+app.use('/api', (req, res) => {
+  res.status(404).json({ success: false, message: `API route not found: ${req.method} ${req.path}` });
+});
+
+app.use((error, _req, res, _next) => {
+  const badJson = error && error.type === 'entity.parse.failed';
+  const status = badJson ? 400 : 500;
+  if (!badJson) console.error(`[HTTP] ${error && error.stack ? error.stack : error}`);
+  res.status(status).json({
+    success: false,
+    message: badJson ? 'Invalid JSON request body' : 'Internal server error'
   });
 });
 

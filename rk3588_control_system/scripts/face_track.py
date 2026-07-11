@@ -253,10 +253,8 @@ class YoloFaceDetector:
         self.imgsz = int(max(160, imgsz))
 
     def detect(self, frame: np.ndarray) -> tuple[list[list[float]], list[float], list[int | None]]:
-        results = self.model.track(
+        results = self.model.predict(
             frame,
-            persist=True,
-            tracker=self.tracker,
             conf=self.conf,
             iou=self.iou,
             imgsz=self.imgsz,
@@ -270,7 +268,7 @@ class YoloFaceDetector:
             return [], [], []
         xyxy = result.boxes.xyxy.detach().cpu().numpy()
         confs = result.boxes.conf.detach().cpu().numpy()
-        track_ids = result.boxes.id.detach().cpu().numpy().astype(int).tolist() if result.boxes.id is not None else [None] * len(xyxy)
+        track_ids: list[int | None] = [None] * len(xyxy)
         boxes: list[list[float]] = []
         scores: list[float] = []
         ids: list[int | None] = []
@@ -290,12 +288,32 @@ class YoloFaceDetector:
 
 
 class HaarFaceDetector:
-    def __init__(self, conf: float) -> None:
+    def __init__(
+        self,
+        conf: float,
+        min_face_px: float = 64.0,
+        min_face_ratio: float = 0.045,
+        max_face_ratio: float = 0.55,
+        min_neighbors: int = 8,
+        require_eyes: bool = True,
+        ignore_top_ratio: float = 0.075,
+        ignore_left_ratio: float = 0.035,
+        ignore_pip: bool = True,
+    ) -> None:
         cascade_path = self._resolve_cascade_path()
         self.cascade = cv2.CascadeClassifier(str(cascade_path))
         if self.cascade.empty():
             raise RuntimeError(f"Cannot load Haar cascade: {cascade_path}")
         self.conf = float(conf)
+        self.min_face_px = float(max(min_face_px, 1.0))
+        self.min_face_ratio = float(np.clip(min_face_ratio, 0.0, 0.25))
+        self.max_face_ratio = float(np.clip(max_face_ratio, 0.10, 1.0))
+        self.min_neighbors = int(max(min_neighbors, 1))
+        self.require_eyes = bool(require_eyes)
+        self.ignore_top_ratio = float(np.clip(ignore_top_ratio, 0.0, 0.30))
+        self.ignore_left_ratio = float(np.clip(ignore_left_ratio, 0.0, 0.30))
+        self.ignore_pip = bool(ignore_pip)
+        self.eye_cascade = self._load_eye_cascade()
 
     @staticmethod
     def _resolve_cascade_path() -> Path:
@@ -315,12 +333,102 @@ class HaarFaceDetector:
         searched = ", ".join(str(path) for path in candidates)
         raise RuntimeError(f"Cannot find Haar cascade. Searched: {searched}")
 
+    @staticmethod
+    def _load_eye_cascade() -> cv2.CascadeClassifier | None:
+        candidates: list[Path] = []
+        cv2_data = getattr(cv2, "data", None)
+        cv2_haarcascades = getattr(cv2_data, "haarcascades", "") if cv2_data else ""
+        if cv2_haarcascades:
+            base = Path(cv2_haarcascades)
+            candidates.extend([
+                base / "haarcascade_eye_tree_eyeglasses.xml",
+                base / "haarcascade_eye.xml",
+            ])
+        candidates.extend([
+            Path("/usr/share/opencv4/haarcascades/haarcascade_eye_tree_eyeglasses.xml"),
+            Path("/usr/share/opencv4/haarcascades/haarcascade_eye.xml"),
+            Path("/usr/share/opencv/haarcascades/haarcascade_eye_tree_eyeglasses.xml"),
+            Path("/usr/share/opencv/haarcascades/haarcascade_eye.xml"),
+        ])
+        for candidate in candidates:
+            if candidate.exists():
+                cascade = cv2.CascadeClassifier(str(candidate))
+                if not cascade.empty():
+                    return cascade
+        return None
+
+    def _has_eye_support(self, gray: np.ndarray, x: int, y: int, w: int, h: int) -> bool:
+        if not self.require_eyes or self.eye_cascade is None:
+            return True
+        upper = gray[y:y + max(1, int(h * 0.64)), x:x + w]
+        if upper.shape[0] < 20 or upper.shape[1] < 20:
+            return False
+        min_eye = max(8, int(min(w, h) * 0.12))
+        eyes = self.eye_cascade.detectMultiScale(
+            upper,
+            scaleFactor=1.08,
+            minNeighbors=4,
+            minSize=(min_eye, min_eye),
+        )
+        return len(eyes) >= 1
+
+    def _accept_geometry(self, frame_w: int, frame_h: int, x: int, y: int, w: int, h: int) -> bool:
+        min_dim = float(min(frame_w, frame_h))
+        min_size = max(self.min_face_px, min_dim * self.min_face_ratio)
+        max_size = max(min_size + 1.0, min_dim * self.max_face_ratio)
+        if w < min_size or h < min_size or w > max_size or h > max_size:
+            return False
+        aspect = float(w) / max(float(h), 1.0)
+        if aspect < 0.70 or aspect > 1.38:
+            return False
+        cx = x + w * 0.5
+        cy = y + h * 0.5
+        if cy < frame_h * self.ignore_top_ratio:
+            return False
+        if cx < frame_w * self.ignore_left_ratio and cy < frame_h * 0.24:
+            return False
+        if self.ignore_pip and x > frame_w * 0.70 and y > frame_h * 0.68:
+            return False
+        return True
+
     def detect(self, frame: np.ndarray) -> tuple[list[list[float]], list[float], list[int | None]]:
+        frame_h, frame_w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
-        faces = self.cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=4, minSize=(28, 28))
-        boxes = [[float(x), float(y), float(x + w), float(y + h)] for x, y, w, h in faces]
-        return boxes, [max(self.conf, 0.7)] * len(boxes), [None] * len(boxes)
+        min_dim = float(min(frame_w, frame_h))
+        min_size = int(max(self.min_face_px, min_dim * self.min_face_ratio))
+        max_size = int(max(min_size + 1, min_dim * self.max_face_ratio))
+        try:
+            faces, _reject, weights = self.cascade.detectMultiScale3(
+                gray,
+                scaleFactor=1.08,
+                minNeighbors=self.min_neighbors,
+                minSize=(min_size, min_size),
+                maxSize=(max_size, max_size),
+                outputRejectLevels=True,
+            )
+        except Exception:
+            faces = self.cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.08,
+                minNeighbors=self.min_neighbors,
+                minSize=(min_size, min_size),
+                maxSize=(max_size, max_size),
+            )
+            weights = np.ones((len(faces),), dtype=np.float32)
+
+        boxes: list[list[float]] = []
+        scores: list[float] = []
+        for item, weight in zip(faces, weights):
+            x, y, w, h = [int(v) for v in item]
+            if not self._accept_geometry(frame_w, frame_h, x, y, w, h):
+                continue
+            if not self._has_eye_support(gray, x, y, w, h):
+                continue
+            boxes.append([float(x), float(y), float(x + w), float(y + h)])
+            score = float(np.clip(0.72 + 0.025 * float(weight), max(self.conf, 0.70), 0.99))
+            scores.append(score)
+        return boxes, scores, [None] * len(boxes)
 
 
 def choose_target(
@@ -729,7 +837,7 @@ def run(args: argparse.Namespace) -> None:
                 "locked": True,
                 "message": message,
                 "detector": detector_name,
-                "tracker": "bytetrack+lk" if detector_name == "yolo_face" else f"{detector_name}+lk",
+                "tracker": "yolo_predict+lk" if detector_name == "yolo_face" else f"{detector_name}+lk",
                 "flow_quality": round(float(flow_quality), 3),
                 "detector_age_ms": round(detector_age * 1000.0),
                 "prediction_age_ms": round(detector_age * 1000.0) if predicting else 0,

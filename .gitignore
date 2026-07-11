@@ -3,3 +3,10 @@ logs/
 __pycache__/
 node_modules/
 .vscode/
+recordings/
+wheelhouse*/
+.pids_*
+*.bundle
+.env
+.coverage
+*.tmp

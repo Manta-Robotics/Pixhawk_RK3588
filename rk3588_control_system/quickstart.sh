@@ -1,55 +1,29 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-################################################################################
-# RK3588 Pixhawk Control System - Quick Start
-# One-command installation and launch
-################################################################################
+set -Eeuo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║     RK3588 Pixhawk Control System - Quick Start            ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-
-# Check if already initialized
-if [ ! -d "node_modules" ]; then
-    echo ""
-    echo "🔧 First run detected. Installing dependencies..."
-    echo "   This may take several minutes..."
-    echo ""
-    
-    bash scripts/install.sh
-    
-    if [ $? -ne 0 ]; then
-        echo ""
-        echo "❌ Installation failed. Please check the errors above."
-        exit 1
-    fi
+if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    SUDO=()
+elif command -v sudo >/dev/null 2>&1; then
+    SUDO=(sudo)
+else
+    echo "[quickstart] root or sudo is required" >&2
+    exit 1
 fi
 
-echo ""
-echo "📝 Checking configuration..."
+echo "[quickstart] validating repository"
+npm run check
+npm test
 
-# Check if serial port is configured
-SERIAL_PORT=$(grep -o '"serial_port"[^,]*' config/system.config.json | grep -o '"/dev/[^"]*"' | tr -d '"')
+echo "[quickstart] installing runtime dependencies"
+"${SUDO[@]}" bash scripts/install.sh
 
-if [ -z "$SERIAL_PORT" ] || [ "$SERIAL_PORT" = "/dev/ttyUSB0" ]; then
-    echo ""
-    echo "⚠️  Serial port not configured or using default"
-    echo ""
-    echo "Available serial ports:"
-    ls -la /dev/tty* 2>/dev/null | grep -E "(USB|ACM)" || echo "No USB serial devices found"
-    echo ""
-    echo "📝 Please edit config/system.config.json and set the correct serial_port"
-    echo ""
-    read -p "Continue anyway? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
+echo "[quickstart] installing systemd services"
+"${SUDO[@]}" env MANTA_RUN_USER=root bash scripts/install_boot_services.sh
 
-echo ""
-echo "🚀 Starting system..."
-bash start.sh
+echo "[quickstart] installation complete"
+echo "[quickstart] review overlay changes before manually rebooting the board"
+echo "[quickstart] after reboot, open http://10.42.0.1:3000"
