@@ -182,7 +182,7 @@ body[data-theme="light"] select{color-scheme:light}
 .module-offline[hidden]{display:none}
 .gimbal-fault-overlay{position:absolute;inset:0;background:rgba(10,14,20,.9);backdrop-filter:blur(12px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;z-index:10}
 .gimbal-fault-overlay strong{font-size:15px;color:var(--red)}.gimbal-fault-overlay span{font-size:12px;color:var(--t2);text-align:center}
-.gimbal-fault-overlay button{margin-top:4px;font-size:12px;color:var(--ice);background:var(--ice-dim);border:none;border-radius:8px;padding:6px 14px;cursor:pointer}
+.gimbal-fault-overlay button{margin-top:4px;font-size:12px;color:var(--ice);background:var(--ice-dim);border:none;border-radius:8px;padding:6px 14px;cursor:pointer}.fault-actions{display:flex;gap:8px}.gimbal-fault-overlay .repair-btn{color:#06130d;background:var(--green)}
 .video-toolbar{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:linear-gradient(transparent,rgba(0,0,0,.6));pointer-events:auto}
 .gimbal-modes{display:flex;gap:2px;background:rgba(0,0,0,.4);border-radius:8px;padding:2px}
 .gimbal-mode-btn{font-size:11px;font-weight:500;color:var(--t3);background:none;border:none;border-radius:8px;padding:4px 10px;cursor:pointer;transition:all var(--fast)}
@@ -459,7 +459,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
             <div class="gimbal-fault-overlay" id="gimbalFault" hidden>
               <strong>云台保护已触发</strong>
               <span id="gimbalFaultMessage">检测到云台电机异常，所有云台功能已停止</span>
-              <button type="button" id="openReport">查看诊断报告</button>
+              <div class="fault-actions"><button type="button" id="repairGimbal" class="repair-btn">云台修复</button><button type="button" id="openReport">查看诊断报告</button></div>
             </div>
             <div class="video-toolbar">
               <div class="gimbal-modes">
@@ -733,13 +733,13 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
       <div><dt>处置</dt><dd id="diagnosticAction">停止跟踪、停止云台电机、保留主机移动控制</dd></div>
     </div>
     <p style="font-size:12px;color:var(--t3);line-height:1.5;margin-bottom:16px">当前结论是"疑似卡死"，不是硬件确定性判定。建议断电检查机械阻力、供电和串口错误，然后重新执行云台自检。</p>
-    <button class="modal-action" type="button" data-close-modal="diagnosticModal">我知道了</button>
+    <div class="cal-actions"><button class="secondary" type="button" data-close-modal="diagnosticModal">关闭</button><button class="primary" id="repairGimbalFromReport" type="button">云台修复</button></div>
   </div>
 </div>
 <!-- Toast -->
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/socket.io/socket.io.js"></script>
-<script src="js/manta-app-transport.js?v=20260720v7"></script>
+<script src="js/manta-app-transport.js?v=20260720v8"></script>
 <script>
 document.addEventListener("click",function(event){
   if(!event.target||!event.target.closest||!event.target.closest("#imuCalibrate"))return;
@@ -1705,6 +1705,15 @@ function selectMediaCard(card,autoplay){
   if(autoplay)playMediaPreview();
 }
 
+function recoverGimbal(){
+  var buttons=[$("#repairGimbal"),$("#repairGimbalFromReport")].filter(Boolean);buttons.forEach(function(button){button.disabled=true;button.textContent=localize("正在检查…","Checking…")});
+  var activeTransport=ensureTransport(),request=activeTransport&&activeTransport.recoverGimbal?activeTransport.recoverGimbal():Promise.reject(new Error(localize("通信模块不支持恢复","Recovery is unavailable")));
+  request.then(function(payload){
+    if(gimbalHealthMonitor)gimbalHealthMonitor.reset();state.gimbalFault=false;state.gimbalOnline=Boolean(payload&&payload.connected);state.trackingActive=false;state.gimbalMode="click";state.trackTarget=null;state.trackStatus={locked:false,status:"idle",message:"idle"};
+    $("#gimbalFault").hidden=true;setModal("diagnosticModal",false);renderHardwareStatus();renderTrackingMode();addLog({level:"INFO",source:"GIMBAL",message:"云台保护已解除，等待新的控制指令",messageEn:"Gimbal protection cleared; waiting for a new command",category:"hardware"});showToast("云台已恢复，请重新选择控制模式","Gimbal recovered. Select a control mode again");
+  }).catch(function(error){showToast(error.message||"云台反馈仍未恢复","Gimbal feedback has not recovered")}).finally(function(){buttons.forEach(function(button){button.disabled=false;button.textContent=localize("云台修复","Recover gimbal")})});
+}
+
 function mediaTime(v){v=Number.isFinite(Number(v))?Math.max(0,Number(v)):0;return String(Math.floor(v/60)).padStart(2,"0")+":"+String(Math.floor(v%60)).padStart(2,"0")}
 
 function setMediaScrubberValue(value,duration){
@@ -1972,6 +1981,8 @@ if(action==="record"){setRecording(!state.recording)}
 else{var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(action).catch(function(error){showToast(error.message||"云台指令失败","Gimbal command failed")});showToast(action==="home"?localize("云台正在回中","Gimbal is centering"):localize("云台已停止","Gimbal stopped"))}
 })});
   $("#openReport").addEventListener("click",function(){setModal("diagnosticModal",true)});
+  $("#repairGimbal").addEventListener("click",recoverGimbal);
+  $("#repairGimbalFromReport").addEventListener("click",recoverGimbal);
 
 
   $("#gimbalOsd").addEventListener("click",toggleGimbalOsd);

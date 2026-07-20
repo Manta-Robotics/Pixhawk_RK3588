@@ -186,6 +186,11 @@
         return Promise.resolve({ success: true, mode: enabled ? 2 : 0 });
     };
 
+    MockTransport.prototype.recoverGimbal = function () {
+        this.emit("gimbalState", { connected: true, trackingActive: false, trackMode: "face", trackStatus: { locked: false, status: "idle", message: "idle" } });
+        return Promise.resolve({ connected: true });
+    };
+
     MockTransport.prototype.startImuCalibration = function () {
         this.log("COMMAND", "PIXHAWK", "开始 IMU 六面校准", "command", "Started six-position IMU calibration");
         return Promise.resolve({ success: true, status: "STARTED" });
@@ -327,6 +332,19 @@
             this.log("WARNING", "GIMBAL", "云台串口连接失败：" + error.message, "hardware", "Gimbal serial connection failed: " + error.message);
             return {};
         }.bind(this));
+    };
+
+    LiveTransport.prototype.recoverGimbal = function () {
+        return postJson("/api/gimbal/stop", {}).catch(function () {}).then(function () {
+            return postJson("/api/gimbal/connect", {});
+        }).then(function () {
+            return new Promise(function (resolve) { setTimeout(resolve, 220); });
+        }).then(function () {
+            return this.refreshGimbalState();
+        }.bind(this)).then(function (state) {
+            if (!state || !state.connected || !state.feedback || state.feedback.checksumValid === false) throw new Error("云台尚未返回有效状态，请检查供电与串口");
+            return state;
+        });
     };
 
     LiveTransport.prototype.applyTelemetry = function (telemetry) {
@@ -485,7 +503,9 @@
         this.lastSampleAt = 0;
         this.watchdogTimer = setInterval(function () {
             if (!this.armed || this.latched || Date.now() - this.lastSampleAt <= this.feedbackTimeoutMs) return;
-            this.fault("GMB-FEEDBACK-TIMEOUT", "云台反馈超时，已锁定云台控制", { lastSampleAt: this.lastSampleAt, timeoutMs: this.feedbackTimeoutMs });
+            this.armed = false;
+            this.history = [];
+            this.consecutiveStalls = 0;
         }.bind(this), 500);
     }
 
@@ -513,7 +533,6 @@
         if (sample.error) return this.fault("GMB-DEVICE-ERROR", sample.error, state);
         if (!sample.connected) return this.fault("GMB-LINK-LOST", "云台通信已断开", state);
         if (!Number.isFinite(sample.yaw) || !Number.isFinite(sample.pitch)) return null;
-        this.armed = true;
         this.lastSampleAt = now;
         this.history.push(sample);
         this.history = this.history.filter(function (item) { return now - item.at <= this.windowMs * 1.4; }.bind(this));
@@ -527,7 +546,8 @@
             Number(target.desiredRateY || target.rateY || 0)
         );
         var targetFresh = targetAt > 0 && now - targetAt <= this.windowMs * 1.5;
-        var expectsMotion = targetFresh && commandRate >= this.minCommandRate;
+        var expectsMotion = Boolean(state.trackingActive) && targetFresh && commandRate >= this.minCommandRate && !target.gated && !target.limited;
+        this.armed = expectsMotion;
         if (expectsMotion && delta < this.angleThreshold && sample.gyro < this.maxStillGyro) this.consecutiveStalls += 1;
         else this.consecutiveStalls = 0;
         this.history = [sample];
