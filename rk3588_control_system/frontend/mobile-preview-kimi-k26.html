@@ -739,7 +739,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <!-- Toast -->
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/socket.io/socket.io.js"></script>
-<script src="js/manta-app-transport.js?v=20260720v5"></script>
+<script src="js/manta-app-transport.js?v=20260720v6"></script>
 <script>
 document.addEventListener("click",function(event){
   if(!event.target||!event.target.closest||!event.target.closest("#imuCalibrate"))return;
@@ -1108,8 +1108,9 @@ function drawGimbalOverlay(){
   ctx.strokeStyle="rgba(186,225,242,.72)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(map.width/2-9,map.height/2);ctx.lineTo(map.width/2+9,map.height/2);ctx.moveTo(map.width/2,map.height/2-9);ctx.lineTo(map.width/2,map.height/2+9);ctx.stroke();
   if(state.gimbalMode==="click"&&state.clickMarker){var mx=state.clickMarker.x*map.width,my=state.clickMarker.y*map.height;ctx.strokeStyle="#88e8ff";ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx,my,14,0,Math.PI*2);ctx.moveTo(mx-20,my);ctx.lineTo(mx+20,my);ctx.moveTo(mx,my-20);ctx.lineTo(mx,my+20);ctx.stroke()}
   if(!state.trackingActive||state.gimbalMode==="click")return;var target=state.trackTarget,status=state.trackStatus||{};
-  if(target&&status.locked!==false){var fw=Number(target.frame_w||target.frameWidth)||1920,fh=Number(target.frame_h||target.frameHeight)||1080,x=Number(target.x),y=Number(target.y),w=Number(target.w),h=Number(target.h);
-    if([x,y,w,h].every(Number.isFinite)){var bw=w*map.scale,bh=h*map.scale,sx=map.offsetX+(fw-x)*map.scale-bw/2,sy=map.offsetY+y*map.scale-bh/2,c=Math.min(18,bw*.22,bh*.22);ctx.strokeStyle="#55e6a5";ctx.lineWidth=2;ctx.beginPath();[[sx,sy,1,1],[sx+bw,sy,-1,1],[sx,sy+bh,1,-1],[sx+bw,sy+bh,-1,-1]].forEach(function(p){ctx.moveTo(p[0]+p[2]*c,p[1]);ctx.lineTo(p[0],p[1]);ctx.lineTo(p[0],p[1]+p[3]*c)});ctx.stroke();ctx.font="600 10px system-ui";ctx.fillStyle="#55e6a5";ctx.fillText(state.gimbalMode==="face"?"FACE":"SWIMMER",sx,Math.max(12,sy-7));return}}
+  if(target&&status.locked!==false){var fw=Number(target.frame_w||target.frameWidth)||1920,fh=Number(target.frame_h||target.frameHeight)||1080,bbox=target.bbox||target.rect||null;
+    var x=Number(target.x),y=Number(target.y),w=Number(target.w),h=Number(target.h);if(Array.isArray(bbox)&&bbox.length>=4){x=Number(bbox[0])+Number(bbox[2])/2;y=Number(bbox[1])+Number(bbox[3])/2;w=Number(bbox[2]);h=Number(bbox[3])}
+    if([x,y,w,h].every(Number.isFinite)){var bw=Math.max(36,w*map.scale),bh=Math.max(36,h*map.scale),sx=map.offsetX+x*map.scale-bw/2,sy=map.offsetY+y*map.scale-bh/2;sx=Math.max(3,Math.min(map.width-bw-3,sx));sy=Math.max(3,Math.min(map.height-bh-3,sy));var c=Math.min(18,bw*.22,bh*.22);ctx.strokeStyle="#55e6a5";ctx.lineWidth=2;ctx.beginPath();[[sx,sy,1,1],[sx+bw,sy,-1,1],[sx,sy+bh,1,-1],[sx+bw,sy+bh,-1,-1]].forEach(function(p){ctx.moveTo(p[0]+p[2]*c,p[1]);ctx.lineTo(p[0],p[1]);ctx.lineTo(p[0],p[1]+p[3]*c)});ctx.stroke();ctx.font="600 10px system-ui";ctx.fillStyle="#55e6a5";var confidence=Number(target.conf),targetLabel=state.gimbalMode==="face"?"FACE":"SWIMMER";if(Number.isFinite(confidence))targetLabel+=" "+Math.round(confidence*100)+"%";ctx.fillText(targetLabel,sx,Math.max(12,sy-7));return}}
   ctx.font="600 10px system-ui";var label=state.language==="en"?"SEARCHING FOR TARGET":"正在搜索目标",tw=ctx.measureText(label).width+20;ctx.fillStyle="rgba(6,16,23,.72)";ctx.fillRect((map.width-tw)/2,14,tw,26);ctx.fillStyle="#ffbd66";ctx.fillText(label,(map.width-tw)/2+10,31);
 }
 
@@ -1117,7 +1118,7 @@ function handleGimbalVideoClick(event){
   if(state.gimbalMode!=="click"||!state.controlLink||!state.gimbalOnline||state.gimbalFault||event.target.closest(".video-toolbar"))return;
   var map=gimbalVideoMapping(),rect=$(".video-feed").getBoundingClientRect(),px=event.clientX-rect.left,py=event.clientY-rect.top,videoX=(px-map.offsetX)/map.scale,videoY=(py-map.offsetY)/map.scale;
   if(videoX<0||videoX>map.sourceWidth||videoY<0||videoY>map.sourceHeight)return;state.clickMarker={x:px/map.width,y:py/map.height};drawGimbalOverlay();
-  var dx=Math.round((0.5-videoX/map.sourceWidth)*1920),dy=Math.round((videoY/map.sourceHeight-0.5)*1080),activeTransport=ensureTransport();
+  var dx=Math.round((videoX/map.sourceWidth-0.5)*1920),dy=Math.round((0.5-videoY/map.sourceHeight)*1080),activeTransport=ensureTransport();
   if(activeTransport&&activeTransport.gimbalClick)activeTransport.gimbalClick(dx,dy).then(function(){showToast("云台正在转向所选目标","Gimbal is moving to the selected target")}).catch(function(error){showToast(error.message||"点击跟随指令失败","Click-to-follow command failed")});
 }
 
