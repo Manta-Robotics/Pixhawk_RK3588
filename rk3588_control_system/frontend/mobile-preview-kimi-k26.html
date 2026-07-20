@@ -739,7 +739,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <!-- Toast -->
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/socket.io/socket.io.js"></script>
-<script src="js/manta-app-transport.js?v=20260720v6"></script>
+<script src="js/manta-app-transport.js?v=20260720v7"></script>
 <script>
 document.addEventListener("click",function(event){
   if(!event.target||!event.target.closest||!event.target.closest("#imuCalibrate"))return;
@@ -757,7 +757,7 @@ var isLocalPreview=location.protocol==="file:"||/^(4173|4175)$/.test(location.po
 var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
 var logEntries=[];
 var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false,mediaFilter="all";
-var transport=null,gimbalHealthMonitor=null,liveRecordings=[];
+var transport=null,gimbalHealthMonitor=null,liveRecordings=[],gimbalModeBusy=false;
 
 function ensureTransport(){
   if(transport&&transport.mode===state.transportMode)return transport;
@@ -1950,8 +1950,12 @@ function installEvents(){
   });
   $$("[data-gimbal-mode]").forEach(function(b){b.addEventListener("click",function(){
 if(!state.controlLink||state.gimbalFault){showToast("云台当前不可控制","Gimbal control is currently unavailable");return}
+    if(gimbalModeBusy)return;
+    if(state.trackingActive&&state.gimbalMode===b.dataset.gimbalMode){showToast("当前跟踪模式已在运行","This tracking mode is already active");return}
+    var previousMode=state.gimbalMode,previousTracking=state.trackingActive;
     state.gimbalMode=b.dataset.gimbalMode;if(state.gimbalMode==="click"){state.trackingActive=false;state.trackTarget=null}else{state.trackMode=state.gimbalMode;state.trackingActive=true;state.trackStatus={locked:false,status:"starting",message:"starting"}}
-    var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(b.dataset.gimbalMode).catch(function(error){showToast(error.message||"云台模式指令失败","Gimbal mode command failed")});
+    gimbalModeBusy=true;$$("[data-gimbal-mode]").forEach(function(button){button.disabled=true});
+    var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(b.dataset.gimbalMode).catch(function(error){state.gimbalMode=previousMode;state.trackingActive=previousTracking;showToast(error.message||"云台模式指令失败","Gimbal mode command failed")}).finally(function(){gimbalModeBusy=false;$$("[data-gimbal-mode]").forEach(function(button){button.disabled=!state.gimbalOnline});renderTrackingMode()});
     renderTrackingMode();
     showToast(b.dataset.gimbalMode==="click"?localize("点击居中","Click center"):b.dataset.gimbalMode==="face"?localize("人脸跟踪","Face track"):localize("泳者跟踪","Swimmer track"));
   })});

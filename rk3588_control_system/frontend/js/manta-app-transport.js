@@ -214,6 +214,9 @@
         this.driveTimer = null;
         this.lastLatency = 0;
         this.pollFailures = 0;
+        this.gimbalTrackingActive = false;
+        this.gimbalTrackMode = null;
+        this.gimbalModePromise = Promise.resolve();
     }
 
     LiveTransport.prototype = Object.create(TransportBase.prototype);
@@ -256,7 +259,7 @@
         this.socket.on("telemetry_update", function (telemetry) { this.applyTelemetry(telemetry); }.bind(this));
         this.socket.on("system_state", function (state) { if (state && state.telemetry) this.applyTelemetry(state.telemetry); }.bind(this));
         this.socket.on("rover_drive_ack", function (payload) { this.emit("driveAck", payload || {}); }.bind(this));
-        this.socket.on("gimbal_state", function (state) { this.emit("gimbalState", state || {}); }.bind(this));
+        this.socket.on("gimbal_state", function (state) { this.applyGimbalTrackingState(state); this.emit("gimbalState", state || {}); }.bind(this));
         this.socket.on("gimbal_target", function (target) { this.emit("gimbalTarget", target || {}); }.bind(this));
         this.socket.on("gimbal_track_status", function (status) { this.emit("gimbalTrackStatus", status || {}); }.bind(this));
         this.socket.on("aircraft_armed", function () { this.emit("armed", { armed: true }); }.bind(this));
@@ -297,6 +300,7 @@
     LiveTransport.prototype.refreshGimbalState = function () {
         return fetch("/api/gimbal/state", { cache: "no-store" }).then(function (response) { if (!response.ok) throw new Error("HTTP " + response.status); return response.json(); }).then(function (payload) {
             var state = payload && payload.state ? payload.state : {};
+            this.applyGimbalTrackingState(state);
             this.emit("gimbalState", state);
             this.emit("hardwareStatus", { gimbalOnline: Boolean(state.connected) });
             return state;
@@ -304,6 +308,13 @@
             this.emit("hardwareStatus", { gimbalOnline: false });
             return {};
         }.bind(this));
+    };
+
+    LiveTransport.prototype.applyGimbalTrackingState = function (state) {
+        state = state || {};
+        this.gimbalTrackingActive = Boolean(state.trackingActive);
+        if (state.trackMode === "face" || state.trackMode === "swimmer") this.gimbalTrackMode = state.trackMode;
+        if (!this.gimbalTrackingActive) this.gimbalTrackMode = null;
     };
 
     LiveTransport.prototype.openGimbalLink = function () {
@@ -378,14 +389,38 @@
     };
 
     LiveTransport.prototype.gimbal = function (action, payload) {
+        if (action === "face" || action === "swimmer" || action === "click") {
+            var requestedMode = action;
+            var switchMode = function () {
+                if (requestedMode === "click") {
+                    return postJson("/api/gimbal/track/stop", {}).then(function (result) {
+                        this.applyGimbalTrackingState(result && result.state);
+                        if (result && result.state) this.emit("gimbalState", result.state);
+                        return result;
+                    }.bind(this));
+                }
+                if (this.gimbalTrackingActive && this.gimbalTrackMode === requestedMode) {
+                    return Promise.resolve({ success: true, active: true, alreadyRunning: true, mode: requestedMode });
+                }
+                var startRequestedMode = function () {
+                    return postJson("/api/gimbal/track/start", { mode: requestedMode });
+                };
+                var request = this.gimbalTrackingActive ? postJson("/api/gimbal/track/stop", {}).then(startRequestedMode) : startRequestedMode();
+                return request.then(function (result) {
+                    this.applyGimbalTrackingState(result && result.state);
+                    if (result && result.state) this.emit("gimbalState", result.state);
+                    return result;
+                }.bind(this));
+            }.bind(this);
+            this.gimbalModePromise = this.gimbalModePromise.catch(function () {}).then(switchMode);
+            return this.gimbalModePromise;
+        }
         var endpoint = null;
         var body = payload || {};
         if (action === "home") endpoint = "/api/gimbal/home";
         if (action === "stop") endpoint = "/api/gimbal/stop";
         if (action === "recordStart") endpoint = "/api/gimbal/recording/start";
         if (action === "recordStop") endpoint = "/api/gimbal/recording/stop";
-        if (action === "face" || action === "swimmer") { endpoint = "/api/gimbal/track/start"; body = { mode: action }; }
-        if (action === "click") endpoint = "/api/gimbal/track/stop";
         if (!endpoint) return Promise.reject(new Error("不支持的云台指令"));
         return postJson(endpoint, body).then(function (result) {
             this.log("COMMAND", "GIMBAL", "云台指令：" + action, "command");
