@@ -15,17 +15,16 @@ DASHBOARD_PORT = int(CONFIG.get('web_port', 3000))
 TARGET_URL = f'http://{PORTAL_IP}:{DASHBOARD_PORT}'
 LISTEN_HOST = '0.0.0.0'
 
-CAPTIVE_PROBE_PATHS = {
-    '/generate_204',
-    '/gen_204',
-    '/hotspot-detect.html',
-    '/connecttest.txt',
-    '/ncsi.txt',
-    '/library/test/success.html',
-    '/success.txt',
-    '/mobile/status.php',
-    '/kindle-wifi/wifiredirect.html',
+CONNECTIVITY_RESPONSES = {
+    '/hotspot-detect.html': ('text/html; charset=utf-8', '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>'),
+    '/library/test/success.html': ('text/html; charset=utf-8', '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>'),
+    '/connecttest.txt': ('text/plain; charset=utf-8', 'Microsoft Connect Test'),
+    '/ncsi.txt': ('text/plain; charset=utf-8', 'Microsoft NCSI'),
+    '/success.txt': ('text/plain; charset=utf-8', 'success'),
+    '/mobile/status.php': ('text/plain; charset=utf-8', 'online'),
+    '/kindle-wifi/wifiredirect.html': ('text/plain; charset=utf-8', 'OK'),
 }
+NO_CONTENT_PATHS = {'/generate_204', '/gen_204'}
 
 PORTAL_HTML = f'''<!DOCTYPE html>
 <html lang="en">
@@ -62,12 +61,20 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
         print('[portal] ' + fmt % args)
 
     def _send_html(self, body, status=200):
-        encoded = body.encode('utf-8')
+        self._send_body(body.encode('utf-8'), 'text/html; charset=utf-8', status)
+
+    def _send_body(self, encoded, content_type, status=200):
         self.send_response(status)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(encoded)))
+        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _send_no_content(self):
+        self.send_response(204)
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
 
     def _redirect(self, location):
         self.send_response(302)
@@ -87,8 +94,13 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
 
-        if path in CAPTIVE_PROBE_PATHS:
-            self._redirect('/portal')
+        if path in NO_CONTENT_PATHS:
+            self._send_no_content()
+            return
+
+        if path in CONNECTIVITY_RESPONSES:
+            content_type, body = CONNECTIVITY_RESPONSES[path]
+            self._send_body(body.encode('utf-8'), content_type)
             return
 
         if path in ('/', '/index.html', '/portal'):
@@ -96,6 +108,44 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             return
 
         self._redirect(TARGET_URL)
+
+    def do_HEAD(self):
+        path = urlsplit(self.path).path
+
+        if path == '/healthz':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.end_headers()
+            return
+
+        if path in NO_CONTENT_PATHS:
+            self.send_response(204)
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            return
+
+        if path in CONNECTIVITY_RESPONSES:
+            content_type, body = CONNECTIVITY_RESPONSES[path]
+            encoded = body.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(encoded)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            return
+
+        if path in ('/', '/index.html', '/portal'):
+            encoded = PORTAL_HTML.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(encoded)))
+            self.end_headers()
+            return
+
+        self.send_response(302)
+        self.send_header('Location', TARGET_URL)
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
 
 
 if __name__ == '__main__':

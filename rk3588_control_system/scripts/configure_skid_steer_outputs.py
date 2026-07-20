@@ -12,8 +12,13 @@ from pymavlink import mavutil
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_DIR / 'config' / 'system.config.json'
 EXPECTED_PARAMS = {
+    'PILOT_STEER_TYPE': 0,
+    'RC1_REVERSED': 0,
+    'RC3_REVERSED': 0,
     'SERVO1_FUNCTION': 73,
     'SERVO3_FUNCTION': 74,
+    'SERVO1_REVERSED': 1,
+    'SERVO3_REVERSED': 1,
 }
 INFO_PARAMS = [
     'RCMAP_ROLL',
@@ -78,7 +83,7 @@ def set_param(master, name, value, timeout=5.0):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description='Check or apply Pixhawk skid-steer output mapping.')
-    parser.add_argument('--apply', action='store_true', help='Write SERVO1_FUNCTION=73 and SERVO3_FUNCTION=74')
+    parser.add_argument('--apply', action='store_true', help='Write Pixhawk skid-steer mapping and SERVO-only reversal')
     args = parser.parse_args()
 
     config = load_config()

@@ -17,22 +17,29 @@ import net from 'net';
 import os from 'os';
 import http from 'http';
 import https from 'https';
+import { validateSystemConfig } from '../scripts/validate_config.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
-function readJsonFile(relativePath, fallback) {
+function readJsonFile(relativePath, fallback, options = {}) {
   const filePath = path.join(PROJECT_ROOT, relativePath);
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
-    console.error(`[Config] Failed to read ${relativePath}: ${error.message}`);
+    const message = `[Config] Failed to read ${relativePath}: ${error.message}`;
+    if (options.required) throw new Error(message);
+    console.error(message);
     return fallback;
   }
 }
 
-const config = readJsonFile('config/system.config.json', {});
+const config = readJsonFile('config/system.config.json', {}, { required: true });
+const configErrors = validateSystemConfig(config);
+if (configErrors.length) {
+  throw new Error(`[Config] Invalid system.config.json:\n- ${configErrors.join('\n- ')}`);
+}
 const motorConfig = readJsonFile('config/motor_config.json', { motors: [] });
 
 const LOGS_DIR = path.resolve(PROJECT_ROOT, config.logs_dir || './logs');
@@ -112,6 +119,7 @@ if (!enabledChannels.has(ROVER_LEFT_CHANNEL) || !enabledChannels.has(ROVER_RIGHT
 }
 
 const app = express();
+app.disable('x-powered-by');
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -165,6 +173,11 @@ const GIMBAL_TRACK_HOLD_ENTER_X_PX = Math.max(2, Number(GIMBAL_AXIS.track_hold_e
 const GIMBAL_TRACK_HOLD_ENTER_Y_PX = Math.max(2, Number(GIMBAL_AXIS.track_hold_enter_y_px || GIMBAL_TRACK_HOLD_ENTER_PX));
 const GIMBAL_TRACK_HOLD_EXIT_X_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_X_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_x_px || GIMBAL_TRACK_HOLD_EXIT_PX));
 const GIMBAL_TRACK_HOLD_EXIT_Y_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_Y_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_y_px || GIMBAL_TRACK_HOLD_EXIT_PX));
+const GIMBAL_FACE_TRACK = gimbalConfig.face || {};
+const GIMBAL_FACE_TRACK_HOLD_ENTER_X_PX = Math.max(2, Number(GIMBAL_FACE_TRACK.track_hold_enter_x_px || GIMBAL_TRACK_HOLD_ENTER_X_PX));
+const GIMBAL_FACE_TRACK_HOLD_ENTER_Y_PX = Math.max(2, Number(GIMBAL_FACE_TRACK.track_hold_enter_y_px || GIMBAL_TRACK_HOLD_ENTER_Y_PX));
+const GIMBAL_FACE_TRACK_HOLD_EXIT_X_PX = Math.max(GIMBAL_FACE_TRACK_HOLD_ENTER_X_PX + 1, Number(GIMBAL_FACE_TRACK.track_hold_exit_x_px || GIMBAL_TRACK_HOLD_EXIT_X_PX));
+const GIMBAL_FACE_TRACK_HOLD_EXIT_Y_PX = Math.max(GIMBAL_FACE_TRACK_HOLD_ENTER_Y_PX + 1, Number(GIMBAL_FACE_TRACK.track_hold_exit_y_px || GIMBAL_TRACK_HOLD_EXIT_Y_PX));
 const GIMBAL_TRACK_HOLD_SPEED_PX_S = Math.max(1, Number(GIMBAL_AXIS.track_hold_speed_px_s || 55));
 const GIMBAL_TRACK_HOLD_ENTER_SPEED_PX_S = Math.max(1, Number(GIMBAL_AXIS.track_hold_enter_speed_px_s || GIMBAL_TRACK_HOLD_SPEED_PX_S));
 const GIMBAL_TRACK_HOLD_EXIT_SPEED_PX_S = Math.max(GIMBAL_TRACK_HOLD_ENTER_SPEED_PX_S + 1, Number(GIMBAL_AXIS.track_hold_exit_speed_px_s || GIMBAL_TRACK_HOLD_SPEED_PX_S * 1.25));
@@ -220,6 +233,8 @@ const GIMBAL_VIDEO_INPUT = GIMBAL_RTSP_INPUT || String(gimbalVideoConfig.input_u
 const GIMBAL_RECORD_INPUT = String(gimbalVideoConfig.record_input || gimbalVideoConfig.recording_input || GIMBAL_VIDEO_INPUT).trim();
 const GIMBAL_RECORD_STREAM_INDEX = clamp(Math.round(Number(gimbalVideoConfig.record_stream_index || 1)), 0, 3);
 const GIMBAL_RECORD_STREAM_QUALITY = clamp(Math.round(Number(gimbalVideoConfig.record_stream_quality || 0)), 0, 5);
+const GIMBAL_RECORD_CODEC = String(gimbalVideoConfig.record_codec || 'h264_rkmpp').trim() || 'h264_rkmpp';
+const GIMBAL_RECORD_BITRATE = String(gimbalVideoConfig.record_bitrate || '12M').trim();
 const gimbalFocusConfig = gimbalConfig.focus || {};
 let gimbalStream = null;
 let gimbalReadStream = null;
@@ -384,7 +399,7 @@ function buildAccessUrls(connectivity) {
       label: candidate.label,
       ip,
       dashboardUrl: `http://${ip}:${WEB_PORT}`,
-      cameraUrl: `http://${ip}:${SNAPSHOT_PORT}/stream.mjpg`
+      cameraUrl: `http://${ip}:${WEB_PORT}/api/camera/stream`
     });
   });
 
@@ -495,9 +510,36 @@ function buildDirectCameraUrl(req, pathname) {
   return `${protocol}://${hostname}:${SNAPSHOT_PORT}${pathname}`;
 }
 
+function readLocalCameraHealth() {
+  const url = `http://127.0.0.1:${SNAPSHOT_PORT}/healthz`;
+  try {
+    const result = spawnSync('curl', ['-sS', '--max-time', '0.6', url], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024
+    });
+    if (result.status !== 0) {
+      const message = String(result.stderr || result.stdout || '').trim() || `Camera health check failed with exit ${result.status}`;
+      return { ok: false, message };
+    }
+    const payload = JSON.parse(String(result.stdout || '{}'));
+    return {
+      ok: Boolean(payload.ok),
+      message: String(payload.lastError || payload.message || ''),
+      cachedDevice: String(payload.cachedDevice || ''),
+      cachedName: String(payload.cachedName || ''),
+      lastFrameAgeSeconds: typeof payload.lastFrameAgeSeconds === 'number' && Number.isFinite(payload.lastFrameAgeSeconds)
+        ? payload.lastFrameAgeSeconds
+        : null
+    };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+
 function readCameraState(connectivity, req = null) {
-  const directStreamUrl = buildDirectCameraUrl(req, '/stream.mjpg');
-  const directOpenUrl = buildDirectCameraUrl(req, '/stream.mjpg');
+  const isLocalCameraTransport = String(cameraConfig.transport || '').trim().toLowerCase() === 'local';
+  const directStreamUrl = isLocalCameraTransport ? '' : buildDirectCameraUrl(req, '/stream.mjpg');
+  const directOpenUrl = isLocalCameraTransport ? '' : buildDirectCameraUrl(req, '/stream.mjpg');
   const sourceUrl = String(directStreamUrl || cameraConfig.source_url || `http://${MANTA_HOST}:8080/stream`);
   const openUrl = String(directOpenUrl || cameraConfig.open_url || `http://${MANTA_HOST}:8080`);
   const localVideoDevices = readLocalVideoDevices();
@@ -505,6 +547,7 @@ function readCameraState(connectivity, req = null) {
   const overlay = String(cameraConfig.overlay || '');
   const sensor = String(cameraConfig.sensor || 'camera');
   const port = String(cameraConfig.port || '');
+  const localHealth = isLocalCameraTransport ? readLocalCameraHealth() : null;
   const isLocalProxySource = sourceUrl.startsWith('/');
   const usesDirectCameraUrl = Boolean(directStreamUrl);
   let hostname = '';
@@ -520,6 +563,8 @@ function readCameraState(connectivity, req = null) {
 
   if (cameraConfig.enabled === false) {
     reason = 'Camera is disabled in config.';
+  } else if (isLocalCameraTransport && localHealth && !localHealth.ok) {
+    reason = localHealth.message || 'Local camera stream is not producing JPEG frames.';
   } else if (isLocalProxySource) {
     reason = 'Using the local camera proxy stream.';
   } else if (usesDirectCameraUrl) {
@@ -550,10 +595,15 @@ function readCameraState(connectivity, req = null) {
     sourceUrl,
     openUrl,
     refreshMs: Number(cameraConfig.refresh_ms || 1500),
-    online: Boolean((connectivity && connectivity.wireless && connectivity.wireless.online) || (connectivity && connectivity.ethernet && connectivity.ethernet.online)),
+    online: cameraConfig.enabled !== false && (
+      isLocalCameraTransport
+        ? Boolean(localHealth && localHealth.ok)
+        : Boolean((connectivity && connectivity.wireless && connectivity.wireless.online) || (connectivity && connectivity.ethernet && connectivity.ethernet.online))
+    ),
     host: MANTA_HOST,
     hostState,
     localVideoDevices,
+    localHealth,
     reason
   };
 }
@@ -602,7 +652,13 @@ const systemState = {
 refreshPeripheralState();
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+app.use(bodyParser.json({ limit: '1mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
 
@@ -869,7 +925,9 @@ function rememberGimbalRx(data) {
     hex: chunk.toString('hex'),
     updatedAt: Date.now()
   };
-  addLog('GIMBAL_RX', gimbalLastRx.ascii || gimbalLastRx.hex);
+  if (process.env.MANTA_LOG_GIMBAL_RX === '1') {
+    addLog('GIMBAL_RX', gimbalLastRx.ascii || gimbalLastRx.hex);
+  }
   emitGimbalState();
 }
 
@@ -1077,11 +1135,16 @@ function computeGimbalTrackDesiredRate(now) {
   const predictionSeconds = leadMs / 1000;
   const predictedX = clamp(gimbalTrackTarget.x + gimbalTrackTarget.vx * predictionSeconds, -GIMBAL_MAX_PIXEL_X, GIMBAL_MAX_PIXEL_X);
   const predictedY = clamp(gimbalTrackTarget.y + gimbalTrackTarget.vy * predictionSeconds, -GIMBAL_MAX_PIXEL_Y, GIMBAL_MAX_PIXEL_Y);
+  const faceMode = gimbalState.trackMode === 'face';
+  const holdEnterX = faceMode ? GIMBAL_FACE_TRACK_HOLD_ENTER_X_PX : GIMBAL_TRACK_HOLD_ENTER_X_PX;
+  const holdEnterY = faceMode ? GIMBAL_FACE_TRACK_HOLD_ENTER_Y_PX : GIMBAL_TRACK_HOLD_ENTER_Y_PX;
+  const holdExitX = faceMode ? GIMBAL_FACE_TRACK_HOLD_EXIT_X_PX : GIMBAL_TRACK_HOLD_EXIT_X_PX;
+  const holdExitY = faceMode ? GIMBAL_FACE_TRACK_HOLD_EXIT_Y_PX : GIMBAL_TRACK_HOLD_EXIT_Y_PX;
   const error = Math.max(Math.abs(predictedX), Math.abs(predictedY));
-  const inHoldEnterZone = Math.abs(predictedX) <= GIMBAL_TRACK_HOLD_ENTER_X_PX
-    && Math.abs(predictedY) <= GIMBAL_TRACK_HOLD_ENTER_Y_PX;
-  const outsideHoldExitZone = Math.abs(predictedX) >= GIMBAL_TRACK_HOLD_EXIT_X_PX
-    || Math.abs(predictedY) >= GIMBAL_TRACK_HOLD_EXIT_Y_PX;
+  const inHoldEnterZone = Math.abs(predictedX) <= holdEnterX
+    && Math.abs(predictedY) <= holdEnterY;
+  const outsideHoldExitZone = Math.abs(predictedX) >= holdExitX
+    || Math.abs(predictedY) >= holdExitY;
 
   if (gimbalTrackHolding) {
     if (outsideHoldExitZone || targetSpeed >= GIMBAL_TRACK_HOLD_EXIT_SPEED_PX_S) {
@@ -1094,14 +1157,15 @@ function computeGimbalTrackDesiredRate(now) {
     return { x: 0, y: 0, gated: true, predictedX, predictedY, targetSpeed, stale: false };
   }
 
-  function softError(value) {
-    const deadband = GIMBAL_TRACK_HOLD_ENTER_PX * 0.65;
+  function softError(value, holdEnter) {
+    const deadband = holdEnter * 0.65;
     return Math.abs(value) <= deadband ? 0 : Math.sign(value) * (Math.abs(value) - deadband);
   }
-  const activeX = softError(predictedX);
-  const activeY = softError(predictedY);
+  const activeX = softError(predictedX, holdEnterX);
+  const activeY = softError(predictedY, holdEnterY);
   const angles = gimbalAnglesFromPixelDelta(activeX, activeY);
-  const gainMix = smoothStep01((error - GIMBAL_TRACK_HOLD_EXIT_PX) / Math.max(1, GIMBAL_TRACK_FAST_ZONE_PX - GIMBAL_TRACK_HOLD_EXIT_PX));
+  const holdExit = Math.max(holdExitX, holdExitY);
+  const gainMix = smoothStep01((error - holdExit) / Math.max(1, GIMBAL_TRACK_FAST_ZONE_PX - holdExit));
   const angleGain = GIMBAL_TRACK_NEAR_GAIN + (GIMBAL_TRACK_FAR_GAIN - GIMBAL_TRACK_NEAR_GAIN) * gainMix;
   const quality = Number.isFinite(gimbalTrackTarget.flowQuality) ? clamp(gimbalTrackTarget.flowQuality, 0, 1) : 1;
   const coastScale = gimbalTrackTarget.coasting ? 0.30 : 1;
@@ -1860,9 +1924,9 @@ function startGimbalTracking(options = {}) {
       '--smooth-alpha', String(swimmer.smooth_alpha ?? 0.3),
       '--max-center-speed', String(swimmer.max_center_speed ?? 800.0),
       '--max-size-rate', String(swimmer.max_size_rate ?? 1.0),
-      '--hold-x-px', String(swimmer.hold_x_px ?? 500.0),
-      '--hold-y-px', String(swimmer.hold_y_px ?? 500.0),
-      '--hold-release', String(swimmer.hold_release ?? 300.0),
+      '--hold-x-px', String(swimmer.hold_x_px ?? 360.0),
+      '--hold-y-px', String(swimmer.hold_y_px ?? 600.0),
+      '--hold-release', String(swimmer.hold_release ?? 150.0),
       '--conf-lock', String(swimmer.conf_lock ?? 0.35),
       '--size-tol', String(swimmer.size_tol ?? 0.35),
       '--vft-alpha', String(swimmer.vft_alpha ?? 0.35),
@@ -2120,7 +2184,11 @@ function startGimbalRecording(options = {}) {
   const useRtsp = input.startsWith('rtsp://');
   const args = ['-hide_banner', '-loglevel', 'warning', '-y'];
   if (useRtsp) args.push('-rtsp_transport', String(gimbalVideoConfig.rtsp_transport || 'tcp'));
-  args.push('-i', input, '-map', '0:v:0', '-an', '-c:v', 'copy', '-movflags', '+faststart', outputPath);
+  args.push('-i', input, '-map', '0:v:0', '-an', '-c:v', GIMBAL_RECORD_CODEC);
+  if (GIMBAL_RECORD_CODEC !== 'copy' && GIMBAL_RECORD_BITRATE) {
+    args.push('-b:v', GIMBAL_RECORD_BITRATE);
+  }
+  args.push('-movflags', '+faststart', outputPath);
   try {
     const child = spawn(FFMPEG_BIN, args, { cwd: PROJECT_ROOT, stdio: ['ignore', 'ignore', 'pipe'] });
     gimbalRecordingProcess = child;
@@ -2329,8 +2397,21 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
   }
 
   const { channel: validChannel, pwm: validPwm } = validation;
+  const leftKey = `ch${ROVER_LEFT_CHANNEL}`;
+  const rightKey = `ch${ROVER_RIGHT_CHANNEL}`;
+
   systemState.motorStatus[`ch${validChannel}`] = validPwm;
-  sendMavlinkCommand('MOTOR_CONTROL', { channel: validChannel, pwm: validPwm });
+  const leftPwm = toPwm(systemState.motorStatus[leftKey] ?? PWM_CENTER);
+  const rightPwm = toPwm(systemState.motorStatus[rightKey] ?? PWM_CENTER);
+  const throttlePwm = toPwm((leftPwm + rightPwm) / 2);
+  const steeringPwm = toPwm(PWM_CENTER + (rightPwm - leftPwm) / 2);
+
+  sendMavlinkCommand('ROVER_DRIVE', {
+    throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
+    throttlePwm,
+    steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
+    steeringPwm
+  });
 
   io.emit('motor_update', {
     channel: validChannel,
@@ -2338,7 +2419,10 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
     timestamp: new Date().toISOString()
   });
 
-  addLog('MOTOR', `${sourceLabel} set channel ${validChannel} => ${validPwm}us`);
+  addLog(
+    'MOTOR',
+    `${sourceLabel} set Main${validChannel}=${validPwm}us via Pixhawk mixer (left=${leftPwm}, right=${rightPwm})`
+  );
   return { ok: true };
 }
 
@@ -3140,18 +3224,18 @@ app.post('/api/emergency/stop', (req, res) => {
   addLog('CRITICAL', 'Emergency stop triggered');
 
   for (let channel = 1; channel <= 8; channel += 1) {
-    systemState.motorStatus[`ch${channel}`] = PWM_MIN;
+    systemState.motorStatus[`ch${channel}`] = PWM_CENTER;
   }
 
   systemState.roverControl = {
     throttle: 0,
     steering: 0,
-    leftPwm: PWM_MIN,
-    rightPwm: PWM_MIN
+    leftPwm: PWM_CENTER,
+    rightPwm: PWM_CENTER
   };
 
   sendMavlinkCommand('EMERGENCY_STOP', {
-    pwm: PWM_MIN,
+    pwm: PWM_CENTER,
     channels: [...enabledChannels],
     throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
     steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
@@ -3164,7 +3248,7 @@ app.post('/api/emergency/stop', (req, res) => {
   io.emit('aircraft_disarmed');
   io.emit('motor_update', {
     channel: 0,
-    pwm: PWM_MIN,
+    pwm: PWM_CENTER,
     timestamp: new Date().toISOString()
   });
 
@@ -3183,6 +3267,20 @@ app.get('/health', (req, res) => {
     runtime: {
       nodeVersion: process.version
     }
+  });
+});
+
+app.use('/api', (req, res) => {
+  res.status(404).json({ success: false, message: `API route not found: ${req.method} ${req.path}` });
+});
+
+app.use((error, _req, res, _next) => {
+  const badJson = error && error.type === 'entity.parse.failed';
+  const status = badJson ? 400 : 500;
+  if (!badJson) console.error(`[HTTP] ${error && error.stack ? error.stack : error}`);
+  res.status(status).json({
+    success: false,
+    message: badJson ? 'Invalid JSON request body' : 'Internal server error'
   });
 });
 

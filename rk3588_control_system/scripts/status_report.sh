@@ -3,10 +3,37 @@
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
 
+if [[ -d /opt/node20/bin ]]; then
+    export PATH="/opt/node20/bin:$PATH"
+fi
+
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "[status-report] config/system.config.json not found"
     exit 1
 fi
+
+node "$PROJECT_DIR/scripts/validate_config.mjs" "$CONFIG_FILE"
+
+SERVICES=(
+    manta-backend.service
+    manta-bridge.service
+    manta-camera.service
+    manta-gimbal-route.service
+    manta-gimbal-stream.service
+    manta-hotspot.service
+    manta-captive-portal.service
+    manta-bluetooth-pan.service
+)
+
+echo "==== Manta Services ===="
+for service in "${SERVICES[@]}"; do
+    if systemctl is-active --quiet "$service"; then
+        printf '%-32s %s\n' "$service" "ACTIVE"
+    else
+        printf '%-32s %s\n' "$service" "INACTIVE"
+    fi
+done
+echo ""
 
 WEB_PORT=$(grep -o '"web_port"[^,]*' "$CONFIG_FILE" | grep -o '[0-9]*' | head -n 1)
 WEB_PORT=${WEB_PORT:-3000}

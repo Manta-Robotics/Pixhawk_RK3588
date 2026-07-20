@@ -17,5 +17,17 @@
     "pin": "1234",
     "authentication_required": true,
     "encryption_enabled": false
+  },
+  "pan": {
+    "enabled": true,
+    "device_name": "Manta-Control",
+    "bridge": "manta-bt0",
+    "ip_address": "10.43.0.1",
+    "cidr": "10.43.0.1/24",
+    "dhcp_start": "10.43.0.20",
+    "dhcp_end": "10.43.0.80",
+    "dashboard_url": "http://10.43.0.1:3000",
+    "discoverable": true,
+    "pairable": true
   }
 }

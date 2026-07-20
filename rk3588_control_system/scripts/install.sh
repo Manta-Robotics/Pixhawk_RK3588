@@ -14,10 +14,13 @@ set -e  # Exit on error
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-# Prefer user-local Node 20 if installed
-if [ -d "/home/cat/.local/node20/bin" ]; then
-    export PATH="/home/cat/.local/node20/bin:$PATH"
-fi
+# Prefer the board-wide Node 20 install, then the current user's local install.
+for node_dir in "/opt/node20/bin" "$HOME/.local/node20/bin"; do
+    if [ -d "$node_dir" ]; then
+        export PATH="$node_dir:$PATH"
+        break
+    fi
+done
 
 # Check if running on Ubuntu
 if ! grep -q "Ubuntu" /etc/os-release; then

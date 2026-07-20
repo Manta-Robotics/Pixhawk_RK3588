@@ -6,6 +6,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
 ACTION="${1:-start}"
 HOTSPOT_WAIT_SECONDS="${HOTSPOT_WAIT_SECONDS:-20}"
+HOTSPOT_DEFAULT_PASSWORD="manta8888"
 
 eval "$(python3 - "$CONFIG_FILE" <<'PY'
 import json
@@ -89,25 +90,8 @@ if ! nmcli -t -f NAME connection show | grep -Fxq "$HOTSPOT_CONNECTION_NAME"; th
 fi
 
 if [[ ${#HOTSPOT_PASSWORD} -lt 8 ]]; then
-    nmcli connection modify "$HOTSPOT_CONNECTION_NAME" \
-        connection.interface-name "$HOTSPOT_IFACE" \
-        connection.autoconnect yes \
-        connection.autoconnect-priority 100 \
-        802-11-wireless.mode ap \
-        802-11-wireless.ssid "$HOTSPOT_SSID" \
-        802-11-wireless.band "$HOTSPOT_BAND" \
-        802-11-wireless.channel "$HOTSPOT_CHANNEL" \
-        802-11-wireless-security.key-mgmt "" \
-        ipv4.method shared \
-        ipv6.method disabled >/dev/null
-
-    nmcli device disconnect "$HOTSPOT_IFACE" >/dev/null 2>&1 || true
-    nmcli connection up "$HOTSPOT_CONNECTION_NAME" ifname "$HOTSPOT_IFACE" >/dev/null
-
-    echo "[hotspot] Hotspot started on $HOTSPOT_IFACE"
-    echo "[hotspot] SSID: $HOTSPOT_SSID"
-    echo "[hotspot] Password 'manta' is shorter than WPA allows, so the hotspot was started as OPEN."
-    exit 0
+    echo "[hotspot] Configured password is shorter than WPA allows; using ${HOTSPOT_DEFAULT_PASSWORD}." >&2
+    HOTSPOT_PASSWORD="$HOTSPOT_DEFAULT_PASSWORD"
 fi
 
 nmcli connection modify "$HOTSPOT_CONNECTION_NAME" \

@@ -9,7 +9,13 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
-RUN_USER="${SUDO_USER:-cat}"
+RUN_USER="${MANTA_RUN_USER:-root}"
+
+if [[ -d /opt/node20/bin ]]; then
+    export PATH="/opt/node20/bin:$PATH"
+fi
+
+node "$PROJECT_DIR/scripts/validate_config.mjs" "$CONFIG_FILE"
 
 eval "$(python3 - "$CONFIG_FILE" <<'PY'
 import json
@@ -36,7 +42,7 @@ chown -R "$RUN_USER":"$RUN_USER" "$PROJECT_DIR/logs"
 bash "$PROJECT_DIR/scripts/enable_camera_overlay.sh"
 bash "$PROJECT_DIR/scripts/enable_gimbal_uart.sh"
 
-for template in manta-backend manta-bridge manta-camera manta-gimbal-route manta-gimbal-stream manta-hotspot manta-captive-portal; do
+for template in manta-backend manta-bridge manta-camera manta-gimbal-route manta-gimbal-stream manta-hotspot manta-captive-portal manta-bluetooth-pan; do
     sed \
         -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
         -e "s|__RUN_USER__|$RUN_USER|g" \
@@ -48,14 +54,10 @@ address=/#/$HOTSPOT_PORTAL_IP
 EOF
 
 systemctl daemon-reload
-systemctl enable manta-backend.service manta-bridge.service manta-camera.service manta-gimbal-route.service manta-gimbal-stream.service manta-hotspot.service manta-captive-portal.service
+systemctl enable manta-backend.service manta-bridge.service manta-camera.service manta-gimbal-route.service manta-gimbal-stream.service manta-hotspot.service manta-captive-portal.service manta-bluetooth-pan.service
 
 echo "[install-boot] Installed boot services and captive portal settings."
 echo "[install-boot] Hotspot SSID    : $HOTSPOT_SSID"
-if [[ ${#HOTSPOT_PASSWORD} -lt 8 ]]; then
-    echo "[install-boot] Hotspot security: OPEN (requested password '$HOTSPOT_PASSWORD' is shorter than WPA minimum 8 characters)"
-else
-    echo "[install-boot] Hotspot password: $HOTSPOT_PASSWORD"
-fi
+echo "[install-boot] Hotspot security: configured"
 echo "[install-boot] Dashboard URL   : http://$HOTSPOT_PORTAL_IP:3000"
 echo "[install-boot] Reboot the LubanCat to apply the configured camera/UART overlays and hotspot changes."

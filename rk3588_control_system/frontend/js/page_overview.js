@@ -70,6 +70,11 @@
         left: null,
         right: null
     };
+    var driveJoystickState = {
+        pointerId: null,
+        throttle: 0,
+        steering: 0
+    };
     var sendFrameId = 0;
     var renderFrameId = 0;
     var pendingTelemetry = null;
@@ -517,6 +522,10 @@
         }
 
         function releaseStick(pointerId) {
+            if (typeof pointerId !== "undefined" && activePointerByStick[side] !== pointerId) {
+                return;
+            }
+
             if (activePointerByStick[side] === null) {
                 return;
             }
@@ -529,6 +538,11 @@
         }
 
         axis.addEventListener("pointerdown", function (event) {
+            if (activePointerByStick[side] !== null) {
+                return;
+            }
+
+            event.preventDefault();
             activePointerByStick[side] = event.pointerId;
             axis.setPointerCapture(event.pointerId);
             axis.classList.add("active");
@@ -539,24 +553,31 @@
             if (activePointerByStick[side] !== event.pointerId) {
                 return;
             }
+            event.preventDefault();
             updateFromPointer(event);
         });
 
         axis.addEventListener("pointerup", function (event) {
+            event.preventDefault();
             releaseStick(event.pointerId);
         });
 
         axis.addEventListener("pointercancel", function (event) {
+            event.preventDefault();
             releaseStick(event.pointerId);
         });
 
-        axis.addEventListener("lostpointercapture", function () {
+        axis.addEventListener("lostpointercapture", function (event) {
             if (activePointerByStick[side] !== null) {
-                releaseStick();
+                releaseStick(event.pointerId);
             }
         });
 
         axis.addEventListener("touchstart", function (event) {
+            if (typeof window.PointerEvent !== "undefined") {
+                return;
+            }
+
             var touch = event.changedTouches && event.changedTouches[0];
             if (!touch) {
                 return;
@@ -569,6 +590,10 @@
         }, { passive: false });
 
         axis.addEventListener("touchmove", function (event) {
+            if (typeof window.PointerEvent !== "undefined") {
+                return;
+            }
+
             var touch = getActiveTouch(event);
             if (!touch) {
                 return;
@@ -579,6 +604,10 @@
         }, { passive: false });
 
         axis.addEventListener("touchend", function (event) {
+            if (typeof window.PointerEvent !== "undefined") {
+                return;
+            }
+
             var touch = getActiveTouch(event);
             if (!touch) {
                 return;
@@ -590,6 +619,10 @@
         }, { passive: false });
 
         axis.addEventListener("touchcancel", function (event) {
+            if (typeof window.PointerEvent !== "undefined") {
+                return;
+            }
+
             var touch = getActiveTouch(event);
             if (!touch) {
                 return;
@@ -628,6 +661,164 @@
             axis.classList.remove("active");
         });
     }
+
+    function getDriveLimits() {
+        var clientState = window.RoverClient && window.RoverClient.state;
+        var limits = clientState && clientState.limits;
+        var throttle = limits && limits.throttle;
+        var steering = limits && limits.steering;
+        return {
+            throttle: Math.max(Math.abs(Number(throttle && throttle.min) || -100), Math.abs(Number(throttle && throttle.max) || 100)),
+            steering: Math.max(Math.abs(Number(steering && steering.min) || -45), Math.abs(Number(steering && steering.max) || 45))
+        };
+    }
+
+    function renderDriveJoystick(throttle, steering) {
+        var pad = document.getElementById("driveJoystick");
+        var driveLimits = getDriveLimits();
+        var pwmLimits = getPwmLimits();
+        var throttleScale = (pwmLimits.max - pwmLimits.center) / Math.max(1, driveLimits.throttle);
+        var steeringScale = (pwmLimits.max - pwmLimits.center) / Math.max(1, driveLimits.steering);
+        var x = steering / Math.max(1, driveLimits.steering);
+        var y = throttle / Math.max(1, driveLimits.throttle);
+        var leftPwm = clamp(pwmLimits.center + throttle * throttleScale - steering * steeringScale, pwmLimits.min, pwmLimits.max);
+        var rightPwm = clamp(pwmLimits.center + throttle * throttleScale + steering * steeringScale, pwmLimits.min, pwmLimits.max);
+
+        if (pad) {
+            pad.style.setProperty("--joystick-x", (50 + x * 38).toFixed(2) + "%");
+            pad.style.setProperty("--joystick-y", (50 - y * 38).toFixed(2) + "%");
+            pad.setAttribute("aria-valuetext", "Throttle " + Math.round(throttle) + ", steering " + Math.round(steering));
+        }
+
+        desiredPwm.left = leftPwm;
+        desiredPwm.right = rightPwm;
+        renderStick("left", leftPwm);
+        renderStick("right", rightPwm);
+        setText("driveJoystickReadout", "T " + Math.round(throttle) + " · S " + Math.round(steering));
+    }
+
+    function setDriveTarget(throttle, steering, sendNow) {
+        if (visionActive) {
+            return;
+        }
+
+        var limits = getDriveLimits();
+        var nextThrottle = clamp(Number(throttle) || 0, -limits.throttle, limits.throttle);
+        var nextSteering = clamp(Number(steering) || 0, -limits.steering, limits.steering);
+        var x = nextSteering / Math.max(1, limits.steering);
+        var y = nextThrottle / Math.max(1, limits.throttle);
+        var magnitude = Math.sqrt(x * x + y * y);
+
+        if (magnitude > 1) {
+            x /= magnitude;
+            y /= magnitude;
+            nextSteering = x * limits.steering;
+            nextThrottle = y * limits.throttle;
+        }
+
+        driveJoystickState.throttle = nextThrottle;
+        driveJoystickState.steering = nextSteering;
+        renderDriveJoystick(nextThrottle, nextSteering);
+
+        if (sendNow) {
+            window.RoverClient.drive(nextThrottle, nextSteering);
+            setText("dashLastCmd", "Throttle=" + Math.round(nextThrottle) + " | Steering=" + Math.round(nextSteering));
+        }
+    }
+
+    function updateDriveFromPointer(event, pad) {
+        var rect = pad.getBoundingClientRect();
+        var radius = Math.max(1, Math.min(rect.width, rect.height) / 2 - 38);
+        var x = (event.clientX - (rect.left + rect.width / 2)) / radius;
+        var y = ((rect.top + rect.height / 2) - event.clientY) / radius;
+        var magnitude = Math.sqrt(x * x + y * y);
+        var limits = getDriveLimits();
+
+        if (magnitude > 1) {
+            x /= magnitude;
+            y /= magnitude;
+        }
+
+        setDriveTarget(y * limits.throttle, x * limits.steering, true);
+    }
+
+    function releaseDriveJoystick(pointerId, pad) {
+        if (driveJoystickState.pointerId !== pointerId) {
+            return;
+        }
+
+        driveJoystickState.pointerId = null;
+        pad.classList.remove("active");
+        if (pad.hasPointerCapture(pointerId)) {
+            pad.releasePointerCapture(pointerId);
+        }
+        setDriveTarget(0, 0, true);
+    }
+
+    function bindDriveJoystick() {
+        var pad = document.getElementById("driveJoystick");
+        if (!pad) {
+            return;
+        }
+
+        pad.addEventListener("pointerdown", function (event) {
+            if (driveJoystickState.pointerId !== null) {
+                return;
+            }
+            event.preventDefault();
+            driveJoystickState.pointerId = event.pointerId;
+            pad.setPointerCapture(event.pointerId);
+            pad.classList.add("active");
+            updateDriveFromPointer(event, pad);
+        });
+
+        pad.addEventListener("pointermove", function (event) {
+            if (driveJoystickState.pointerId !== event.pointerId) {
+                return;
+            }
+            event.preventDefault();
+            updateDriveFromPointer(event, pad);
+        });
+
+        pad.addEventListener("pointerup", function (event) {
+            event.preventDefault();
+            releaseDriveJoystick(event.pointerId, pad);
+        });
+
+        pad.addEventListener("pointercancel", function (event) {
+            event.preventDefault();
+            releaseDriveJoystick(event.pointerId, pad);
+        });
+
+        pad.addEventListener("lostpointercapture", function (event) {
+            if (driveJoystickState.pointerId === event.pointerId) {
+                driveJoystickState.pointerId = null;
+                pad.classList.remove("active");
+                setDriveTarget(0, 0, true);
+            }
+        });
+
+        pad.addEventListener("keydown", function (event) {
+            var throttle = driveJoystickState.throttle;
+            var steering = driveJoystickState.steering;
+            var handled = true;
+
+            if (event.key === "ArrowUp") throttle += 10;
+            else if (event.key === "ArrowDown") throttle -= 10;
+            else if (event.key === "ArrowLeft") steering -= 5;
+            else if (event.key === "ArrowRight") steering += 5;
+            else if (event.key === " " || event.key === "Escape") { throttle = 0; steering = 0; }
+            else handled = false;
+
+            if (handled) {
+                event.preventDefault();
+                setDriveTarget(throttle, steering, true);
+            }
+        });
+
+        setDriveTarget(0, 0, false);
+    }
+
 
     function renderCalibration(calibration, armed) {
         var current = calibration || {};
@@ -1117,8 +1308,7 @@
             return;
         }
 
-        bindMotorStick("left");
-        bindMotorStick("right");
+        bindDriveJoystick();
 
         var btnArm = document.getElementById("btnArm");
         if (btnArm) {
@@ -1137,7 +1327,7 @@
         var btnEmergency = document.getElementById("btnEmergency");
         if (btnEmergency) {
             btnEmergency.addEventListener("click", function () {
-                if (window.confirm("Trigger emergency stop? This will drive outputs to their minimum state.")) {
+                if (window.confirm("Trigger emergency stop? This will center both outputs and disarm.")) {
                     window.RoverClient.emergencyStop().catch(function () {});
                 }
             });
@@ -1146,9 +1336,7 @@
         var btnReset = document.getElementById("ctrlReset");
         if (btnReset) {
             btnReset.addEventListener("click", function () {
-                var center = getPwmLimits().center;
-                setMotorTarget("left", center, true);
-                setMotorTarget("right", center, true);
+                setDriveTarget(0, 0, true);
             });
         }
 
@@ -1240,7 +1428,7 @@
 
         window.RoverClient.on("limits", function () {
             renderLimits();
-            renderDesiredPwm();
+            renderDriveJoystick(driveJoystickState.throttle, driveJoystickState.steering);
         });
 
         window.RoverClient.on("roverChannels", function () {
