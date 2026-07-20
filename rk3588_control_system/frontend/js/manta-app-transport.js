@@ -299,7 +299,7 @@
         this.pixhawkOnline = Boolean(data.isConnected) && String(data.pixhawkStatus || "").toLowerCase() !== "disconnected";
         this.emit("hardwareStatus", { boardOnline: true, pixhawkOnline: this.pixhawkOnline, imuOnline: this.pixhawkOnline, motorsOnline: this.pixhawkOnline });
         if (data.telemetry) this.applyTelemetry(data.telemetry);
-        if (data.gimbal) this.emit("gimbalState", data.gimbal);
+        if (data.gimbal) { this.applyGimbalTrackingState(data.gimbal); this.emit("gimbalState", data.gimbal); }
     };
 
     LiveTransport.prototype.refreshGimbalState = function () {
