@@ -167,8 +167,18 @@
         var labels = { home: "云台回中", stop: "停止云台", recordStart: "开始录像", recordStop: "停止录像", click: "点击居中", face: "人脸跟踪", swimmer: "泳者跟踪" };
         var labelsEn = { home: "Center gimbal", stop: "Stop gimbal", recordStart: "Start recording", recordStop: "Stop recording", click: "Click to center", face: "Face tracking", swimmer: "Swimmer tracking" };
         this.log("COMMAND", "GIMBAL", labels[action] || action, "command", labelsEn[action] || action);
-        this.emit("gimbalState", Object.assign({ action: action, ok: true }, payload || {}));
+        var state = Object.assign({ connected: true, action: action, ok: true, trackingActive: action === "face" || action === "swimmer", trackMode: action === "swimmer" ? "swimmer" : "face" }, payload || {});
+        if (state.trackingActive) {
+            state.trackStatus = { locked: true, status: "locked", frame_w: 1920, frame_h: 1080, x: 720, y: 220, w: 330, h: 520 };
+            state.lastTarget = state.trackStatus;
+        }
+        this.emit("gimbalState", state);
         return Promise.resolve({ success: true });
+    };
+
+    MockTransport.prototype.gimbalClick = function (dx, dy) {
+        this.log("COMMAND", "GIMBAL", "点击目标 X " + dx + " / Y " + dy, "command", "Click target X " + dx + " / Y " + dy);
+        return Promise.resolve({ success: true, delta: { dx: dx, dy: dy } });
     };
 
     MockTransport.prototype.setGimbalOsd = function (enabled) {
@@ -247,6 +257,8 @@
         this.socket.on("system_state", function (state) { if (state && state.telemetry) this.applyTelemetry(state.telemetry); }.bind(this));
         this.socket.on("rover_drive_ack", function (payload) { this.emit("driveAck", payload || {}); }.bind(this));
         this.socket.on("gimbal_state", function (state) { this.emit("gimbalState", state || {}); }.bind(this));
+        this.socket.on("gimbal_target", function (target) { this.emit("gimbalTarget", target || {}); }.bind(this));
+        this.socket.on("gimbal_track_status", function (status) { this.emit("gimbalTrackStatus", status || {}); }.bind(this));
         this.socket.on("aircraft_armed", function () { this.emit("armed", { armed: true }); }.bind(this));
         this.socket.on("aircraft_disarmed", function () { this.emit("armed", { armed: false }); }.bind(this));
         this.socket.on("log_entry", function (entry) {
@@ -377,6 +389,15 @@
         if (!endpoint) return Promise.reject(new Error("不支持的云台指令"));
         return postJson(endpoint, body).then(function (result) {
             this.log("COMMAND", "GIMBAL", "云台指令：" + action, "command");
+            if (result && result.state) this.emit("gimbalState", result.state);
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.gimbalClick = function (dx, dy) {
+        return postJson("/api/gimbal/click", { dx: Math.round(Number(dx) || 0), dy: Math.round(Number(dy) || 0) }).then(function (result) {
+            this.log("COMMAND", "GIMBAL", "点击目标 X " + dx + " / Y " + dy, "command", "Click target X " + dx + " / Y " + dy);
+            if (result && result.state) this.emit("gimbalState", result.state);
             return result;
         }.bind(this));
     };

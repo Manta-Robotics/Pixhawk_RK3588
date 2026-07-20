@@ -164,7 +164,9 @@ body[data-theme="light"] select{color-scheme:light}
 @keyframes disarm-ready{0%,100%{box-shadow:0 0 0 2px rgba(239,68,68,.12),0 5px 16px rgba(239,68,68,.22)}50%{box-shadow:0 0 0 4px rgba(239,68,68,.06),0 6px 22px rgba(239,68,68,.38)}}
 .quad-video{position:relative}.video-feed{flex:1;position:relative;overflow:hidden;background:#000;border-radius:0 0 var(--rx) var(--rx)}
 .video-feed video,.video-feed img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.video-overlay{position:absolute;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:12px}
+.video-feed.click-target-mode{cursor:crosshair}
+.gimbal-vision-overlay{position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none}
+.video-overlay{position:absolute;inset:0;z-index:3;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:12px}
 .video-topline{display:flex;align-items:center;justify-content:space-between}
 .live-badge{display:flex;align-items:center;gap:5px;background:rgba(239,68,68,.15);color:var(--red);font-size:10px;font-weight:600;letter-spacing:.5px;padding:3px 8px;border-radius:8px}
 .live-badge i{width:6px;height:6px;border-radius:50%;background:var(--red);animation:live-pulse 1.5s ease-in-out infinite}
@@ -440,6 +442,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
           <div class="video-feed">
             <video id="gimbalVideo" src="assets/manta-app/gimbal-demo.mp4" muted loop autoplay playsinline preload="metadata"></video>
             <img id="liveGimbalFeed" src="" alt="Manta 云台实时画面" hidden>
+            <canvas id="gimbalOverlay" class="gimbal-vision-overlay" aria-hidden="true"></canvas>
             <div class="video-overlay">
               <div class="video-topline">
                 <span class="live-badge"><i></i>LIVE</span>
@@ -751,7 +754,7 @@ var $=function(s,r){return(r||document).querySelector(s)};
 var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
 var shell=$("#appShell");
 var isLocalPreview=location.protocol==="file:"||/^(4173|4175)$/.test(location.port);
-var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gps:{satellites:0,hdop:null,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
+var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
 var logEntries=[];
 var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false,mediaFilter="all";
 var transport=null,gimbalHealthMonitor=null,liveRecordings=[];
@@ -787,7 +790,9 @@ function ensureTransport(){
     if(state.connected){state.connection=state.boardOnline?(state.pixhawkOnline?"connected":"offline"):"degraded";state.controlLink=state.boardOnline&&state.pixhawkOnline;}
     renderConnection();renderTelemetry();renderHardwareStatus();
   });
-  transport.on("gimbalState",function(payload){state.gimbalOnline=Boolean(payload&&payload.connected);renderHardwareStatus();if(gimbalHealthMonitor&&state.gimbalOnline)gimbalHealthMonitor.sample(payload||{})});
+  transport.on("gimbalState",function(payload){applyGimbalState(payload||{});renderHardwareStatus();if(gimbalHealthMonitor&&state.gimbalOnline)gimbalHealthMonitor.sample(payload||{})});
+  transport.on("gimbalTarget",function(payload){state.trackTarget=payload||null;if(payload)state.trackStatus=payload;drawGimbalOverlay()});
+  transport.on("gimbalTrackStatus",function(payload){state.trackStatus=payload||state.trackStatus;if(payload&&payload.locked)state.trackTarget=payload;drawGimbalOverlay()});
   if(!gimbalHealthMonitor&&window.MantaAppTransport.GimbalHealthMonitor){
     gimbalHealthMonitor=new window.MantaAppTransport.GimbalHealthMonitor({onFault:function(report){triggerGimbalFault(report,true)}});
   }
@@ -1075,10 +1080,45 @@ function translateStaticUi(lang){
 }
 
 function renderTrackingMode(){
-  var active=$("[data-gimbal-mode].active");
-  var mode=active?active.dataset.gimbalMode:"click";
-  $("#trackingReticle").hidden=mode==="click";
+  var mode=state.gimbalMode;
+  $$("[data-gimbal-mode]").forEach(function(button){button.classList.toggle("active",button.dataset.gimbalMode===mode)});
+  $("#trackingReticle").hidden=true;
+  $(".video-feed").classList.toggle("click-target-mode",mode==="click");
+  drawGimbalOverlay();
   if(mode!=="click")$("#trackingLabel").textContent=mode==="face"?localize("人脸","FACE"):localize("泳者","SWIMMER");
+}
+
+function applyGimbalState(payload){
+  state.gimbalOnline=Boolean(payload.connected);state.trackingActive=Boolean(payload.trackingActive);
+  if(payload.trackMode==="face"||payload.trackMode==="swimmer")state.trackMode=payload.trackMode;
+  if(payload.trackStatus)state.trackStatus=payload.trackStatus;if(payload.lastTarget)state.trackTarget=payload.lastTarget;
+  if(state.trackingActive)state.gimbalMode=state.trackMode;renderTrackingMode();
+}
+
+function gimbalVideoMapping(){
+  var view=$(".video-feed"),source=state.transportMode==="live"?$("#liveGimbalFeed"):$("#gimbalVideo"),width=view.clientWidth,height=view.clientHeight;
+  var sourceWidth=Number(source.naturalWidth||source.videoWidth)||1920,sourceHeight=Number(source.naturalHeight||source.videoHeight)||1080,scale=Math.max(width/sourceWidth,height/sourceHeight);
+  return {width:width,height:height,sourceWidth:sourceWidth,sourceHeight:sourceHeight,scale:scale,offsetX:(width-sourceWidth*scale)/2,offsetY:(height-sourceHeight*scale)/2};
+}
+
+function drawGimbalOverlay(){
+  var canvas=$("#gimbalOverlay");if(!canvas)return;var map=gimbalVideoMapping(),ratio=window.devicePixelRatio||1;
+  canvas.width=Math.max(1,Math.round(map.width*ratio));canvas.height=Math.max(1,Math.round(map.height*ratio));
+  var ctx=canvas.getContext("2d");ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,map.width,map.height);
+  ctx.strokeStyle="rgba(186,225,242,.72)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(map.width/2-9,map.height/2);ctx.lineTo(map.width/2+9,map.height/2);ctx.moveTo(map.width/2,map.height/2-9);ctx.lineTo(map.width/2,map.height/2+9);ctx.stroke();
+  if(state.gimbalMode==="click"&&state.clickMarker){var mx=state.clickMarker.x*map.width,my=state.clickMarker.y*map.height;ctx.strokeStyle="#88e8ff";ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx,my,14,0,Math.PI*2);ctx.moveTo(mx-20,my);ctx.lineTo(mx+20,my);ctx.moveTo(mx,my-20);ctx.lineTo(mx,my+20);ctx.stroke()}
+  if(!state.trackingActive||state.gimbalMode==="click")return;var target=state.trackTarget,status=state.trackStatus||{};
+  if(target&&status.locked!==false){var fw=Number(target.frame_w||target.frameWidth)||1920,fh=Number(target.frame_h||target.frameHeight)||1080,x=Number(target.x),y=Number(target.y),w=Number(target.w),h=Number(target.h);
+    if([x,y,w,h].every(Number.isFinite)){var bw=w*map.scale,bh=h*map.scale,sx=map.offsetX+(fw-x)*map.scale-bw/2,sy=map.offsetY+y*map.scale-bh/2,c=Math.min(18,bw*.22,bh*.22);ctx.strokeStyle="#55e6a5";ctx.lineWidth=2;ctx.beginPath();[[sx,sy,1,1],[sx+bw,sy,-1,1],[sx,sy+bh,1,-1],[sx+bw,sy+bh,-1,-1]].forEach(function(p){ctx.moveTo(p[0]+p[2]*c,p[1]);ctx.lineTo(p[0],p[1]);ctx.lineTo(p[0],p[1]+p[3]*c)});ctx.stroke();ctx.font="600 10px system-ui";ctx.fillStyle="#55e6a5";ctx.fillText(state.gimbalMode==="face"?"FACE":"SWIMMER",sx,Math.max(12,sy-7));return}}
+  ctx.font="600 10px system-ui";var label=state.language==="en"?"SEARCHING FOR TARGET":"正在搜索目标",tw=ctx.measureText(label).width+20;ctx.fillStyle="rgba(6,16,23,.72)";ctx.fillRect((map.width-tw)/2,14,tw,26);ctx.fillStyle="#ffbd66";ctx.fillText(label,(map.width-tw)/2+10,31);
+}
+
+function handleGimbalVideoClick(event){
+  if(state.gimbalMode!=="click"||!state.controlLink||!state.gimbalOnline||state.gimbalFault||event.target.closest(".video-toolbar"))return;
+  var map=gimbalVideoMapping(),rect=$(".video-feed").getBoundingClientRect(),px=event.clientX-rect.left,py=event.clientY-rect.top,videoX=(px-map.offsetX)/map.scale,videoY=(py-map.offsetY)/map.scale;
+  if(videoX<0||videoX>map.sourceWidth||videoY<0||videoY>map.sourceHeight)return;state.clickMarker={x:px/map.width,y:py/map.height};drawGimbalOverlay();
+  var dx=Math.round((0.5-videoX/map.sourceWidth)*1920),dy=Math.round((videoY/map.sourceHeight-0.5)*1080),activeTransport=ensureTransport();
+  if(activeTransport&&activeTransport.gimbalClick)activeTransport.gimbalClick(dx,dy).then(function(){showToast("云台正在转向所选目标","Gimbal is moving to the selected target")}).catch(function(error){showToast(error.message||"点击跟随指令失败","Click-to-follow command failed")});
 }
 
 function showToast(msg,msgEn){
@@ -1213,6 +1253,7 @@ function syncVideoSource(){
   if(!shouldRun){img.hidden=true;img.removeAttribute("src");video.pause();return;}
   if(state.transportMode==="live"){video.hidden=true;img.hidden=false;if(!img.src||!/api\/gimbal\/stream/.test(img.src))img.src="/api/gimbal/stream?app="+Date.now();}
   else{img.hidden=true;img.removeAttribute("src");video.hidden=false;video.play().catch(function(){})}
+  requestAnimationFrame(drawGimbalOverlay);
 }
 
 function deviceSignalLevel(rssi){rssi=Number(rssi);if(!Number.isFinite(rssi))return 3;if(rssi>=-50)return 4;if(rssi>=-65)return 3;if(rssi>=-78)return 2;return 1}
@@ -1908,11 +1949,15 @@ function installEvents(){
   });
   $$("[data-gimbal-mode]").forEach(function(b){b.addEventListener("click",function(){
 if(!state.controlLink||state.gimbalFault){showToast("云台当前不可控制","Gimbal control is currently unavailable");return}
+    state.gimbalMode=b.dataset.gimbalMode;if(state.gimbalMode==="click"){state.trackingActive=false;state.trackTarget=null}else{state.trackMode=state.gimbalMode;state.trackingActive=true;state.trackStatus={locked:false,status:"starting",message:"starting"}}
     var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(b.dataset.gimbalMode).catch(function(error){showToast(error.message||"云台模式指令失败","Gimbal mode command failed")});
-    $$("[data-gimbal-mode]").forEach(function(x){x.classList.toggle("active",x===b)});
     renderTrackingMode();
     showToast(b.dataset.gimbalMode==="click"?localize("点击居中","Click center"):b.dataset.gimbalMode==="face"?localize("人脸跟踪","Face track"):localize("泳者跟踪","Swimmer track"));
   })});
+  $(".video-feed").addEventListener("click",handleGimbalVideoClick);
+  $("#gimbalVideo").addEventListener("loadedmetadata",drawGimbalOverlay);
+  $("#liveGimbalFeed").addEventListener("load",drawGimbalOverlay);
+  window.addEventListener("resize",drawGimbalOverlay);
 
 
   $$("[data-gimbal-action]").forEach(function(b){b.addEventListener("click",function(){
