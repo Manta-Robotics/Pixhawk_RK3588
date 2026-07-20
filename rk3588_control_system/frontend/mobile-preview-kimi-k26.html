@@ -1118,7 +1118,7 @@ function handleGimbalVideoClick(event){
   if(state.gimbalMode!=="click"||!state.controlLink||!state.gimbalOnline||state.gimbalFault||event.target.closest(".video-toolbar"))return;
   var map=gimbalVideoMapping(),rect=$(".video-feed").getBoundingClientRect(),px=event.clientX-rect.left,py=event.clientY-rect.top,videoX=(px-map.offsetX)/map.scale,videoY=(py-map.offsetY)/map.scale;
   if(videoX<0||videoX>map.sourceWidth||videoY<0||videoY>map.sourceHeight)return;state.clickMarker={x:px/map.width,y:py/map.height};drawGimbalOverlay();
-  var dx=Math.round((videoX/map.sourceWidth-0.5)*1920),dy=Math.round((0.5-videoY/map.sourceHeight)*1080),activeTransport=ensureTransport();
+  var dx=Math.round((videoX/map.sourceWidth-0.5)*1920),dy=Math.round((videoY/map.sourceHeight-0.5)*1080),activeTransport=ensureTransport();
   if(activeTransport&&activeTransport.gimbalClick)activeTransport.gimbalClick(dx,dy).then(function(){showToast("云台正在转向所选目标","Gimbal is moving to the selected target")}).catch(function(error){showToast(error.message||"点击跟随指令失败","Click-to-follow command failed")});
 }
 
