@@ -233,10 +233,9 @@
             this.connected = true;
             this.connectSocket();
             this.applyStatus(payload);
-            this.refreshGimbalState();
             this.startPolling();
             this.log("INFO", "LINK", "已连接 Manta 真实控制服务", "hardware");
-            return { device: DEFAULT_DEVICE };
+            return this.openGimbalLink().then(function () { return { device: DEFAULT_DEVICE }; });
         }.bind(this));
     };
 
@@ -291,6 +290,18 @@
             return state;
         }.bind(this)).catch(function () {
             this.emit("hardwareStatus", { gimbalOnline: false });
+            return {};
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.openGimbalLink = function () {
+        return postJson("/api/gimbal/connect", {}).then(function () {
+            return new Promise(function (resolve) { setTimeout(resolve, 180); });
+        }).then(function () {
+            return this.refreshGimbalState();
+        }.bind(this)).catch(function (error) {
+            this.emit("hardwareStatus", { gimbalOnline: false });
+            this.log("WARNING", "GIMBAL", "云台串口连接失败：" + error.message, "hardware", "Gimbal serial connection failed: " + error.message);
             return {};
         }.bind(this));
     };

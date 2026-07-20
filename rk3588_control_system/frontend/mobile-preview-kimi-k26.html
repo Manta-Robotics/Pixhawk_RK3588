@@ -240,16 +240,17 @@ body[data-theme="light"] select{color-scheme:light}
 .media-segment{font-size:12px;font-weight:500;color:var(--t3);background:none;border:none;border-radius:8px;padding:5px 14px;cursor:pointer;transition:all var(--fast)}
 .media-segment:hover{color:var(--t2)}.media-segment.active{background:rgba(255,255,255,.07);color:var(--t1)}
 .media-count{font-size:12px;color:var(--t3)}
-.media-grid{flex:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;overflow-y:auto;padding-right:4px}
+.media-grid{flex:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));align-content:start;gap:12px;overflow-y:auto;padding-right:4px}
 .media-grid::-webkit-scrollbar{width:4px}.media-grid::-webkit-scrollbar-track{background:transparent}
 .media-grid::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-.media-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--rx);overflow:hidden;display:flex;flex-direction:column;align-self:start;transition:transform var(--fast),box-shadow var(--fast)}
-.media-card:hover{transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.4)}.media-card.featured{grid-column:span 2}
+.media-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--rx);overflow:hidden;display:flex;min-width:0;flex-direction:column;align-self:stretch;transition:transform var(--fast),box-shadow var(--fast),border-color var(--fast)}
+.media-card:hover{transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.4)}.media-card.featured{grid-column:auto;border-color:rgba(126,217,255,.52);box-shadow:0 0 0 1px rgba(126,217,255,.12),0 8px 24px rgba(0,0,0,.3)}
 .media-thumb{position:relative;aspect-ratio:16/9;background:linear-gradient(135deg,#0d1a28,#050a10);overflow:hidden}
 .media-thumb video,.media-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .media-duration{position:absolute;bottom:10px;left:10px;font-size:11px;font-weight:500;color:#fff;background:rgba(0,0,0,.5);padding:2px 6px;border-radius:8px;font-family:var(--fm)}
 .media-quality{position:absolute;top:10px;right:10px;font-size:10px;font-weight:600;color:var(--t1);background:rgba(0,0,0,.5);padding:2px 6px;border-radius:8px}
 .media-play-btn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:48px;height:48px;background:rgba(255,255,255,.15);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.2);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;cursor:pointer;transition:all var(--fast)}
+.media-duration,.media-quality,.media-play-btn,.media-player-bar{z-index:2}
 .media-play-btn:hover{background:rgba(255,255,255,.25);transform:translate(-50%,-50%) scale(1.1)}
 .media-play-btn svg{width:20px;height:20px;fill:currentColor;margin-left:2px}
 .media-player-bar{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.7);backdrop-filter:blur(8px);padding:8px 12px;display:flex;align-items:center;gap:10px;opacity:0;transition:opacity var(--fast)}
@@ -559,7 +560,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
       <span class="media-count">3 个项目</span>
     </div>
     <div class="media-grid">
-      <article class="media-card featured" data-recording="20260709_161929_h264.mp4" data-today="true" data-downloaded="false">
+      <article class="media-card featured" data-recording="20260709_161929_h264.mp4" data-media-url="assets/manta-app/gimbal-demo.mp4" data-today="true" data-downloaded="false">
         <div class="media-thumb">
           <video src="assets/manta-app/gimbal-demo.mp4" muted playsinline preload="metadata"></video>
           <span class="media-duration">02:47</span><span class="media-quality">1080P</span>
@@ -580,20 +581,20 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
           <div class="media-info-right"><b>19.4 MB</b><button class="media-download-btn" type="button">下载</button></div>
         </div>
       </article>
-      <article class="media-card" data-today="true" data-downloaded="false">
+      <article class="media-card" data-media-url="assets/manta-app/gimbal-demo.mp4" data-today="true" data-downloaded="false">
         <div class="media-thumb" style="background:linear-gradient(135deg,#1a2838,#0d1520)">
           <span class="media-duration">01:36</span><span class="media-quality">1080P</span>
-          <button class="media-play-btn" type="button"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg></button>
+          <button class="media-play-btn" type="button" aria-label="播放录像"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg></button>
         </div>
         <div class="media-info">
           <div class="media-info-left"><span><strong>泳者跟踪测试</strong><small>2026.07.09 · 15:48</small></span></div>
           <div class="media-info-right"><b>128 MB</b><button class="media-download-btn" type="button">下载</button></div>
         </div>
       </article>
-      <article class="media-card" data-today="false" data-downloaded="false">
+      <article class="media-card" data-media-url="assets/manta-app/gimbal-demo.mp4" data-today="false" data-downloaded="false">
         <div class="media-thumb" style="background:linear-gradient(135deg,#152030,#0a1018)">
           <span class="media-duration">00:54</span><span class="media-quality">1080P</span>
-          <button class="media-play-btn" type="button"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg></button>
+          <button class="media-play-btn" type="button" aria-label="播放录像"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg></button>
         </div>
         <div class="media-info">
           <div class="media-info-left"><span><strong>返航影像</strong><small>2026.07.09 · 15:21</small></span></div>
@@ -735,7 +736,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <!-- Toast -->
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/socket.io/socket.io.js"></script>
-<script src="js/manta-app-transport.js?v=20260720v4"></script>
+<script src="js/manta-app-transport.js?v=20260720v5"></script>
 <script>
 document.addEventListener("click",function(event){
   if(!event.target||!event.target.closest||!event.target.closest("#imuCalibrate"))return;
@@ -1643,6 +1644,25 @@ function renderMediaPreviewButton(){
 
 function renderMediaPlayer(){renderMediaPreviewButton();renderMediaControls()}
 
+function selectMediaCard(card,autoplay){
+  if(!card)return;
+  var video=$(".media-grid video"),controls=$(".media-player-bar"),thumb=$(".media-thumb",card),current=$(".media-card.featured");
+  if(!video||!controls||!thumb)return;
+  var changed=current!==card;
+  if(changed){
+    video.pause();
+    $$(".media-play-btn").forEach(function(button){button.hidden=false});
+    $$(".media-card").forEach(function(item){item.classList.toggle("featured",item===card)});
+    thumb.insertBefore(video,thumb.firstChild);
+    thumb.appendChild(controls);
+  }
+  var nextUrl=card.dataset.mediaUrl||"assets/manta-app/gimbal-demo.mp4";
+  if(video.getAttribute("src")!==nextUrl){video.src=nextUrl;video.load()}
+  else if(changed){try{video.currentTime=0}catch(_){}}
+  mediaSeeking=false;setMediaScrubberValue(0,Number.isFinite(video.duration)?video.duration:0);renderMediaPlayer();
+  if(autoplay)playMediaPreview();
+}
+
 function mediaTime(v){v=Number.isFinite(Number(v))?Math.max(0,Number(v)):0;return String(Math.floor(v/60)).padStart(2,"0")+":"+String(Math.floor(v%60)).padStart(2,"0")}
 
 function setMediaScrubberValue(value,duration){
@@ -1669,6 +1689,7 @@ function renderMediaControls(){
   if(!mediaSeeking)setMediaScrubberValue(cur,dur);
   $("#mediaCurrentTime").textContent=mediaTime(cur);
   $("#mediaDuration").textContent=mediaTime(dur);
+  var durationLabel=$(".featured .media-duration");if(durationLabel&&dur>0)durationLabel.textContent=mediaTime(dur);
   $("#mediaPlaybackRate").value=String(video.playbackRate);
 }
 
@@ -1717,17 +1738,23 @@ function recordingSize(bytes){
 function loadLiveRecordings(){
   var activeTransport=ensureTransport();if(!activeTransport||typeof activeTransport.getRecordings!=="function")return;
   activeTransport.getRecordings().then(function(items){
-    liveRecordings=Array.isArray(items)?items:[];var cards=$$(".media-grid .media-card"),now=new Date();
+    liveRecordings=Array.isArray(items)?items:[];var grid=$(".media-grid"),cards=$$(".media-grid .media-card"),now=new Date(),selectedCard=$(".media-card.featured"),selectedName=selectedCard?selectedCard.dataset.recording||"":"";
+    while(cards.length<liveRecordings.length){
+      var clone=cards[cards.length-1].cloneNode(true);clone.classList.remove("featured");clone.hidden=false;
+      var cloneVideo=$("video",clone),cloneControls=$(".media-player-bar",clone);if(cloneVideo)cloneVideo.remove();if(cloneControls)cloneControls.remove();
+      grid.insertBefore(clone,$("#mediaEmptyState"));cards.push(clone);
+    }
     cards.forEach(function(card,index){
       var item=liveRecordings[index];card.dataset.available=String(Boolean(item));if(!item){card.hidden=true;return}
       var modified=new Date(item.modifiedAt||item.createdAt||Date.now()),sameDay=modified.getFullYear()===now.getFullYear()&&modified.getMonth()===now.getMonth()&&modified.getDate()===now.getDate();
-      card.dataset.recording=item.name||"";card.dataset.today=String(sameDay);card.dataset.downloaded="false";
+      card.dataset.recording=item.name||"";card.dataset.mediaUrl=item.relativeUrl||item.url||"";card.dataset.today=String(sameDay);card.dataset.downloaded="false";
       var title=$(".media-info-left strong",card),date=$(".media-info-left small",card),size=$(".media-info-right b",card),button=$(".media-download-btn",card);
       if(title)title.textContent=item.title||item.name||localize("未命名录像","Untitled recording");
       if(date)date.textContent=modified.toLocaleDateString(state.language==="en"?"en-CA":"zh-CN").replace(/\//g,".")+" · "+modified.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
       if(size)size.textContent=recordingSize(item.size);if(button){button.textContent=localize("下载","Download");button.classList.remove("downloaded")}
-      if(index===0){var video=$("video",card);if(video){video.src=item.relativeUrl||item.url||"";video.load()}}
     });
+    var selected=cards.find(function(card){return card.dataset.recording===selectedName&&card.dataset.available!=="false"})||cards.find(function(card){return card.dataset.available!=="false"});
+    if(selected)selectMediaCard(selected,false);
     renderMediaFilter();
   }).catch(function(error){showToast(error.message||"录像列表加载失败","Unable to load recordings")});
 }
@@ -1739,6 +1766,7 @@ function renderMediaFilter(){
     var show=available&&(mediaFilter==="all"||(mediaFilter==="today"&&card.dataset.today==="true")||(mediaFilter==="downloaded"&&card.dataset.downloaded==="true"));
     card.hidden=!show;if(show)visible++;
   });
+  var active=$(".media-card.featured");if(active&&active.hidden){var firstVisible=cards.find(function(card){return!card.hidden});if(firstVisible)selectMediaCard(firstVisible,false);else pauseMediaPreview()}
   $$("[data-media-filter]").forEach(function(button){button.classList.toggle("active",button.dataset.mediaFilter===mediaFilter)});
   var empty=$("#mediaEmptyState");
   if(!empty){empty=document.createElement("div");empty.id="mediaEmptyState";empty.className="media-empty";$(".media-grid").appendChild(empty)}
@@ -1916,8 +1944,24 @@ else{var activeTransport=ensureTransport();if(activeTransport)activeTransport.gi
   mediaScrubber.addEventListener("pointerup",function(){mediaSeeking=false;seekMediaFromControl();renderMediaPlayer()});
   mediaScrubber.addEventListener("pointercancel",function(){mediaSeeking=false;renderMediaPlayer()});
   $$("[data-media-filter]").forEach(function(button){button.addEventListener("click",function(){mediaFilter=button.dataset.mediaFilter;renderMediaFilter()})});
+  $(".media-grid").addEventListener("click",function(event){
+    var playButton=event.target.closest(".media-play-btn");if(playButton){selectMediaCard(playButton.closest(".media-card"),true);return}
+    var downloadButton=event.target.closest(".media-download-btn");if(downloadButton){if(downloadButton.classList.contains("downloaded"))showToast("将由原生 App 请求相册权限后保存","The native app will request Photos access before saving");else startDownload(downloadButton)}
+  });
 $("#imuCalibrationEmergency").addEventListener("click",function(){
 finishImuCalibration(false,localize("用户在校准期间执行了紧急停止。","Emergency stop was executed during calibration."));
 setEmergency(true);setModal("imuCalibrationModal",false);
 });
-  $$(".log-filter-btn").forEach(function(b){b.addEventListener("click",function(){ state.logFilter=b.dataset.logFilter; $$(".log-filter-btn").forEach(function(x){x.classList.toggle("active",x===b)}); renderLogs() })}); $$(".media-download-btn").forEach(function(b){b.addEventListener("click",function(){ if(b.classList.contains("downloaded"))showToast("将由原生 App 请求相册权限后保存","The native app will request Photos access before saving"); else startDownload(b) })}); $("#cancelDownload").addEventListener("click",function(){ if(!state.downloading){setModal("downloadModal",false);$("#cancelDownload").disabled=true;$("#cancelDownload").textContent=localize("下载期间无法切换页面","Navigation is locked during download")} }); $(".featured .media-play-btn").addEventListener("click",playMediaPreview); $("#mediaPlayPause").addEventListener("click",toggleMediaPlayback); $("#mediaPlaybackRate").addEventListener("change",function(e){ var video=$(".featured video"); if(video)video.playbackRate=Number(e.target.value)||1; renderMediaPlayer(); showToast("已切换至 "+e.target.value+" 倍播放","Playback speed set to "+e.target.value+"×") }); ["loadedmetadata","durationchange","timeupdate","ratechange","play","pause","seeking","seeked","ended"].forEach(function(evt){ var v=$(".featured video");if(v)v.addEventListener(evt,renderMediaPlayer) }); document.addEventListener("keydown",function(e){if(e.key==="Escape"){toggleDrawer($("#toolDrawer"),false);toggleDrawer($("#demoConsole"),false)}}); } function seedLogs(){ [ {source:"APP",message:"Manta App Preview 已启动",messageEn:"Manta App Preview started",category:"system"}, {source:"BLE",message:"近距离发现模块待机",messageEn:"Nearby discovery is standing by",category:"hardware"}, {source:"PIXHAWK",message:"等待设备连接",messageEn:"Waiting for device connection",category:"hardware"}, {source:"GIMBAL",message:"测试视频已载入",messageEn:"Test video loaded",category:"hardware"} ].forEach(addLog) } installEvents(); installJoystick(); installArmControl(); seedLogs(); renderTransportMode();renderConnection();renderTelemetry();renderGpsStatus();renderGimbalOsd();renderCalibrationWizard();renderMediaPlayer();renderMediaFilter();showView("device"); window.MantaPreview={state:state,showView:showView,applyDemoState:applyDemoState,applyLanguage:applyLanguage,openImuCalibrationWizard:openImuCalibrationWizard}; })() </script> </body> </html>
+  $$(".log-filter-btn").forEach(function(b){b.addEventListener("click",function(){ state.logFilter=b.dataset.logFilter; $$(".log-filter-btn").forEach(function(x){x.classList.toggle("active",x===b)}); renderLogs() })});
+  $("#cancelDownload").addEventListener("click",function(){ if(!state.downloading){setModal("downloadModal",false);$("#cancelDownload").disabled=true;$("#cancelDownload").textContent=localize("下载期间无法切换页面","Navigation is locked during download")} });
+  $("#mediaPlayPause").addEventListener("click",toggleMediaPlayback);
+  $("#mediaPlaybackRate").addEventListener("change",function(e){ var video=$(".featured video"); if(video)video.playbackRate=Number(e.target.value)||1; renderMediaPlayer(); showToast("已切换至 "+e.target.value+" 倍播放","Playback speed set to "+e.target.value+"×") });
+  ["loadedmetadata","durationchange","timeupdate","ratechange","play","pause","seeking","seeked","ended"].forEach(function(evt){ var v=$(".media-grid video");if(v)v.addEventListener(evt,renderMediaPlayer) });
+  document.addEventListener("keydown",function(e){if(e.key==="Escape"){toggleDrawer($("#toolDrawer"),false);toggleDrawer($("#demoConsole"),false)}});
+}
+function seedLogs(){ [ {source:"APP",message:"Manta App Preview 已启动",messageEn:"Manta App Preview started",category:"system"}, {source:"BLE",message:"近距离发现模块待机",messageEn:"Nearby discovery is standing by",category:"hardware"}, {source:"PIXHAWK",message:"等待设备连接",messageEn:"Waiting for device connection",category:"hardware"}, {source:"GIMBAL",message:"测试视频已载入",messageEn:"Test video loaded",category:"hardware"} ].forEach(addLog) }
+installEvents();installJoystick();installArmControl();seedLogs();renderTransportMode();renderConnection();renderTelemetry();renderGpsStatus();renderGimbalOsd();renderCalibrationWizard();renderMediaPlayer();renderMediaFilter();showView("device");window.MantaPreview={state:state,showView:showView,applyDemoState:applyDemoState,applyLanguage:applyLanguage,openImuCalibrationWizard:openImuCalibrationWizard};
+})()
+</script>
+</body>
+</html>
