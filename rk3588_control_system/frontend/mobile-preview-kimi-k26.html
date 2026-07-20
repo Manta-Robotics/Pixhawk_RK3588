@@ -739,7 +739,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <!-- Toast -->
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/socket.io/socket.io.js"></script>
-<script src="js/manta-app-transport.js?v=20260720v9"></script>
+<script src="js/manta-app-transport.js?v=20260720v11"></script>
 <script>
 document.addEventListener("click",function(event){
   if(!event.target||!event.target.closest||!event.target.closest("#imuCalibrate"))return;
@@ -757,7 +757,7 @@ var isLocalPreview=location.protocol==="file:"||/^(4173|4175)$/.test(location.po
 var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",runningTrackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
 var logEntries=[];
 var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false,mediaFilter="all";
-var transport=null,gimbalHealthMonitor=null,liveRecordings=[],gimbalModeBusy=false;
+var transport=null,liveRecordings=[],gimbalModeBusy=false;
 
 function ensureTransport(){
   if(transport&&transport.mode===state.transportMode)return transport;
@@ -792,16 +792,14 @@ function ensureTransport(){
   });
   transport.on("gimbalState",function(payload){applyGimbalState(payload||{});renderHardwareStatus()});
   transport.on("gimbalTarget",function(payload){
-    if(!payload||state.gimbalMode==="click"||!state.trackingActive)return;
-    state.clickMarker=null;state.trackTarget=payload;state.runningTrackMode=payload.mode==="swimmer"?"swimmer":"face";state.trackMode=state.runningTrackMode;state.gimbalMode=state.runningTrackMode;state.trackStatus={locked:true,status:payload.status||"track",message:payload.message||"LOCKED",mode:state.runningTrackMode};renderTrackingMode();
+    if(!payload||state.gimbalMode==="click")return;
+    var targetMode=payload.mode==="swimmer"?"swimmer":payload.mode==="face"?"face":state.trackMode;
+    state.clickMarker=null;state.trackTarget=payload;state.runningTrackMode=targetMode;state.trackMode=targetMode;state.gimbalMode=targetMode;state.trackStatus={locked:true,status:payload.status||"track",message:payload.message||"LOCKED",mode:targetMode};renderTrackingMode();
   });
   transport.on("gimbalTrackStatus",function(payload){
-    if(!payload||state.gimbalMode==="click"||!state.trackingActive)return;
-    state.trackStatus=payload;if(payload.mode)state.runningTrackMode=payload.mode==="swimmer"?"swimmer":"face";if(!payload.locked)state.trackTarget=null;drawGimbalOverlay();
+    if(!payload||state.gimbalMode==="click")return;
+    state.trackStatus=payload;if(payload.mode){state.runningTrackMode=payload.mode==="swimmer"?"swimmer":"face";if(state.trackingActive){state.trackMode=state.runningTrackMode;state.gimbalMode=state.runningTrackMode}}if(!payload.locked)state.trackTarget=null;renderTrackingMode();
   });
-  if(!gimbalHealthMonitor&&window.MantaAppTransport.GimbalHealthMonitor){
-    gimbalHealthMonitor=new window.MantaAppTransport.GimbalHealthMonitor({onFault:function(report){triggerGimbalFault(report,true)}});
-  }
   return transport;
 }
 
@@ -1103,9 +1101,9 @@ function applyGimbalState(payload){
   renderTrackingMode();
 }
 
-function gimbalVideoMapping(){
+function gimbalVideoMapping(sourceWidthOverride,sourceHeightOverride){
   var view=$(".video-feed"),source=state.transportMode==="live"?$("#liveGimbalFeed"):$("#gimbalVideo"),width=view.clientWidth,height=view.clientHeight;
-  var sourceWidth=Number(source.naturalWidth||source.videoWidth)||1920,sourceHeight=Number(source.naturalHeight||source.videoHeight)||1080,scale=Math.max(width/sourceWidth,height/sourceHeight);
+  var sourceWidth=Number(sourceWidthOverride)||Number(source.naturalWidth||source.videoWidth)||1920,sourceHeight=Number(sourceHeightOverride)||Number(source.naturalHeight||source.videoHeight)||1080,scale=Math.max(width/sourceWidth,height/sourceHeight);
   return {width:width,height:height,sourceWidth:sourceWidth,sourceHeight:sourceHeight,scale:scale,offsetX:(width-sourceWidth*scale)/2,offsetY:(height-sourceHeight*scale)/2};
 }
 
@@ -1116,10 +1114,11 @@ function drawGimbalOverlay(){
   ctx.strokeStyle="rgba(186,225,242,.72)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(map.width/2-9,map.height/2);ctx.lineTo(map.width/2+9,map.height/2);ctx.moveTo(map.width/2,map.height/2-9);ctx.lineTo(map.width/2,map.height/2+9);ctx.stroke();
   if(state.gimbalMode==="click"&&state.clickMarker){var mx=state.clickMarker.x*map.width,my=state.clickMarker.y*map.height;ctx.strokeStyle="#88e8ff";ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx,my,14,0,Math.PI*2);ctx.moveTo(mx-20,my);ctx.lineTo(mx+20,my);ctx.moveTo(mx,my-20);ctx.lineTo(mx,my+20);ctx.stroke()}
   if(!state.trackingActive||state.gimbalMode==="click")return;var target=state.trackTarget,status=state.trackStatus||{};
-  if(target&&status.locked!==false){var fw=Number(target.frame_w||target.frameWidth)||1920,fh=Number(target.frame_h||target.frameHeight)||1080,bbox=target.bbox||target.rect||null;
-    var x=Number(target.x),y=Number(target.y),w=Number(target.w),h=Number(target.h);if(Array.isArray(bbox)&&bbox.length>=4){x=Number(bbox[0])+Number(bbox[2])/2;y=Number(bbox[1])+Number(bbox[3])/2;w=Number(bbox[2]);h=Number(bbox[3])}
-    if([x,y,w,h].every(Number.isFinite)){var bw=Math.max(36,w*map.scale),bh=Math.max(36,h*map.scale),sx=map.offsetX+x*map.scale-bw/2,sy=map.offsetY+y*map.scale-bh/2;sx=Math.max(3,Math.min(map.width-bw-3,sx));sy=Math.max(3,Math.min(map.height-bh-3,sy));var c=Math.min(18,bw*.22,bh*.22);ctx.strokeStyle="#55e6a5";ctx.lineWidth=2;ctx.beginPath();[[sx,sy,1,1],[sx+bw,sy,-1,1],[sx,sy+bh,1,-1],[sx+bw,sy+bh,-1,-1]].forEach(function(p){ctx.moveTo(p[0]+p[2]*c,p[1]);ctx.lineTo(p[0],p[1]);ctx.lineTo(p[0],p[1]+p[3]*c)});ctx.stroke();ctx.font="600 10px system-ui";ctx.fillStyle="#55e6a5";var confidence=Number(target.conf),targetLabel=state.gimbalMode==="face"?"FACE":"SWIMMER";if(Number.isFinite(confidence))targetLabel+=" "+Math.round(confidence*100)+"%";ctx.fillText(targetLabel,sx,Math.max(12,sy-7));return}}
-  ctx.font="600 10px system-ui";var label=state.language==="en"?"SEARCHING FOR TARGET":"正在搜索目标",tw=ctx.measureText(label).width+20;ctx.fillStyle="rgba(6,16,23,.72)";ctx.fillRect((map.width-tw)/2,14,tw,26);ctx.fillStyle="#ffbd66";ctx.fillText(label,(map.width-tw)/2+10,31);
+  if(target&&status.locked!==false){var fw=Number(target.frame_w||target.frameW)||1920,fh=Number(target.frame_h||target.frameH)||1080,targetMap=gimbalVideoMapping(fw,fh);
+    var sourceX=Number(target.x||0),displayX=fw-sourceX,tx=targetMap.offsetX+(displayX/Math.max(fw,1))*(fw*targetMap.scale),ty=targetMap.offsetY+(Number(target.y||0)/Math.max(fh,1))*(fh*targetMap.scale),bw=Math.max(48,(Number(target.w||120)/Math.max(fw,1))*(fw*targetMap.scale)),bh=Math.max(48,(Number(target.h||120)/Math.max(fh,1))*(fh*targetMap.scale)),sx=Math.max(4,Math.min(targetMap.width-bw-4,tx-bw/2)),sy=Math.max(4,Math.min(targetMap.height-bh-4,ty-bh/2));
+    var c=Math.max(14,Math.min(34,bw*.28,bh*.28));ctx.strokeStyle="#55e6a5";ctx.lineWidth=2;ctx.beginPath();[[sx,sy,1,1],[sx+bw,sy,-1,1],[sx,sy+bh,1,-1],[sx+bw,sy+bh,-1,-1]].forEach(function(p){ctx.moveTo(p[0]+p[2]*c,p[1]);ctx.lineTo(p[0],p[1]);ctx.lineTo(p[0],p[1]+p[3]*c)});ctx.stroke();return;
+  }
+  ctx.font="600 10px system-ui";var label=String(status.message||(state.trackMode==="swimmer"?"can not find swimmer":"CAN NOT FIND FACE")).toUpperCase(),tw=ctx.measureText(label).width+20;ctx.fillStyle="rgba(6,16,23,.72)";ctx.fillRect((map.width-tw)/2,14,tw,26);ctx.fillStyle="#ffbd66";ctx.fillText(label,(map.width-tw)/2+10,31);
 }
 
 function handleGimbalVideoClick(event){
@@ -1339,7 +1338,6 @@ function disconnect(){
   showToast("已断开 Manta","Manta disconnected");
   setDiscoveryStatus(localize("等待扫描","Waiting to scan"),false);$("span",$("#connectButton")).textContent=localize("搜索 Manta","Find Manta");
   clearInterval(telemetryTimer);
-  if(gimbalHealthMonitor)gimbalHealthMonitor.reset();
 }
 
 function validatePin(){
@@ -1717,7 +1715,7 @@ function recoverGimbal(){
   var buttons=[$("#repairGimbal"),$("#repairGimbalFromReport")].filter(Boolean);buttons.forEach(function(button){button.disabled=true;button.textContent=localize("正在检查…","Checking…")});
   var activeTransport=ensureTransport(),request=activeTransport&&activeTransport.recoverGimbal?activeTransport.recoverGimbal():Promise.reject(new Error(localize("通信模块不支持恢复","Recovery is unavailable")));
   request.then(function(payload){
-    if(gimbalHealthMonitor)gimbalHealthMonitor.reset();state.gimbalFault=false;state.gimbalOnline=Boolean(payload&&payload.connected);state.trackingActive=false;state.gimbalMode="click";state.trackTarget=null;state.trackStatus={locked:false,status:"idle",message:"idle"};
+    state.gimbalFault=false;state.gimbalOnline=Boolean(payload&&payload.connected);state.trackingActive=false;state.gimbalMode="click";state.trackTarget=null;state.trackStatus={locked:false,status:"idle",message:"idle"};
     $("#gimbalFault").hidden=true;setModal("diagnosticModal",false);renderHardwareStatus();renderTrackingMode();addLog({level:"INFO",source:"GIMBAL",message:"云台保护已解除，等待新的控制指令",messageEn:"Gimbal protection cleared; waiting for a new command",category:"hardware"});showToast("云台已恢复，请重新选择控制模式","Gimbal recovered. Select a control mode again");
   }).catch(function(error){showToast(error.message||"云台反馈仍未恢复","Gimbal feedback has not recovered")}).finally(function(){buttons.forEach(function(button){button.disabled=false;button.textContent=localize("云台修复","Recover gimbal")})});
 }
@@ -1968,13 +1966,15 @@ function installEvents(){
   $$("[data-gimbal-mode]").forEach(function(b){b.addEventListener("click",function(){
 if(!state.controlLink||state.gimbalFault){showToast("云台当前不可控制","Gimbal control is currently unavailable");return}
     if(gimbalModeBusy)return;
-    if(state.trackingActive&&state.runningTrackMode===b.dataset.gimbalMode){state.gimbalMode=b.dataset.gimbalMode;state.trackMode=b.dataset.gimbalMode;renderTrackingMode();showToast("当前跟踪模式已在运行","This tracking mode is already active");return}
-    var previousMode=state.gimbalMode,previousTracking=state.trackingActive;
-    state.gimbalMode=b.dataset.gimbalMode;if(state.gimbalMode==="click"){state.trackingActive=false;state.trackTarget=null}else{state.trackMode=state.gimbalMode;state.trackingActive=true;state.trackStatus={locked:false,status:"starting",message:"starting"}}
+    var requestedMode=b.dataset.gimbalMode;
+    if(state.trackingActive&&state.runningTrackMode===requestedMode){state.gimbalMode=requestedMode;state.trackMode=requestedMode;renderTrackingMode();showToast("当前跟踪模式已在运行","This tracking mode is already active");return}
+    if(requestedMode==="click"&&!state.trackingActive){state.clickMarker=null;state.gimbalMode="click";state.trackTarget=null;renderTrackingMode();showToast("点击居中","Click center");return}
+    var previousMode=state.gimbalMode,previousTracking=state.trackingActive,previousTrackMode=state.trackMode;
+    state.clickMarker=null;state.gimbalMode=requestedMode;state.trackTarget=null;if(requestedMode!=="click"){state.trackMode=requestedMode;state.trackStatus={locked:false,status:state.trackingActive?"switching":"starting",mode:requestedMode,message:(state.trackingActive?"Switching to ":"Starting ")+(requestedMode==="swimmer"?"Swimmer":"Face")+"..."}}
     gimbalModeBusy=true;$$("[data-gimbal-mode]").forEach(function(button){button.disabled=true});
-    var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(b.dataset.gimbalMode).catch(function(error){state.gimbalMode=previousMode;state.trackingActive=previousTracking;showToast(error.message||"云台模式指令失败","Gimbal mode command failed")}).finally(function(){gimbalModeBusy=false;$$("[data-gimbal-mode]").forEach(function(button){button.disabled=!state.gimbalOnline});renderTrackingMode()});
+    var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(requestedMode).catch(function(error){state.gimbalMode=previousMode;state.trackingActive=previousTracking;state.trackMode=previousTrackMode;showToast(error.message||"云台模式指令失败","Gimbal mode command failed")}).finally(function(){gimbalModeBusy=false;if(activeTransport&&activeTransport.refreshGimbalState)activeTransport.refreshGimbalState();$$("[data-gimbal-mode]").forEach(function(button){button.disabled=!state.gimbalOnline});renderTrackingMode()});
     renderTrackingMode();
-    showToast(b.dataset.gimbalMode==="click"?localize("点击居中","Click center"):b.dataset.gimbalMode==="face"?localize("人脸跟踪","Face track"):localize("泳者跟踪","Swimmer track"));
+    showToast(requestedMode==="click"?localize("点击居中","Click center"):requestedMode==="face"?localize("人脸跟踪","Face track"):localize("泳者跟踪","Swimmer track"));
   })});
   $(".video-feed").addEventListener("click",handleGimbalVideoClick);
   $("#gimbalVideo").addEventListener("loadedmetadata",drawGimbalOverlay);
