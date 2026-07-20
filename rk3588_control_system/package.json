@@ -9,7 +9,8 @@
     "dev": "nodemon backend/server.js",
     "check": "node scripts/check_project.mjs",
     "check:config": "node scripts/validate_config.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "maintenance": "npm test && npm run check"
   },
   "keywords": [
     "RK3588",
