@@ -26,16 +26,16 @@ backend/server.js
 
 | RK3588 物理针脚 | 功能 | Pixhawk |
 | --- | --- | --- |
-| 8 | UART1 TX | TELEM2 RX |
-| 10 | UART1 RX | TELEM2 TX |
+| 8 | UART1 TX | TELEM2 RX 蓝 |
+| 10 | UART1 RX | TELEM2 TX 黄 |
 | 6 | GND | TELEM2 GND |
 
 ### 云台 UART
 
 | RK3588 物理针脚 | 功能 | 云台 |
 | --- | --- | --- |
-| 5 | UART3 TX | RX |
-| 3 | UART3 RX | TX |
+| 5 | UART3 TX | RX 黄|
+| 3 | UART3 RX | TX 绿|
 | 9 | GND | GND |
 
 TX/RX 必须交叉连接，所有设备必须共地。当前串口配置为：
