@@ -1723,6 +1723,161 @@ body[data-page="dashboard"] .dashboard-grid-compact {
     height: 300px;
 }
 
+.drive-joystick-layout {
+    display: grid;
+    place-items: center;
+}
+
+.drive-joystick-card {
+    width: min(100%, 680px);
+    padding: 18px;
+    border: 1px solid rgba(126, 176, 210, 0.22);
+    border-radius: 24px;
+    background: linear-gradient(180deg, rgba(14, 31, 45, 0.98), rgba(8, 20, 30, 0.98));
+    box-shadow: 0 22px 48px rgba(0, 0, 0, 0.24);
+}
+
+.drive-joystick-shell {
+    display: grid;
+    place-items: center;
+    padding: 18px 0;
+}
+
+.drive-joystick-pad {
+    --joystick-x: 50%;
+    --joystick-y: 50%;
+    position: relative;
+    width: min(360px, 72vw);
+    aspect-ratio: 1 / 1;
+    border: 1px solid rgba(124, 224, 255, 0.38);
+    border-radius: 50%;
+    overflow: hidden;
+    background:
+        radial-gradient(circle at center, rgba(50, 130, 166, 0.18) 0 8%, transparent 8% 34%, rgba(45, 102, 132, 0.16) 34% 35%, transparent 35% 68%, rgba(26, 67, 92, 0.28) 68% 69%, transparent 69%),
+        linear-gradient(180deg, rgba(15, 36, 52, 0.98), rgba(7, 19, 29, 0.98));
+    box-shadow: inset 0 0 48px rgba(33, 123, 167, 0.16), 0 20px 42px rgba(0, 0, 0, 0.30);
+    touch-action: none;
+    user-select: none;
+    cursor: grab;
+}
+
+.drive-joystick-pad::before,
+.drive-joystick-pad::after {
+    content: "";
+    position: absolute;
+    background: rgba(124, 224, 255, 0.18);
+    pointer-events: none;
+}
+
+.drive-joystick-pad::before {
+    top: 50%;
+    left: 12%;
+    right: 12%;
+    height: 1px;
+}
+
+.drive-joystick-pad::after {
+    top: 12%;
+    bottom: 12%;
+    left: 50%;
+    width: 1px;
+}
+
+.drive-joystick-ring {
+    position: absolute;
+    inset: 18%;
+    border: 1px dashed rgba(124, 224, 255, 0.28);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.drive-joystick-knob {
+    position: absolute;
+    top: var(--joystick-y);
+    left: var(--joystick-x);
+    width: 76px;
+    height: 76px;
+    border: 2px solid rgba(220, 249, 255, 0.86);
+    border-radius: 50%;
+    background: radial-gradient(circle at 36% 30%, #baf4ff, #4bb9de 42%, #17658c 100%);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.40), 0 0 28px rgba(84, 204, 244, 0.28);
+    transform: translate(-50%, -50%);
+    transition: top 70ms linear, left 70ms linear, transform 120ms ease;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.drive-joystick-pad.active {
+    border-color: rgba(124, 224, 255, 0.78);
+    cursor: grabbing;
+}
+
+.drive-joystick-pad.active .drive-joystick-knob {
+    transform: translate(-50%, -50%) scale(1.06);
+}
+
+.drive-direction {
+    position: absolute;
+    color: rgba(192, 229, 243, 0.58);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    pointer-events: none;
+}
+
+.drive-forward { top: 18px; left: 50%; transform: translateX(-50%); }
+.drive-reverse { bottom: 18px; left: 50%; transform: translateX(-50%); }
+.drive-left { left: 14px; top: 50%; transform: translateY(-50%) rotate(-90deg); }
+.drive-right { right: 10px; top: 50%; transform: translateY(-50%) rotate(90deg); }
+
+.drive-joystick-values {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.drive-joystick-values > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 14px;
+    border: 1px solid rgba(126, 176, 210, 0.16);
+    border-radius: 14px;
+    background: rgba(7, 18, 28, 0.62);
+}
+
+.drive-joystick-values span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.drive-joystick-values strong {
+    color: var(--accent-strong);
+    font-family: var(--font-mono);
+    font-size: 17px;
+}
+
+@media (max-width: 680px) {
+    .drive-joystick-card {
+        padding: 14px;
+    }
+
+    .drive-joystick-pad {
+        width: min(320px, 82vw);
+    }
+
+    .drive-joystick-knob {
+        width: 68px;
+        height: 68px;
+    }
+
+    .drive-joystick-values {
+        grid-template-columns: 1fr;
+    }
+}
+
+
 .panel-logs-bottom {
     padding: 14px;
 }
