@@ -40,6 +40,22 @@ export function validateSystemConfig(config) {
     errors.push('baud_rate must be a positive number');
   }
 
+  const pwmMin = Number(config.min_motor_pwm);
+  const pwmCenter = Number(config.default_motor_pwm);
+  const pwmMax = Number(config.max_motor_pwm);
+  if (![pwmMin, pwmCenter, pwmMax].every(Number.isFinite) || !(pwmMin < pwmCenter && pwmCenter < pwmMax)) {
+    errors.push('motor PWM values must satisfy min_motor_pwm < default_motor_pwm < max_motor_pwm');
+  }
+  if (![1, -1].includes(Number(config.rover_throttle_sign))) {
+    errors.push('rover_throttle_sign must be 1 or -1');
+  }
+  if (Number(config.rover_left_channel) === Number(config.rover_right_channel)) {
+    errors.push('rover left and right output channels must be different');
+  }
+  if (Number(config.rover_left_input_channel) !== 1 || Number(config.rover_right_input_channel) !== 3) {
+    errors.push('tank steering requires rover_left_input_channel=1 and rover_right_input_channel=3');
+  }
+
   const hotspot = isObject(config.hotspot) ? config.hotspot : {};
   if (hotspot.enabled !== false) {
     if (!String(hotspot.ssid || '').trim()) errors.push('hotspot.ssid is required');
@@ -74,6 +90,47 @@ export function validateSystemConfig(config) {
 
   const recordings = isObject(config.recordings) ? config.recordings : {};
   if (!String(recordings.dir || '').trim()) errors.push('recordings.dir is required');
+  return errors;
+}
+
+export function validateMotorConfig(config, systemConfig = {}) {
+  const errors = [];
+  if (!isObject(config)) return ['root must be a JSON object'];
+  if (!Array.isArray(config.motors) || config.motors.length === 0) return ['motors must be a non-empty array'];
+
+  const seenChannels = new Set();
+  for (const motor of config.motors) {
+    if (!isObject(motor)) {
+      errors.push('each motor must be an object');
+      continue;
+    }
+    const channel = Number(motor.channel);
+    if (!Number.isInteger(channel) || channel < 1 || channel > 32) {
+      errors.push(`invalid motor channel: ${motor.channel}`);
+      continue;
+    }
+    if (seenChannels.has(channel)) errors.push(`duplicate motor channel: ${channel}`);
+    seenChannels.add(channel);
+    if (typeof motor.servo_reversed !== 'boolean') errors.push(`motor channel ${channel} servo_reversed must be boolean`);
+
+    const min = Number(motor.min_pwm);
+    const center = Number(motor.center_pwm);
+    const max = Number(motor.max_pwm);
+    if (![min, center, max].every(Number.isFinite) || !(min < center && center < max)) {
+      errors.push(`motor channel ${channel} PWM values must satisfy min < center < max`);
+    }
+  }
+
+  for (const key of ['rover_left_channel', 'rover_right_channel']) {
+    const channel = Number(systemConfig[key]);
+    const motor = config.motors.find((item) => Number(item && item.channel) === channel);
+    if (!motor || motor.enabled === false) errors.push(`${key}=${channel} must reference an enabled motor`);
+  }
+
+  const brushless = isObject(config.brushless_config) ? config.brushless_config : {};
+  if (brushless.bidirectional === true && Number(brushless.idle_pwm) !== Number(brushless.center_pwm)) {
+    errors.push('bidirectional brushless_config idle_pwm must equal center_pwm');
+  }
   return errors;
 }
 

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
+    "preview": "node scripts/serve-preview.mjs",
     "check": "node scripts/check_project.mjs",
     "check:config": "node scripts/validate_config.mjs",
     "test": "node --test"
@@ -22,6 +23,7 @@
   "license": "MIT",
   "dependencies": {
     "body-parser": "^1.20.2",
+    "bonjour-service": "^1.4.3",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "socket.io": "^4.5.4"

@@ -42,7 +42,7 @@ chown -R "$RUN_USER":"$RUN_USER" "$PROJECT_DIR/logs"
 bash "$PROJECT_DIR/scripts/enable_camera_overlay.sh"
 bash "$PROJECT_DIR/scripts/enable_gimbal_uart.sh"
 
-for template in manta-backend manta-bridge manta-camera manta-gimbal-route manta-gimbal-stream manta-hotspot manta-captive-portal manta-bluetooth-pan; do
+for template in manta-backend manta-bridge manta-camera manta-gimbal-route manta-gimbal-stream manta-mediamtx manta-hotspot manta-captive-portal manta-bluetooth-pan; do
     sed \
         -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
         -e "s|__RUN_USER__|$RUN_USER|g" \
@@ -54,7 +54,7 @@ address=/#/$HOTSPOT_PORTAL_IP
 EOF
 
 systemctl daemon-reload
-systemctl enable manta-backend.service manta-bridge.service manta-camera.service manta-gimbal-route.service manta-gimbal-stream.service manta-hotspot.service manta-captive-portal.service manta-bluetooth-pan.service
+systemctl enable manta-backend.service manta-bridge.service manta-camera.service manta-gimbal-route.service manta-gimbal-stream.service manta-mediamtx.service manta-hotspot.service manta-captive-portal.service manta-bluetooth-pan.service
 
 echo "[install-boot] Installed boot services and captive portal settings."
 echo "[install-boot] Hotspot SSID    : $HOTSPOT_SSID"

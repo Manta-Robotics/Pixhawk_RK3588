@@ -17,7 +17,8 @@ import net from 'net';
 import os from 'os';
 import http from 'http';
 import https from 'https';
-import { validateSystemConfig } from '../scripts/validate_config.mjs';
+import { Bonjour } from 'bonjour-service';
+import { validateMotorConfig, validateSystemConfig } from '../scripts/validate_config.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +42,10 @@ if (configErrors.length) {
   throw new Error(`[Config] Invalid system.config.json:\n- ${configErrors.join('\n- ')}`);
 }
 const motorConfig = readJsonFile('config/motor_config.json', { motors: [] });
+const motorConfigErrors = validateMotorConfig(motorConfig, config);
+if (motorConfigErrors.length) {
+  throw new Error(`[Config] Invalid motor_config.json:\n- ${motorConfigErrors.join('\n- ')}`);
+}
 
 const LOGS_DIR = path.resolve(PROJECT_ROOT, config.logs_dir || './logs');
 const SYSTEM_LOG_FILE = path.join(LOGS_DIR, 'system.log');
@@ -58,6 +63,7 @@ const SNAPSHOT_PORT = Number((config.hotspot && config.hotspot.camera_port) || 8
 const PREFERRED_WIRELESS_INTERFACE = String(config.wireless_interface || 'wlan0');
 const CAN_INTERFACE = String(config.can_interface || 'can0');
 const MANTA_HOST = String(config.manta_host || 'manta.local');
+const MANTA_SERVICE_NAME = String(config.manta_service_name || 'Manta');
 const cameraConfig = config.camera || {};
 const gimbalConfig = config.gimbal || {};
 
@@ -67,12 +73,13 @@ const PWM_CENTER = Number(config.default_motor_pwm || 1500);
 
 const ROVER_THROTTLE_MIN = Number(config.rover_throttle_min ?? -100);
 const ROVER_THROTTLE_MAX = Number(config.rover_throttle_max ?? 100);
+const ROVER_THROTTLE_SIGN = Number(config.rover_throttle_sign ?? 1) < 0 ? -1 : 1;
 const ROVER_STEERING_MIN = Number(config.rover_steering_min ?? -45);
 const ROVER_STEERING_MAX = Number(config.rover_steering_max ?? 45);
 const ROVER_LEFT_CHANNEL = Number(config.rover_left_channel ?? 1);
 const ROVER_RIGHT_CHANNEL = Number(config.rover_right_channel ?? 3);
-const ROVER_STEERING_INPUT_CHANNEL = Number(config.rover_steering_input_channel ?? 1);
-const ROVER_THROTTLE_INPUT_CHANNEL = Number(config.rover_throttle_input_channel ?? 3);
+const ROVER_LEFT_INPUT_CHANNEL = Number(config.rover_left_input_channel ?? 1);
+const ROVER_RIGHT_INPUT_CHANNEL = Number(config.rover_right_input_channel ?? 3);
 const IMU_CALIBRATION_POSITIONS = {
   1: 'LEVEL',
   2: 'LEFT',
@@ -642,6 +649,8 @@ const systemState = {
     ch1: PWM_CENTER, ch2: PWM_CENTER, ch3: PWM_CENTER, ch4: PWM_CENTER,
     ch5: PWM_CENTER, ch6: PWM_CENTER, ch7: PWM_CENTER, ch8: PWM_CENTER
   },
+  controlTrace: null,
+  motorConfigAudit: null,
   connectivity: readConnectivityState(),
   accessUrls: [],
   camera: readCameraState(readConnectivityState()),
@@ -660,6 +669,10 @@ app.use((_req, res, next) => {
 });
 app.use(bodyParser.json({ limit: '1mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
+app.get(['/', '/index.html'], (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
+});
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
 
 const telemetryCsvBuffer = [];
@@ -2406,7 +2419,10 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
     timestamp: new Date().toISOString()
   });
 
-  addLog('MOTOR', `${sourceLabel} set channel ${validChannel} => ${validPwm}us`);
+  addLog(
+    'MOTOR',
+    `${sourceLabel} set channel ${validChannel} pwm=${validPwm}us`
+  );
   return { ok: true };
 }
 
@@ -2416,20 +2432,17 @@ function normalizeRoverControl(input = {}) {
 
   const throttle = clamp(throttleRaw, ROVER_THROTTLE_MIN, ROVER_THROTTLE_MAX);
   const steering = clamp(steeringRaw, ROVER_STEERING_MIN, ROVER_STEERING_MAX);
+  const signedThrottle = throttle * ROVER_THROTTLE_SIGN;
 
   const throttleScale = (PWM_MAX - PWM_CENTER) / Math.max(Math.abs(ROVER_THROTTLE_MIN), Math.abs(ROVER_THROTTLE_MAX));
   const steeringScale = (PWM_MAX - PWM_CENTER) / Math.max(Math.abs(ROVER_STEERING_MIN), Math.abs(ROVER_STEERING_MAX));
 
-  const throttleInputPwm = toPwm(PWM_CENTER + throttle * throttleScale);
-  const steeringInputPwm = toPwm(PWM_CENTER + steering * steeringScale);
-  const leftPwm = toPwm(PWM_CENTER + throttle * throttleScale - steering * steeringScale);
-  const rightPwm = toPwm(PWM_CENTER + throttle * throttleScale + steering * steeringScale);
+  const leftPwm = toPwm(PWM_CENTER + signedThrottle * throttleScale - steering * steeringScale);
+  const rightPwm = toPwm(PWM_CENTER + signedThrottle * throttleScale + steering * steeringScale);
 
   return {
     throttle,
     steering,
-    throttleInputPwm,
-    steeringInputPwm,
     leftPwm,
     rightPwm,
     clamped: throttle !== throttleRaw || steering !== steeringRaw
@@ -2441,10 +2454,10 @@ function applyRoverControl(controlInput = {}, sourceLabel = 'WEB') {
   sendMavlinkCommand('ROVER_DRIVE', {
     throttle: normalized.throttle,
     steering: normalized.steering,
-    throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
-    steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
-    throttlePwm: normalized.throttleInputPwm,
-    steeringPwm: normalized.steeringInputPwm
+    leftChannel: ROVER_LEFT_INPUT_CHANNEL,
+    rightChannel: ROVER_RIGHT_INPUT_CHANNEL,
+    leftPwm: normalized.leftPwm,
+    rightPwm: normalized.rightPwm
   });
 
   systemState.roverControl = {
@@ -2649,6 +2662,37 @@ telemetrySocket.on('message', (rawMessage) => {
       return;
     }
 
+    if (packet.type === 'control_trace' && packet.payload) {
+      systemState.controlTrace = {
+        ...packet.payload,
+        timestamp: new Date().toISOString()
+      };
+      io.emit('motor_control_trace', systemState.controlTrace);
+      addLog('MOTOR_TRACE', JSON.stringify(systemState.controlTrace));
+      return;
+    }
+
+    if (packet.type === 'motor_config' && packet.payload) {
+      const previousAudit = systemState.motorConfigAudit
+        ? JSON.stringify({
+            directionPolicy: systemState.motorConfigAudit.directionPolicy,
+            applied: systemState.motorConfigAudit.applied,
+            params: systemState.motorConfigAudit.params,
+            servoReversed: systemState.motorConfigAudit.servoReversed
+          })
+        : '';
+      const nextAudit = JSON.stringify(packet.payload);
+      systemState.motorConfigAudit = {
+        ...packet.payload,
+        timestamp: new Date().toISOString()
+      };
+      io.emit('motor_config_audit', systemState.motorConfigAudit);
+      if (previousAudit !== nextAudit) {
+        addLog('MOTOR_CONFIG', JSON.stringify(systemState.motorConfigAudit));
+      }
+      return;
+    }
+
     if (packet.type === 'log' && packet.payload && packet.payload.message) {
       addLog(packet.payload.level || 'INFO', `[Bridge] ${packet.payload.message}`);
     }
@@ -2690,9 +2734,33 @@ app.get('/api/status', (req, res) => {
       right: ROVER_RIGHT_CHANNEL
     },
     roverInputs: {
-      steering: ROVER_STEERING_INPUT_CHANNEL,
-      throttle: ROVER_THROTTLE_INPUT_CHANNEL
+      left: ROVER_LEFT_INPUT_CHANNEL,
+      right: ROVER_RIGHT_INPUT_CHANNEL
     }
+  });
+});
+
+app.get('/api/motor/diagnostics', (_req, res) => {
+  const activeMotors = (motorConfig.motors || [])
+    .filter((motor) => enabledChannels.has(Number(motor.channel)))
+    .map((motor) => ({
+      channel: Number(motor.channel),
+      name: motor.name,
+      softwareReversed: false,
+      servoReversedAtPixhawk: Boolean(motor.servo_reversed),
+      minPwm: Number(motor.min_pwm),
+      centerPwm: Number(motor.center_pwm),
+      maxPwm: Number(motor.max_pwm)
+    }));
+
+  res.json({
+    success: true,
+    directionPolicy: 'no-reversal-20260715d',
+    convention: 'logical PWM is passed unchanged; software, RC input, and Pixhawk SERVO reversal are all disabled',
+    activeMotors,
+    bridgeConfig: systemState.motorConfigAudit,
+    lastControlTrace: systemState.controlTrace,
+    servoOutputs: systemState.telemetry.servoOutputs
   });
 });
 
@@ -3208,23 +3276,21 @@ app.post('/api/emergency/stop', (req, res) => {
   addLog('CRITICAL', 'Emergency stop triggered');
 
   for (let channel = 1; channel <= 8; channel += 1) {
-    systemState.motorStatus[`ch${channel}`] = PWM_MIN;
+    systemState.motorStatus[`ch${channel}`] = PWM_CENTER;
   }
 
   systemState.roverControl = {
     throttle: 0,
     steering: 0,
-    leftPwm: PWM_MIN,
-    rightPwm: PWM_MIN
+    leftPwm: PWM_CENTER,
+    rightPwm: PWM_CENTER
   };
 
   sendMavlinkCommand('EMERGENCY_STOP', {
-    pwm: PWM_MIN,
+    pwm: PWM_CENTER,
     channels: [...enabledChannels],
-    throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
-    steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
-    throttlePwm: PWM_CENTER,
-    steeringPwm: PWM_CENTER
+    leftChannel: ROVER_LEFT_INPUT_CHANNEL,
+    rightChannel: ROVER_RIGHT_INPUT_CHANNEL
   });
   sendMavlinkCommand('DISARM');
   systemState.telemetry.armed = false;
@@ -3232,7 +3298,7 @@ app.post('/api/emergency/stop', (req, res) => {
   io.emit('aircraft_disarmed');
   io.emit('motor_update', {
     channel: 0,
-    pwm: PWM_MIN,
+    pwm: PWM_CENTER,
     timestamp: new Date().toISOString()
   });
 
@@ -3325,6 +3391,9 @@ io.on('connection', (socket) => {
   });
 });
 
+let bonjour = null;
+let mantaBonjourService = null;
+
 httpServer.listen(WEB_PORT, WEB_HOST, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════╗
@@ -3342,6 +3411,24 @@ Press Ctrl+C to stop
 
   addLog('INFO', 'Server started successfully');
   cleanupStaleGimbalTrackWorkers('server-start');
+
+  try {
+    bonjour = new Bonjour();
+    mantaBonjourService = bonjour.publish({
+      name: MANTA_SERVICE_NAME,
+      type: 'manta',
+      protocol: 'tcp',
+      port: WEB_PORT,
+      txt: {
+        role: 'control',
+        health: '/health',
+        recordings: '/api/gimbal/recordings'
+      }
+    });
+    addLog('INFO', `Bonjour service announced: ${MANTA_SERVICE_NAME}._manta._tcp:${WEB_PORT}`);
+  } catch (error) {
+    addLog('WARN', `Bonjour service unavailable: ${error.message}`);
+  }
 });
 
 let shutdownStarted = false;
@@ -3392,6 +3479,15 @@ function shutdown() {
     commandSocket.close();
   } catch (error) {
     console.error(`[Shutdown] Command socket close error: ${error.message}`);
+  }
+
+  if (mantaBonjourService) {
+    try { mantaBonjourService.stop(); } catch (_) {}
+    mantaBonjourService = null;
+  }
+  if (bonjour) {
+    try { bonjour.destroy(); } catch (_) {}
+    bonjour = null;
   }
 
   httpServer.close(() => {

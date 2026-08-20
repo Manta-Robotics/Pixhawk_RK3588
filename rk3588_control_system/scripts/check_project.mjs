@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { loadAndValidateConfig } from './validate_config.mjs';
+import { loadAndValidateConfig, validateMotorConfig } from './validate_config.mjs';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SOURCE_DIRS = ['backend', path.join('frontend', 'js'), 'scripts'];
@@ -37,6 +37,8 @@ for (const relativePath of ['config/system.config.json', 'config/motor_config.js
 try {
   const result = loadAndValidateConfig(path.join(PROJECT_ROOT, 'config', 'system.config.json'));
   failures.push(...result.errors.map((error) => `config/system.config.json: ${error}`));
+  const motorConfig = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'config', 'motor_config.json'), 'utf8'));
+  failures.push(...validateMotorConfig(motorConfig, result.config).map((error) => `config/motor_config.json: ${error}`));
 } catch (error) {
   failures.push(`config/system.config.json: ${error.message}`);
 }

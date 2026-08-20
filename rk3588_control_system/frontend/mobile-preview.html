@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#05090d">
+    <title>Manta App Preview</title>
+    <link rel="stylesheet" href="css/mobile-preview.css?v=20260715v10">
+    <link rel="stylesheet" href="css/manta-field-console-v5.css?v=20260720v4">
+</head>
+<body data-theme="dark" data-language="zh">
+    <div class="orientation-gate" aria-hidden="true">
+        <div class="rotate-device"><span></span></div>
+        <strong>请旋转设备</strong>
+        <p>Manta 仅提供横屏控制体验</p>
+    </div>
+
+    <div class="app-shell" id="appShell" data-connection="idle" data-layout="standard">
+        <header class="topbar">
+            <button class="brand" type="button" data-nav="device" aria-label="返回设备主页">
+                <svg class="brand-lockup" viewBox="0 0 132 76" aria-hidden="true">
+                    <g class="brand-symbol">
+                        <path d="M15 29C27 15 42 8 58 8c13 0 24 6 34 14-18-4-34-2-47 3-11 4-20 6-30 4Z"/>
+                        <path d="M42 34c19 1 37-4 53-12l25-13c-8 16-20 27-35 33-17 6-32 3-43-8Z"/>
+                    </g>
+                    <text class="brand-name" x="66" y="59" text-anchor="middle" textLength="96" lengthAdjust="spacingAndGlyphs">MANTA</text>
+                    <text class="brand-subline" x="66" y="72" text-anchor="middle" textLength="62" lengthAdjust="spacingAndGlyphs">ROBOTICS</text>
+                </svg>
+            </button>
+
+            <nav class="primary-nav" aria-label="主要页面">
+                <button class="nav-button active" type="button" data-nav="device">
+                <svg viewBox="0 0 24 24"><path d="M4 15a8 8 0 0 1 16 0M7 15a5 5 0 0 1 10 0M12 15v-5M5 19h14"/></svg>
+                <span>设备</span>
+                </button>
+                <button class="nav-button" type="button" data-nav="map">
+                <svg viewBox="0 0 24 24"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15m6-12v15"/></svg>
+                <span>地图</span>
+                </button>
+                <button class="nav-button" type="button" data-nav="media">
+                <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 15 3-3 2 2 3-4 3 5M8 9h.01"/></svg>
+                <span>录像</span>
+                <i class="nav-badge" id="mediaBadge" hidden>1</i>
+                </button>
+            </nav>
+
+            <div class="top-status">
+                <div class="top-metrics" aria-label="实时状态">
+                    <div class="metric connection-metric"><i class="status-light"></i><span>连接</span><strong id="connectionMetric">未连接</strong></div>
+                    <div class="metric"><span>延迟</span><strong id="latencyMetric">-- ms</strong></div>
+                    <div class="metric"><span>速度</span><strong id="speedMetric">0.0 m/s</strong></div>
+                    <div class="metric temp-metric"><span>飞控温度</span><strong id="temperatureMetric">-- °C</strong><i class="temperature-bar"><b></b></i></div>
+                </div>
+                <div class="top-actions">
+                    <button class="utility-button demo-button" id="demoToggle" type="button">
+                        <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg>
+                        <span>演示</span>
+                    </button>
+                    <button class="icon-button" id="layoutToggle" type="button" aria-label="交换控制台布局" title="交换布局">
+                        <svg viewBox="0 0 24 24"><path d="M4 5h6v6H4zM14 13h6v6h-6M15 5h5v4M9 19H4v-4M18 9l2-2-2-2M6 15l-2 2 2 2"/></svg>
+                    </button>
+                    <button class="icon-button" id="toolToggle" type="button" aria-expanded="false" aria-controls="toolDrawer" aria-label="打开工具菜单">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/></svg>
+                    </button>
+                    <time id="clock">09:41</time>
+                </div>
+            </div>
+        </header>
+
+        <main class="view-stage">
+            <section class="app-view active" id="deviceView" data-view="device" aria-label="Manta 设备">
+                <div class="landing" id="landingScreen">
+                    <section class="product-stage" aria-label="Manta 产品画面">
+                        <img class="landing-image" src="assets/manta-app/manta-hero.jpg" alt="Manta 水面摄影机器人">
+                        <div class="landing-scrim"></div>
+                    </section>
+                    <section class="landing-copy device-dock">
+                        <div class="dock-heading"><span class="kicker">附近设备</span><small>可以连接</small></div>
+                        <h1>MANTA ROBOTIC</h1>
+                        <p>面向开放水域游泳与专业野泳运动员的自主水面摄影机器人。</p>
+                        <div class="device-summary">
+                            <span><i class="pulse-dot"></i><b>安全连接已就绪</b><small>BLE 5.0 发现</small></span>
+                            <span class="device-identity"><strong>ROBOTIC · MANTA 2407</strong><small>互联网连接保持在线</small></span>
+                        </div>
+                        <div class="landing-specs" aria-label="设备连接能力">
+                            <div><span>CONTROL</span><strong>BLE 5.0</strong><small>发现与控制</small></div>
+                            <div><span>VISION</span><strong>5 GHz</strong><small>预览与下载</small></div>
+                            <div><span>INTERNET</span><strong>ONLINE</strong><small>保持联网</small></div>
+                        </div>
+                        <button class="primary-action" id="connectButton" type="button">
+                            <span>连接 Manta</span>
+                            <svg viewBox="0 0 24 24"><path d="M5 12h13m-5-5 5 5-5 5"/></svg>
+                        </button>
+                        <small class="connection-note">首次连接需要输入 Manta 显示的 6 位配对码</small>
+                        <div class="dock-foot"><span><i></i>近距离</span><span>安全配对</span><span>保持联网</span></div>
+                    </section>
+                </div>
+
+                <div class="control-screen" id="controlScreen" hidden>
+                    <div class="control-toolbar">
+                        <div class="control-identity"><i></i><span><b>MANTA ROBOTIC</b><small>MANTA · 2407</small></span></div>
+                        <div class="control-mode"><span>手动跟随</span><button type="button" id="futureAutoButton" title="自动跟随将在后续版本开放">自动跟随 <small>即将推出</small></button></div>
+                        <button class="disconnect-button" id="disconnectButton" type="button">断开</button>
+                    </div>
+
+                    <div class="quadrant-grid">
+                        <section class="console-panel imu-panel" data-area="imu">
+                            <div class="panel-head">
+                                <span><i class="panel-index">01</i><b>飞控姿态</b><small>PIXHAWK IMU</small></span>
+                                <button class="text-button" id="imuCalibrate" type="button">IMU 校准</button>
+                            </div>
+                            <div class="imu-content">
+                                <div class="attitude-orb" id="attitudeOrb">
+                                    <div class="attitude-sky"></div><div class="attitude-water"></div>
+                                    <i class="horizon"></i><i class="pitch pitch-a"></i><i class="pitch pitch-b"></i>
+                                    <span class="craft-mark"><b></b><b></b><i></i></span>
+                                </div>
+                                <div class="imu-readouts">
+                                    <div><span>横滚 ROLL</span><strong id="rollValue">+1.2°</strong></div>
+                                    <div><span>俯仰 PITCH</span><strong id="pitchValue">−0.6°</strong></div>
+                                    <div><span>航向 YAW</span><strong id="yawValue">184°</strong></div>
+                                    <div><span>校准状态</span><strong class="success-text" id="imuState">良好</strong></div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="console-panel drive-panel" data-area="drive">
+                            <div class="panel-head">
+                                <span><i class="panel-index">02</i><b>移动控制</b><small>360° VECTOR</small></span>
+                                <span class="drive-output" id="driveOutput">X 0.00 · Y 0.00</span>
+                            </div>
+                            <div class="drive-content">
+                                <div class="joystick" id="joystick" role="slider" tabindex="0" aria-label="Manta 360度移动摇杆" aria-valuetext="停止">
+                                    <i class="joy-ring ring-a"></i><i class="joy-ring ring-b"></i>
+                                    <span class="joy-axis axis-x"></span><span class="joy-axis axis-y"></span>
+                                    <div class="joy-stick" id="joyStick"><i></i></div>
+                                    <span class="joy-label joy-forward">前进</span><span class="joy-label joy-back">后退</span>
+                                </div>
+                                <div class="drive-side">
+                                    <div class="motor-pair"><span>左推进</span><b id="leftMotor">0%</b><i><u id="leftMotorBar"></u></i></div>
+                                    <div class="motor-pair"><span>右推进</span><b id="rightMotor">0%</b><i><u id="rightMotorBar"></u></i></div>
+                                    <div class="estop-wrap">
+                                        <span>紧急停止</span>
+                                        <div class="estop-slider" id="estopSlider">
+                                            <div class="estop-fill"></div>
+                                            <span>滑动立即停止</span>
+                                            <button id="estopThumb" type="button" aria-label="向右滑动触发紧急停止"><svg viewBox="0 0 24 24"><path d="m8 5 7 7-7 7"/></svg></button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="console-panel video-panel" data-area="video">
+                            <div class="video-shell" id="videoShell">
+                                <video id="gimbalVideo" src="assets/manta-app/gimbal-demo.mp4" muted loop autoplay playsinline preload="metadata"></video>
+                                <img id="liveGimbalFeed" src="" alt="Manta 云台实时画面" hidden>
+                                <div class="video-vignette"></div>
+                                <div class="video-topline">
+                                    <span class="live-chip"><i></i>LIVE</span>
+                                    <span>1080P · 30FPS</span>
+                                    <span id="recordTimer" class="record-timer" hidden><i></i>REC 00:00</span>
+                                </div>
+                                <div class="tracking-reticle" id="trackingReticle"><i></i><span>SWIMMER</span></div>
+                                <div class="video-alert" id="videoAlert" hidden><svg viewBox="0 0 24 24"><path d="M4 4l16 16M8 5h7v5m1 4v3H5V7"/></svg><strong id="videoAlertTitle">影像信号中断</strong><span id="videoAlertMessage">控制链路仍然在线，请谨慎移动</span></div>
+                                <div class="gimbal-fault" id="gimbalFault" hidden><strong>云台保护已触发</strong><span id="gimbalFaultMessage">检测到云台电机异常，所有云台功能已停止</span><button type="button" id="openReport">查看诊断报告</button></div>
+                                <div class="gimbal-toolbar">
+                                    <div class="mode-switch" aria-label="云台模式">
+                                        <button class="active" type="button" data-gimbal-mode="click">点击居中</button>
+                                        <button type="button" data-gimbal-mode="face">人脸跟踪</button>
+                                        <button type="button" data-gimbal-mode="swimmer">泳者跟踪</button>
+                                    </div>
+                                    <div class="gimbal-actions">
+                                        <button type="button" data-gimbal-action="home" title="云台回中"><svg viewBox="0 0 24 24"><path d="m4 11 8-7 8 7v9h-6v-6h-4v6H4z"/></svg></button>
+                                        <button type="button" data-gimbal-action="stop" title="停止云台"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>
+                                        <button class="record-button" id="recordButton" type="button" data-gimbal-action="record" title="录像"><i></i></button>
+                                        <button class="osd-button active" id="gimbalOsd" type="button" aria-pressed="true" title="显示云台 OSD">OSD</button>
+                                        <button type="button" id="gimbalMore" title="更多参数"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="console-panel log-panel" data-area="logs">
+                            <div class="panel-head log-head">
+                                <span><i class="panel-index">04</i><b>输出日志</b><small>LIVE OUTPUT</small></span>
+                                <div class="log-filter"><button class="active" type="button" data-log-filter="all">全部</button><button type="button" data-log-filter="command">指令</button><button type="button" data-log-filter="hardware">硬件</button></div>
+                            </div>
+                            <div class="log-stream" id="logStream" aria-live="polite"></div>
+                            <div class="log-footer"><span><i class="success-dot"></i>上位机</span><span><i class="success-dot"></i>下位机</span><span><i class="success-dot"></i>电机</span><span><i class="success-dot"></i>云台</span></div>
+                        </section>
+                    </div>
+                </div>
+            </section>
+
+            <section class="app-view map-view" id="mapView" data-view="map" aria-label="地图" hidden>
+                <div class="page-title"><span><small>NAVIGATION</small><h2>水域地图</h2></span><div><button class="secondary-action" type="button" id="locateButton">定位 Manta</button><button class="primary-small" type="button">规划路线</button></div></div>
+                <div class="map-canvas">
+                    <div class="map-grid"></div><div class="map-shore shore-a"></div><div class="map-shore shore-b"></div>
+                    <svg class="route-line" viewBox="0 0 1000 600" preserveAspectRatio="none"><path d="M140 465C235 420 245 292 375 312S535 445 620 357s80-166 224-207"/><circle cx="140" cy="465" r="7"/><circle cx="844" cy="150" r="7"/></svg>
+                    <div class="manta-marker"><svg viewBox="0 0 132 50" aria-hidden="true"><path d="M15 29C27 15 42 8 58 8c13 0 24 6 34 14-18-4-34-2-47 3-11 4-20 6-30 4Z"/><path d="M42 34c19 1 37-4 53-12l25-13c-8 16-20 27-35 33-17 6-32 3-43-8Z"/></svg><span>MANTA ROBOTIC</span></div>
+                    <div class="map-card"><span>当前航程</span><strong>1.24 km</strong><small>预计剩余 38 min</small><i><b></b></i></div>
+                    <div class="gps-source-card" id="gpsSourceCard" data-state="waiting"><span><i></i>GPS 状态</span><strong id="gpsStatus">等待设备连接</strong><small id="gpsDetail">0 颗卫星</small><small id="mapSource">地图来源：MANTA 演示矢量 · 非导航地图</small></div>
+                    <div class="map-scale">50 m</div>
+                </div>
+            </section>
+
+            <section class="app-view media-view" id="mediaView" data-view="media" aria-label="录像" hidden>
+                <div class="page-title"><span><small>MEDIA LIBRARY</small><h2>Manta 录像</h2></span><div class="storage-summary"><span>机内存储</span><strong>42.8 GB / 128 GB</strong><i><b></b></i></div></div>
+                <div class="media-toolbar"><div class="segmented"><button class="active" type="button">全部</button><button type="button">今天</button><button type="button">已下载</button></div><span>3 个项目</span></div>
+                <div class="media-grid">
+                    <article class="media-card featured" data-recording="20260709_161929_h264.mp4">
+                        <div class="media-thumb">
+                            <video src="assets/manta-app/gimbal-demo.mp4" muted playsinline preload="metadata"></video>
+                            <span class="duration">02:47</span><span class="quality">1080P</span>
+                            <button class="play-button" type="button" aria-label="播放录像"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg></button>
+                            <div class="media-player-controls" id="mediaPlayerControls">
+                                <button class="media-play-toggle" id="mediaPlayPause" type="button" aria-label="播放录像" data-state="paused">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path class="media-icon-play" d="m9 7 8 5-8 5z"/><path class="media-icon-pause" d="M8 6v12M16 6v12"/></svg>
+                                </button>
+                                <time id="mediaCurrentTime">00:00</time>
+                                <input id="mediaScrubber" type="range" min="0" max="100" value="0" step="0.01" aria-label="录像时间轴">
+                                <time id="mediaDuration">00:00</time>
+                                <label class="media-rate"><span>倍速</span><select id="mediaPlaybackRate" aria-label="播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+                            </div>
+                        </div>
+                        <div class="media-info"><span><strong>开放水域跟拍 01</strong><small>2026.07.09 · 16:19</small></span><span><b>19.4 MB</b><button class="download-button" type="button">下载</button></span></div>
+                    </article>
+                    <article class="media-card"><div class="media-thumb still-a"><span class="duration">01:36</span><span class="quality">1080P</span><button class="play-button" type="button"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg></button></div><div class="media-info"><span><strong>泳者跟踪测试</strong><small>2026.07.09 · 15:48</small></span><span><b>128 MB</b><button class="download-button" type="button">下载</button></span></div></article>
+                    <article class="media-card"><div class="media-thumb still-b"><span class="duration">00:54</span><span class="quality">1080P</span><button class="play-button" type="button"><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z"/></svg></button></div><div class="media-info"><span><strong>返航影像</strong><small>2026.07.09 · 15:21</small></span><span><b>76 MB</b><button class="download-button" type="button">下载</button></span></div></article>
+                </div>
+            </section>
+        </main>
+
+        <aside class="tool-drawer" id="toolDrawer" aria-hidden="true">
+            <div class="drawer-head"><span><small>QUICK TOOLS</small><strong>快捷工具</strong></span><button class="icon-button" id="toolClose" type="button" aria-label="关闭"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+            <section><h3>显示</h3><label class="setting-row"><span><b>外观</b><small>跟随使用环境</small></span><select id="themeSelect"><option value="dark">深色</option><option value="light">浅色</option></select></label><label class="setting-row"><span><b>语言</b><small>Language</small></span><select id="languageSelect"><option value="zh">简体中文</option><option value="en">English</option></select></label></section>
+            <section><h3>连接</h3><div class="setting-row"><span><b>通信模式</b><small id="transportHint">Preview 模拟通信</small></span><button class="status-pill" id="transportToggle" type="button">SIM</button></div><div class="setting-row"><span><b>互联网</b><small>连接 Manta 时保持在线</small></span><i class="switch on"><b></b></i></div></section>
+            <section class="drawer-links"><button type="button" data-drawer-page="logs"><span><b>完整日志</b><small>导出诊断信息</small></span><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></button><button type="button" data-drawer-page="help"><span><b>帮助与安全</b><small>连接、控制与急停说明</small></span><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></button></section>
+        </aside>
+
+        <aside class="demo-console" id="demoConsole" aria-hidden="true">
+            <div class="drawer-head"><span><small>PREVIEW LAB</small><strong>状态模拟器</strong></span><button class="icon-button" id="demoClose" type="button"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+            <p>用于在电脑端预览所有真实状态，不会向 Manta 发送指令。</p>
+            <div class="demo-states">
+                <button type="button" data-demo-state="connected">正常连接</button><button type="button" data-demo-state="videoLost">视频中断</button><button type="button" data-demo-state="gimbalFault">云台故障</button><button type="button" data-demo-state="hot">温度告警</button><button type="button" data-demo-state="emergency">急停</button><button type="button" data-demo-state="offline">设备离线</button>
+            </div>
+            <label>延迟 <output id="demoLatencyOutput">18 ms</output><input id="demoLatency" type="range" min="4" max="350" value="18"></label>
+            <label>速度 <output id="demoSpeedOutput">1.4 m/s</output><input id="demoSpeed" type="range" min="0" max="35" value="14"></label>
+            <label>飞控温度 <output id="demoTempOutput">46 °C</output><input id="demoTemp" type="range" min="20" max="95" value="46"></label>
+        </aside>
+
+        <div class="modal-backdrop" id="pairingModal" hidden>
+            <section class="modal pairing-card" role="dialog" aria-modal="true" aria-labelledby="pairingTitle">
+                <button class="modal-close" type="button" data-close-modal="pairingModal" aria-label="关闭">×</button>
+                <span class="modal-kicker">SECURE PAIRING</span><h2 id="pairingTitle">输入 Manta 显示的配对码</h2><p>MANTA ROBOTIC · MANTA 2407</p>
+                <div class="pin-inputs" id="pinInputs"><input inputmode="numeric" maxlength="1" aria-label="第1位"><input inputmode="numeric" maxlength="1" aria-label="第2位"><input inputmode="numeric" maxlength="1" aria-label="第3位"><input inputmode="numeric" maxlength="1" aria-label="第4位"><input inputmode="numeric" maxlength="1" aria-label="第5位"><input inputmode="numeric" maxlength="1" aria-label="第6位"></div>
+                <small id="pairingHint">Preview 测试码：<b>240724</b></small><button class="primary-action" id="pairButton" type="button" disabled>验证并连接</button>
+            </section>
+        </div>
+
+        <div class="modal-backdrop" id="imuCalibrationModal" hidden>
+            <section class="modal imu-calibration-card" role="dialog" aria-modal="true" aria-labelledby="imuCalibrationTitle">
+                <button class="modal-close" id="imuCalibrationClose" type="button" aria-label="关闭">×</button>
+                <span class="modal-kicker">PIXHAWK · SIX-POSITION</span>
+                <h2 id="imuCalibrationTitle">IMU 六面校准</h2>
+                <p id="imuCalibrationLead">校准期间推进输出会被锁定。请把 Manta 放在稳定、无振动的平面上。</p>
+                <div class="imu-calibration-progress"><span id="imuCalibrationProgressText">准备开始</span><strong id="imuCalibrationCounter">0 / 6</strong><i><b id="imuCalibrationBar"></b></i></div>
+                <div class="imu-pose-stage" id="imuPoseStage" data-pose="intro"><div class="imu-pose-device"><i></i><b>MANTA</b></div></div>
+                <strong class="imu-pose-title" id="imuPoseTitle">准备六个放置方向</strong>
+                <p class="imu-pose-instruction" id="imuPoseInstruction">开始后，请按照飞控要求逐面放稳并确认。</p>
+                <div class="imu-calibration-actions">
+                    <button class="secondary-action" id="imuCalibrationCancel" type="button">取消</button>
+                    <button class="primary-action" id="imuCalibrationNext" type="button">开始校准</button>
+                </div>
+                <button class="calibration-emergency" id="imuCalibrationEmergency" type="button" hidden>紧急停止推进</button>
+            </section>
+        </div>
+
+        <div class="modal-backdrop" id="downloadModal" hidden>
+            <section class="modal download-card" role="dialog" aria-modal="true" aria-labelledby="downloadTitle">
+                <span class="modal-kicker">DOWNLOADING</span><h2 id="downloadTitle">正在下载到 Manta App</h2><p id="downloadFilename">20260709_161929_h264.mp4</p><div class="download-progress"><i><b id="downloadBar"></b></i><span><strong id="downloadPercent">0%</strong><small id="downloadSize">0 MB / 19.4 MB</small></span></div><p class="download-lock-note">下载完成前请保持 App 在前台并维持与 Manta 的连接。</p><button class="secondary-action" id="cancelDownload" type="button" disabled>下载期间无法切换页面</button>
+            </section>
+        </div>
+
+        <div class="modal-backdrop" id="diagnosticModal" hidden>
+            <section class="modal diagnostic-card" role="dialog" aria-modal="true" aria-labelledby="diagnosticTitle">
+                <button class="modal-close" type="button" data-close-modal="diagnosticModal">×</button><span class="modal-kicker danger-text">GIMBAL PROTECTION</span><h2 id="diagnosticTitle">云台健康诊断报告</h2><div class="report-summary"><i></i><span><strong id="diagnosticCode">GMB-MOTION-STALL</strong><small>已执行云台停止保护</small></span></div><dl><div><dt>指令</dt><dd id="diagnosticCommand">SWIMMER TRACK / PAN +18°</dd></div><div><dt>实际响应</dt><dd id="diagnosticResponse">1.8 s 内角度变化 &lt; 0.8°</dd></div><div><dt>连续异常</dt><dd id="diagnosticWindows">3 / 3 个检测窗口</dd></div><div><dt>通信</dt><dd id="diagnosticLink">串口正常 · 状态包在线</dd></div><div><dt>处置</dt><dd id="diagnosticAction">停止跟踪、停止云台电机、保留主机移动控制</dd></div></dl><p>当前结论是“疑似卡死”，不是硬件确定性判定。建议断电检查机械阻力、供电和串口错误，然后重新执行云台自检。</p><button class="primary-action" type="button" data-close-modal="diagnosticModal">我知道了</button>
+            </section>
+        </div>
+
+        <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/manta-app-transport.js?v=20260720v1"></script>
+    <script src="js/mobile-preview.js?v=20260720v1"></script>
+</body>
+</html>

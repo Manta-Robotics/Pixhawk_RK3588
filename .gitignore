@@ -10,3 +10,8 @@ wheelhouse*/
 .env
 .coverage
 *.tmp
+
+# Manta iPad app build artifacts (large binaries)
+rk3588_control_system/MantaApp-iPad-*.zip
+rk3588_control_system/MantaApp.swiftpm/
+rk3588_control_system/frontend/assets/

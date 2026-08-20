@@ -147,9 +147,11 @@ class OutputLimiter:
         out = self.prev.copy()
 
         # 1) 安全护栏: 限制单帧中心位移 (防大跳)
-        max_step = max(self.max_center_speed * max(dt, 1e-3), 1.0)
         vx, vy = float(x[0] - out[0]), float(x[1] - out[1])
         v = float(np.hypot(vx, vy))
+        speed_gain = float(np.clip((v - 80.0) / 420.0, 0.0, 1.0))
+        adaptive_speed = self.max_center_speed + speed_gain * (3200.0 - self.max_center_speed)
+        max_step = max(adaptive_speed * max(dt, 1e-3), 1.0)
         if v > max_step and v > 1e-6:
             s = max_step / v
             x[0], x[1] = out[0] + vx * s, out[1] + vy * s
@@ -171,20 +173,22 @@ class OutputLimiter:
         #    如果误差超出阈值, 只移动超出死区的那部分, 保证无突跳跳变。
         dx = float(res[0] - out[0])
         dy = float(res[1] - out[1])
+
+        deadzone_beta = self.deadzone_beta + speed_gain * (0.85 - self.deadzone_beta)
         
         if dx > self.hold_x_px:
             res[0] = out[0] + (dx - self.hold_x_px)
         elif dx < -self.hold_x_px:
             res[0] = out[0] + (dx + self.hold_x_px)
         else:
-            res[0] = out[0] + dx * self.deadzone_beta
+            res[0] = out[0] + dx * deadzone_beta
             
         if dy > self.hold_y_px:
             res[1] = out[1] + (dy - self.hold_y_px)
         elif dy < -self.hold_y_px:
             res[1] = out[1] + (dy + self.hold_y_px)
         else:
-            res[1] = out[1] + dy * self.deadzone_beta
+            res[1] = out[1] + dy * deadzone_beta
 
         self.prev = res.copy()
         return res
@@ -265,6 +269,145 @@ class TargetSignalFilter:
 #   - 该 id 在 -> 直接用; 该 id 没了 -> 用 HSV 颜色直方图在候选里找回
 #   - 找回看 颜色相似度*0.7 + 尺寸合理性*0.3, 超阈值就把锁转到新 id
 # ----------------------------------------------------------------------------
+class VirtualGimbalCenter:
+    """Second-order crop-window controller with an axis-wise deadband."""
+    def __init__(self, deadzone_x: float = 0.08, deadzone_y: float = 0.08,
+                 max_speed: float = 2200.0) -> None:
+        self.deadzone_x = float(deadzone_x)
+        self.deadzone_y = float(deadzone_y)
+        self.max_speed = float(max_speed)
+        self.center: np.ndarray | None = None
+        self.velocity = np.zeros(2, dtype=np.float32)
+        self.accel = np.zeros(2, dtype=np.float32)
+        self.prev_target: np.ndarray | None = None
+        self.target_velocity = np.zeros(2, dtype=np.float32)
+
+    def reset(self) -> None:
+        self.center = None
+        self.velocity[:] = 0.0
+        self.accel[:] = 0.0
+        self.prev_target = None
+        self.target_velocity[:] = 0.0
+
+    def update(self, target_xy: tuple[float, float], frame_w: int, frame_h: int,
+               dt: float, crop_scale: float = 1.0,
+               crop_height_ratio: float = 1.0,
+               crop_height_px: int = 0,
+               urgency: float = 0.0) -> tuple[float, float]:
+        tx, ty = float(target_xy[0]), float(target_xy[1])
+        scale = float(np.clip(crop_scale, 0.25, 1.0))
+        h_ratio = float(np.clip(crop_height_ratio, 0.5, 1.0))
+        if crop_height_px > 0:
+            crop_h = int(np.clip(crop_height_px, 2, frame_h))
+            crop_w = int(np.clip(round(crop_h * frame_w / frame_h), 2, frame_w))
+        else:
+            crop_w = max(2, int(round(frame_w * scale)))
+            crop_h = max(2, int(round(frame_h * scale * h_ratio)))
+        half_w = crop_w // 2
+        half_h = crop_h // 2
+        min_x = float(half_w)
+        max_x = float(frame_w - (crop_w - half_w))
+        min_y = float(half_h)
+        max_y = float(frame_h - (crop_h - half_h))
+        tx = float(np.clip(tx, min_x, max_x))
+        ty = float(np.clip(ty, min_y, max_y))
+        if self.center is None:
+            self.center = np.array([frame_w * 0.5, frame_h * 0.5], dtype=np.float32)
+        self.center[0] = float(np.clip(self.center[0], min_x, max_x))
+        self.center[1] = float(np.clip(self.center[1], min_y, max_y))
+
+        cur = self.center.astype(np.float32)
+        target = np.array([tx, ty], dtype=np.float32)
+        safe_dt = max(float(dt), 1e-3)
+
+        if self.prev_target is not None:
+            measured_v = (target - self.prev_target) / safe_dt
+            measured_speed = float(np.hypot(measured_v[0], measured_v[1]))
+            if measured_speed > 1800.0 and measured_speed > 1e-6:
+                measured_v *= 1800.0 / measured_speed
+            self.target_velocity = 0.82 * self.target_velocity + 0.18 * measured_v
+        self.prev_target = target.copy()
+
+        raw_error = target - cur
+        urgency = float(np.clip(urgency, 0.0, 1.0))
+        deadband_scale = 1.0 - 0.62 * urgency
+        deadband = np.array([frame_w * self.deadzone_x,
+                             frame_h * self.deadzone_y], dtype=np.float32) * deadband_scale
+        escape_band = deadband + np.array([frame_w * 0.028,
+                                           frame_h * 0.018], dtype=np.float32)
+        abs_error = np.abs(raw_error)
+        over_deadband = np.maximum(abs_error - deadband, 0.0)
+        slow_error = over_deadband
+        fast_error = np.maximum(abs_error - deadband * 0.35, 0.0)
+        blend = np.clip(over_deadband / np.maximum(escape_band - deadband, 1.0), 0.0, 1.0)
+        control_error = np.sign(raw_error) * (slow_error * (1.0 - blend) + fast_error * blend)
+        err_norm_now = float(np.hypot(control_error[0], control_error[1]))
+        if err_norm_now < 1.0:
+            self.target_velocity *= 0.65
+
+        fast_full = max(frame_w * 0.10, frame_h * 0.12, 180.0)
+        gain = float(np.clip(err_norm_now / fast_full, 0.0, 1.0))
+        gain = max(gain, urgency * 0.72)
+        ease_gain = gain * gain * (3.0 - 2.0 * gain)
+
+        lead_time = 0.05 + 0.08 * ease_gain
+        predicted_offset = self.target_velocity * lead_time * ease_gain
+        max_lead = max(frame_w * 0.045, 80.0)
+        lead_norm = float(np.hypot(predicted_offset[0], predicted_offset[1]))
+        if lead_norm > max_lead and lead_norm > 1e-6:
+            predicted_offset *= max_lead / lead_norm
+
+        desired = cur + control_error + predicted_offset
+        desired[0] = float(np.clip(desired[0], min_x, max_x))
+        desired[1] = float(np.clip(desired[1], min_y, max_y))
+        error = desired - cur
+        err_norm = float(np.hypot(error[0], error[1]))
+
+        response = 2.5 + 5.7 * ease_gain
+        feedforward = 0.10 + 0.20 * ease_gain
+        desired_velocity = error * response + self.target_velocity * feedforward
+
+        base_speed = max(self.max_speed, 520.0)
+        distance_gain = float(np.clip(err_norm / max(frame_w * 0.22, 220.0), 0.0, 1.0))
+        distance_gain = distance_gain ** 0.65
+        max_speed = base_speed + (1650.0 - base_speed) * max(ease_gain, distance_gain)
+        desired_speed = float(np.hypot(desired_velocity[0], desired_velocity[1]))
+        if desired_speed > max_speed and desired_speed > 1e-6:
+            desired_velocity *= max_speed / desired_speed
+
+        desired_accel = (desired_velocity - self.velocity) / safe_dt
+        accel_limit = 2200.0 + 11500.0 * ease_gain
+        if desired_speed < float(np.hypot(self.velocity[0], self.velocity[1])):
+            accel_limit *= 1.35
+        desired_accel_norm = float(np.hypot(desired_accel[0], desired_accel[1]))
+        if desired_accel_norm > accel_limit and desired_accel_norm > 1e-6:
+            desired_accel *= accel_limit / desired_accel_norm
+
+        jerk_blend = 0.16 + 0.32 * ease_gain
+        self.accel = self.accel * (1.0 - jerk_blend) + desired_accel * jerk_blend
+        self.velocity = self.velocity + self.accel * safe_dt
+
+        vel_norm = float(np.hypot(self.velocity[0], self.velocity[1]))
+        if vel_norm > max_speed and vel_norm > 1e-6:
+            self.velocity *= max_speed / vel_norm
+            self.accel *= 0.5
+
+        if err_norm < 5.0:
+            self.velocity *= 0.55
+            self.accel *= 0.45
+
+        self.center = cur + self.velocity * safe_dt
+        clipped_x = float(np.clip(self.center[0], min_x, max_x))
+        clipped_y = float(np.clip(self.center[1], min_y, max_y))
+        if clipped_x != float(self.center[0]):
+            self.velocity[0] = 0.0
+        if clipped_y != float(self.center[1]):
+            self.velocity[1] = 0.0
+        self.center[0] = clipped_x
+        self.center[1] = clipped_y
+        return float(self.center[0]), float(self.center[1])
+
+
 class TargetLock:
     def __init__(self, reid_sim: float = 0.5) -> None:
         self.locked_id: int | None = None
@@ -345,6 +488,51 @@ class TargetLock:
         self._update_feat(frame, xyxy[best])
         self.status = "init_pick"
         return self.locked_id, xyxy[best], True, float(confs[best])
+
+
+def stabilize_to_center(frame: np.ndarray, cx: float, cy: float,
+                        zoom: float = 1.0) -> np.ndarray:
+    h, w = frame.shape[:2]
+    tx = w * 0.5 - cx
+    ty = h * 0.5 - cy
+    matrix = np.array([[zoom, 0.0, tx * zoom + w * 0.5 * (1 - zoom)],
+                       [0.0, zoom, ty * zoom + h * 0.5 * (1 - zoom)]], dtype=np.float32)
+    return cv2.warpAffine(frame, matrix, (w, h), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+
+
+def virtual_gimbal_crop(frame: np.ndarray, cx: float, cy: float,
+                        crop_scale: float = 0.75,
+                        crop_height_ratio: float = 1.0,
+                        crop_height_px: int = 0) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    h, w = frame.shape[:2]
+    scale = float(np.clip(crop_scale, 0.25, 1.0))
+    h_ratio = float(np.clip(crop_height_ratio, 0.5, 1.0))
+    if crop_height_px > 0:
+        crop_h = int(np.clip(crop_height_px, 2, h))
+        crop_w = int(np.clip(round(crop_h * w / h), 2, w))
+    else:
+        crop_w = max(2, int(round(w * scale)))
+        crop_h = max(2, int(round(h * scale * h_ratio)))
+    half_w = crop_w // 2
+    half_h = crop_h // 2
+
+    ccx = int(round(np.clip(cx, half_w, w - (crop_w - half_w))))
+    ccy = int(round(np.clip(cy, half_h, h - (crop_h - half_h))))
+    x1 = int(ccx - half_w)
+    y1 = int(ccy - half_h)
+    x2 = int(x1 + crop_w)
+    y2 = int(y1 + crop_h)
+
+    crop = frame[y1:y2, x1:x2]
+    if crop.shape[0] != crop_h or crop.shape[1] != crop_w:
+        x1 = max(0, min(x1, w - crop_w))
+        y1 = max(0, min(y1, h - crop_h))
+        x2 = x1 + crop_w
+        y2 = y1 + crop_h
+        crop = frame[y1:y2, x1:x2]
+    out = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
+    return out, (x1, y1, x2, y2)
 
 
 def tuned_target_point_from_box(box: np.ndarray, vft_alpha: float,
@@ -611,9 +799,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--smooth-alpha", type=float, default=0.3)
     p.add_argument("--max-center-speed", type=float, default=800.0)
     p.add_argument("--max-size-rate", type=float, default=1.0)
-    p.add_argument("--hold-x-px", type=float, default=500.0)
-    p.add_argument("--hold-y-px", type=float, default=500.0)
-    p.add_argument("--hold-release", type=float, default=300.0)
+    p.add_argument("--hold-x-px", type=float, default=360.0)
+    p.add_argument("--hold-y-px", type=float, default=600.0)
+    p.add_argument("--hold-release", type=float, default=150.0)
     p.add_argument("--conf-lock", type=float, default=0.35)
     p.add_argument("--size-tol", type=float, default=0.35)
     p.add_argument("--vft-alpha", type=float, default=0.35)
