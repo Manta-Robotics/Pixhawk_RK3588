@@ -11,48 +11,30 @@ from pymavlink import mavutil
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_DIR / 'config' / 'system.config.json'
-MOTOR_CONFIG_PATH = PROJECT_DIR / 'config' / 'motor_config.json'
+EXPECTED_PARAMS = {
+    'PILOT_STEER_TYPE': 0,
+    'RC1_REVERSED': 0,
+    'RC3_REVERSED': 0,
+    'SERVO1_FUNCTION': 73,
+    'SERVO3_FUNCTION': 74,
+    'SERVO1_REVERSED': 1,
+    'SERVO3_REVERSED': 1,
+}
+INFO_PARAMS = [
+    'RCMAP_ROLL',
+    'RCMAP_THROTTLE',
+    'SERVO1_MIN',
+    'SERVO1_TRIM',
+    'SERVO1_MAX',
+    'SERVO3_MIN',
+    'SERVO3_TRIM',
+    'SERVO3_MAX',
+]
 
 
-def load_json(path: Path) -> dict:
-    with path.open('r', encoding='utf-8') as handle:
+def load_config() -> dict:
+    with CONFIG_PATH.open('r', encoding='utf-8') as handle:
         return json.load(handle)
-
-
-def build_expected_params(config: dict, motor_config: dict) -> dict[str, int]:
-    left_channel = int(config.get('rover_left_channel', 1))
-    right_channel = int(config.get('rover_right_channel', 3))
-    left_input_channel = int(config.get('rover_left_input_channel', 1))
-    right_input_channel = int(config.get('rover_right_input_channel', 3))
-    motors = {
-        int(item['channel']): item
-        for item in motor_config.get('motors', [])
-        if isinstance(item, dict) and str(item.get('channel', '')).isdigit()
-    }
-
-    expected = {
-        'PILOT_STEER_TYPE': 1,
-        'RCMAP_ROLL': left_input_channel,
-        'RCMAP_THROTTLE': right_input_channel,
-    }
-    for output_channel, input_channel, function in (
-        (left_channel, left_input_channel, 73),
-        (right_channel, right_input_channel, 74),
-    ):
-        motor = motors.get(output_channel, {})
-        expected.update({
-            f'RC{input_channel}_MIN': int(motor.get('min_pwm', 1000)),
-            f'RC{input_channel}_TRIM': int(motor.get('center_pwm', 1500)),
-            f'RC{input_channel}_MAX': int(motor.get('max_pwm', 2000)),
-            f'RC{input_channel}_REVERSED': 0,
-            f'RC{input_channel}_OPTION': 0,
-            f'SERVO{output_channel}_FUNCTION': function,
-            f'SERVO{output_channel}_REVERSED': 1 if motor.get('servo_reversed', False) else 0,
-            f'SERVO{output_channel}_MIN': int(motor.get('min_pwm', 1000)),
-            f'SERVO{output_channel}_TRIM': int(motor.get('center_pwm', 1500)),
-            f'SERVO{output_channel}_MAX': int(motor.get('max_pwm', 2000)),
-        })
-    return expected
 
 
 def param_name(raw_name) -> str:
@@ -62,18 +44,17 @@ def param_name(raw_name) -> str:
 
 
 def fetch_params(master, names, timeout=8.0):
-    unique_names = list(dict.fromkeys(names))
     values = {}
-    for name in unique_names:
+    for name in names:
         master.param_fetch_one(name)
 
     deadline = time.time() + timeout
-    while time.time() < deadline and len(values) < len(unique_names):
+    while time.time() < deadline and len(values) < len(names):
         msg = master.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
         if not msg:
             continue
         name = param_name(msg.param_id)
-        if name in unique_names:
+        if name in names:
             values[name] = msg.param_value
 
     return values
@@ -101,51 +82,30 @@ def set_param(master, name, value, timeout=5.0):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description='Check or apply Pixhawk skid-steer direction mapping.')
-    parser.add_argument(
-        '--apply',
-        action='store_true',
-        help='Disable RC reversal and apply explicit Pixhawk SERVOx_REVERSED values from motor_config.json',
-    )
+    parser = argparse.ArgumentParser(description='Check or apply Pixhawk skid-steer output mapping.')
+    parser.add_argument('--apply', action='store_true', help='Write Pixhawk skid-steer mapping and SERVO-only reversal')
     args = parser.parse_args()
 
-    config = load_json(CONFIG_PATH)
-    motor_config = load_json(MOTOR_CONFIG_PATH)
-    expected_params = build_expected_params(config, motor_config)
+    config = load_config()
     serial_port = str(config.get('serial_port', '/dev/ttyS1'))
     baud_rate = int(config.get('baud_rate', 57600))
 
-    print('Pixhawk SERVO direction mapping (all software/RC reversal disabled):')
-    active_channels = {
-        int(config.get('rover_left_channel', 1)),
-        int(config.get('rover_right_channel', 3)),
-    }
-    for motor in motor_config.get('motors', []):
-        if int(motor.get('channel', 0)) in active_channels:
-            print(f"  output {motor['channel']}: SERVO_REVERSED={int(bool(motor.get('servo_reversed', False)))}")
-
     print(f'Connecting to {serial_port} @ {baud_rate}')
     master = mavutil.mavlink_connection(serial_port, baud=baud_rate, source_system=255)
-    heartbeat = master.wait_heartbeat(timeout=10)
+    master.wait_heartbeat(timeout=10)
     print(f'Heartbeat from system={master.target_system} component={master.target_component}')
 
-    armed_flag = getattr(mavutil.mavlink, 'MAV_MODE_FLAG_SAFETY_ARMED', 128)
-    if args.apply and int(getattr(heartbeat, 'base_mode', 0) or 0) & armed_flag:
-        print('Refusing to apply motor parameters while Pixhawk is armed.', file=sys.stderr)
-        master.close()
-        return 2
-
     try:
-        all_names = list(expected_params.keys())
+        all_names = list(EXPECTED_PARAMS.keys()) + INFO_PARAMS
         before = fetch_params(master, all_names)
 
         print('Current critical params:')
-        for name in expected_params:
+        for name in EXPECTED_PARAMS:
             print(f'  {name}={before.get(name)}')
 
         if args.apply:
-            print('Applying normalized skid-steer mapping...')
-            for name, value in expected_params.items():
+            print('Applying skid-steer output mapping...')
+            for name, value in EXPECTED_PARAMS.items():
                 result = set_param(master, name, value)
                 print(f'  {name} -> {result}')
 
@@ -156,14 +116,14 @@ def main() -> int:
             print(f'  {name}={after.get(name)}')
 
         mismatches = [
-            name for name, expected in expected_params.items()
+            name for name, expected in EXPECTED_PARAMS.items()
             if round(float(after.get(name, -1))) != expected
         ]
         if mismatches:
             print(f'Mismatch remains: {", ".join(mismatches)}', file=sys.stderr)
             return 1
 
-        print('Skid-steer direction mapping is correct.')
+        print('Skid-steer output mapping is correct.')
         return 0
     finally:
         master.close()

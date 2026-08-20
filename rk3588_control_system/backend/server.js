@@ -18,7 +18,7 @@ import os from 'os';
 import http from 'http';
 import https from 'https';
 import { Bonjour } from 'bonjour-service';
-import { validateMotorConfig, validateSystemConfig } from '../scripts/validate_config.mjs';
+import { validateSystemConfig } from '../scripts/validate_config.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,10 +42,6 @@ if (configErrors.length) {
   throw new Error(`[Config] Invalid system.config.json:\n- ${configErrors.join('\n- ')}`);
 }
 const motorConfig = readJsonFile('config/motor_config.json', { motors: [] });
-const motorConfigErrors = validateMotorConfig(motorConfig, config);
-if (motorConfigErrors.length) {
-  throw new Error(`[Config] Invalid motor_config.json:\n- ${motorConfigErrors.join('\n- ')}`);
-}
 
 const LOGS_DIR = path.resolve(PROJECT_ROOT, config.logs_dir || './logs');
 const SYSTEM_LOG_FILE = path.join(LOGS_DIR, 'system.log');
@@ -73,13 +69,12 @@ const PWM_CENTER = Number(config.default_motor_pwm || 1500);
 
 const ROVER_THROTTLE_MIN = Number(config.rover_throttle_min ?? -100);
 const ROVER_THROTTLE_MAX = Number(config.rover_throttle_max ?? 100);
-const ROVER_THROTTLE_SIGN = Number(config.rover_throttle_sign ?? 1) < 0 ? -1 : 1;
 const ROVER_STEERING_MIN = Number(config.rover_steering_min ?? -45);
 const ROVER_STEERING_MAX = Number(config.rover_steering_max ?? 45);
 const ROVER_LEFT_CHANNEL = Number(config.rover_left_channel ?? 1);
 const ROVER_RIGHT_CHANNEL = Number(config.rover_right_channel ?? 3);
-const ROVER_LEFT_INPUT_CHANNEL = Number(config.rover_left_input_channel ?? 1);
-const ROVER_RIGHT_INPUT_CHANNEL = Number(config.rover_right_input_channel ?? 3);
+const ROVER_STEERING_INPUT_CHANNEL = Number(config.rover_steering_input_channel ?? 1);
+const ROVER_THROTTLE_INPUT_CHANNEL = Number(config.rover_throttle_input_channel ?? 3);
 const IMU_CALIBRATION_POSITIONS = {
   1: 'LEVEL',
   2: 'LEFT',
@@ -649,8 +644,6 @@ const systemState = {
     ch1: PWM_CENTER, ch2: PWM_CENTER, ch3: PWM_CENTER, ch4: PWM_CENTER,
     ch5: PWM_CENTER, ch6: PWM_CENTER, ch7: PWM_CENTER, ch8: PWM_CENTER
   },
-  controlTrace: null,
-  motorConfigAudit: null,
   connectivity: readConnectivityState(),
   accessUrls: [],
   camera: readCameraState(readConnectivityState()),
@@ -2410,8 +2403,21 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
   }
 
   const { channel: validChannel, pwm: validPwm } = validation;
+  const leftKey = `ch${ROVER_LEFT_CHANNEL}`;
+  const rightKey = `ch${ROVER_RIGHT_CHANNEL}`;
+
   systemState.motorStatus[`ch${validChannel}`] = validPwm;
-  sendMavlinkCommand('MOTOR_CONTROL', { channel: validChannel, pwm: validPwm });
+  const leftPwm = toPwm(systemState.motorStatus[leftKey] ?? PWM_CENTER);
+  const rightPwm = toPwm(systemState.motorStatus[rightKey] ?? PWM_CENTER);
+  const throttlePwm = toPwm((leftPwm + rightPwm) / 2);
+  const steeringPwm = toPwm(PWM_CENTER + (rightPwm - leftPwm) / 2);
+
+  sendMavlinkCommand('ROVER_DRIVE', {
+    throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
+    throttlePwm,
+    steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
+    steeringPwm
+  });
 
   io.emit('motor_update', {
     channel: validChannel,
@@ -2421,7 +2427,7 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
 
   addLog(
     'MOTOR',
-    `${sourceLabel} set channel ${validChannel} pwm=${validPwm}us`
+    `${sourceLabel} set Main${validChannel}=${validPwm}us via Pixhawk mixer (left=${leftPwm}, right=${rightPwm})`
   );
   return { ok: true };
 }
@@ -2432,17 +2438,20 @@ function normalizeRoverControl(input = {}) {
 
   const throttle = clamp(throttleRaw, ROVER_THROTTLE_MIN, ROVER_THROTTLE_MAX);
   const steering = clamp(steeringRaw, ROVER_STEERING_MIN, ROVER_STEERING_MAX);
-  const signedThrottle = throttle * ROVER_THROTTLE_SIGN;
 
   const throttleScale = (PWM_MAX - PWM_CENTER) / Math.max(Math.abs(ROVER_THROTTLE_MIN), Math.abs(ROVER_THROTTLE_MAX));
   const steeringScale = (PWM_MAX - PWM_CENTER) / Math.max(Math.abs(ROVER_STEERING_MIN), Math.abs(ROVER_STEERING_MAX));
 
-  const leftPwm = toPwm(PWM_CENTER + signedThrottle * throttleScale - steering * steeringScale);
-  const rightPwm = toPwm(PWM_CENTER + signedThrottle * throttleScale + steering * steeringScale);
+  const throttleInputPwm = toPwm(PWM_CENTER + throttle * throttleScale);
+  const steeringInputPwm = toPwm(PWM_CENTER + steering * steeringScale);
+  const leftPwm = toPwm(PWM_CENTER + throttle * throttleScale - steering * steeringScale);
+  const rightPwm = toPwm(PWM_CENTER + throttle * throttleScale + steering * steeringScale);
 
   return {
     throttle,
     steering,
+    throttleInputPwm,
+    steeringInputPwm,
     leftPwm,
     rightPwm,
     clamped: throttle !== throttleRaw || steering !== steeringRaw
@@ -2454,10 +2463,10 @@ function applyRoverControl(controlInput = {}, sourceLabel = 'WEB') {
   sendMavlinkCommand('ROVER_DRIVE', {
     throttle: normalized.throttle,
     steering: normalized.steering,
-    leftChannel: ROVER_LEFT_INPUT_CHANNEL,
-    rightChannel: ROVER_RIGHT_INPUT_CHANNEL,
-    leftPwm: normalized.leftPwm,
-    rightPwm: normalized.rightPwm
+    throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
+    steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
+    throttlePwm: normalized.throttleInputPwm,
+    steeringPwm: normalized.steeringInputPwm
   });
 
   systemState.roverControl = {
@@ -2662,37 +2671,6 @@ telemetrySocket.on('message', (rawMessage) => {
       return;
     }
 
-    if (packet.type === 'control_trace' && packet.payload) {
-      systemState.controlTrace = {
-        ...packet.payload,
-        timestamp: new Date().toISOString()
-      };
-      io.emit('motor_control_trace', systemState.controlTrace);
-      addLog('MOTOR_TRACE', JSON.stringify(systemState.controlTrace));
-      return;
-    }
-
-    if (packet.type === 'motor_config' && packet.payload) {
-      const previousAudit = systemState.motorConfigAudit
-        ? JSON.stringify({
-            directionPolicy: systemState.motorConfigAudit.directionPolicy,
-            applied: systemState.motorConfigAudit.applied,
-            params: systemState.motorConfigAudit.params,
-            servoReversed: systemState.motorConfigAudit.servoReversed
-          })
-        : '';
-      const nextAudit = JSON.stringify(packet.payload);
-      systemState.motorConfigAudit = {
-        ...packet.payload,
-        timestamp: new Date().toISOString()
-      };
-      io.emit('motor_config_audit', systemState.motorConfigAudit);
-      if (previousAudit !== nextAudit) {
-        addLog('MOTOR_CONFIG', JSON.stringify(systemState.motorConfigAudit));
-      }
-      return;
-    }
-
     if (packet.type === 'log' && packet.payload && packet.payload.message) {
       addLog(packet.payload.level || 'INFO', `[Bridge] ${packet.payload.message}`);
     }
@@ -2734,33 +2712,9 @@ app.get('/api/status', (req, res) => {
       right: ROVER_RIGHT_CHANNEL
     },
     roverInputs: {
-      left: ROVER_LEFT_INPUT_CHANNEL,
-      right: ROVER_RIGHT_INPUT_CHANNEL
+      steering: ROVER_STEERING_INPUT_CHANNEL,
+      throttle: ROVER_THROTTLE_INPUT_CHANNEL
     }
-  });
-});
-
-app.get('/api/motor/diagnostics', (_req, res) => {
-  const activeMotors = (motorConfig.motors || [])
-    .filter((motor) => enabledChannels.has(Number(motor.channel)))
-    .map((motor) => ({
-      channel: Number(motor.channel),
-      name: motor.name,
-      softwareReversed: false,
-      servoReversedAtPixhawk: Boolean(motor.servo_reversed),
-      minPwm: Number(motor.min_pwm),
-      centerPwm: Number(motor.center_pwm),
-      maxPwm: Number(motor.max_pwm)
-    }));
-
-  res.json({
-    success: true,
-    directionPolicy: 'no-reversal-20260715d',
-    convention: 'logical PWM is passed unchanged; software, RC input, and Pixhawk SERVO reversal are all disabled',
-    activeMotors,
-    bridgeConfig: systemState.motorConfigAudit,
-    lastControlTrace: systemState.controlTrace,
-    servoOutputs: systemState.telemetry.servoOutputs
   });
 });
 
@@ -3289,8 +3243,10 @@ app.post('/api/emergency/stop', (req, res) => {
   sendMavlinkCommand('EMERGENCY_STOP', {
     pwm: PWM_CENTER,
     channels: [...enabledChannels],
-    leftChannel: ROVER_LEFT_INPUT_CHANNEL,
-    rightChannel: ROVER_RIGHT_INPUT_CHANNEL
+    throttleChannel: ROVER_THROTTLE_INPUT_CHANNEL,
+    steeringChannel: ROVER_STEERING_INPUT_CHANNEL,
+    throttlePwm: PWM_CENTER,
+    steeringPwm: PWM_CENTER
   });
   sendMavlinkCommand('DISARM');
   systemState.telemetry.armed = false;
@@ -3391,9 +3347,6 @@ io.on('connection', (socket) => {
   });
 });
 
-let bonjour = null;
-let mantaBonjourService = null;
-
 httpServer.listen(WEB_PORT, WEB_HOST, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════╗
@@ -3430,6 +3383,9 @@ Press Ctrl+C to stop
     addLog('WARN', `Bonjour service unavailable: ${error.message}`);
   }
 });
+
+let bonjour = null;
+let mantaBonjourService = null;
 
 let shutdownStarted = false;
 
