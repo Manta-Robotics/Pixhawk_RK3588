@@ -6,7 +6,7 @@ Before=manta-gimbal-stream.service manta-backend.service
 
 [Service]
 Type=oneshot
-ExecStart=__PROJECT_DIR__/scripts/manta_gimbal_route.sh
+ExecStart=/bin/bash __PROJECT_DIR__/scripts/manta_gimbal_route.sh
 RemainAfterExit=yes
 
 [Install]
