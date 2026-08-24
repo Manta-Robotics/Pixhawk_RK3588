@@ -20,6 +20,7 @@ SERVICES=(
     manta-camera.service
     manta-gimbal-route.service
     manta-gimbal-stream.service
+    manta-mediamtx.service
     manta-hotspot.service
     manta-captive-portal.service
     manta-bluetooth-pan.service

@@ -6,7 +6,9 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 mkdir -p logs
 
-if [ -d "$HOME/.local/node20/bin" ]; then
+if [ -d /opt/node20/bin ]; then
+    export PATH="/opt/node20/bin:$PATH"
+elif [ -d "$HOME/.local/node20/bin" ]; then
     export PATH="$HOME/.local/node20/bin:$PATH"
 fi
 

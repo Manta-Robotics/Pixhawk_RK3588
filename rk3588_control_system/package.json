@@ -23,16 +23,21 @@
   "author": "Manta Robotic",
   "license": "MIT",
   "dependencies": {
-    "body-parser": "^1.20.2",
-    "bonjour-service": "^1.4.3",
-    "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "socket.io": "^4.5.4"
+    "body-parser": "^1.20.6",
+    "bonjour-service": "^1.4.4",
+    "express": "^4.22.2",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "nodemon": "^3.1.14"
+  },
+  "overrides": {
+    "engine.io": "^6.6.9",
+    "socket.io-adapter": "^2.5.8",
+    "socket.io-parser": "^4.2.7",
+    "ws": "^8.21.3"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }

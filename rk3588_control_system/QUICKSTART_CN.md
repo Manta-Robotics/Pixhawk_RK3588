@@ -1,19 +1,39 @@
 # 快速开始
 
-项目统一以 `/root/Pixhawk_RK3588/rk3588_control_system` 为运行目录，以 systemd 为唯一服务管理方式。
+项目以 Git 仓库所在目录为运行目录，不绑定固定绝对路径；systemd 是唯一服务管理方式。仓库部署的是 MANTA 应用，不负责烧写 RK3588 的 Ubuntu 系统镜像。新板需先安装兼容的 LubanCat Ubuntu 22.04/24.04 aarch64 镜像并联网。
 
 ```bash
-cd /root/Pixhawk_RK3588/rk3588_control_system
-npm run check
-npm test
-bash quickstart.sh
+git clone <你的仓库地址> Pixhawk_RK3588
+cd Pixhawk_RK3588/rk3588_control_system
+sudo bash quickstart.sh
 ```
+
+安装会为每块板单独生成热点密码和蓝牙 PIN，保存到权限为 `0600` 的 `/etc/manta/manta.env`；Git 中不保存通用密码。脚本只安装并启用服务，不会启动 MANTA 服务或自动重启板子。
+
+网页地图使用 Pixhawk 的 GPS（WGS84）并转换到高德 GCJ-02。高德要求 Web 端 JS API Key 与安全密钥；将它们只写入板端 `/etc/manta/manta.env`：
+
+```bash
+sudoedit /etc/manta/manta.env
+# MANTA_AMAP_JS_KEY=你的Web端JS_API_Key
+# MANTA_AMAP_SECURITY_CODE=你的安全密钥
+```
+
+安全密钥由板端 `/_AMapService` 代理使用，不会通过 `/api/map/config` 返回。未配置或无法联网时，页面自动显示本地轨迹图。
+
+只做无副作用检查：
+
+```bash
+bash quickstart.sh --check-only
+```
+
+已有依赖和离线包时可使用 `--offline`。如果暂不确认相机/UART overlay，增加 `--skip-boot-config`。
 
 安装完成后检查：
 
 ```bash
 bash scripts/status_report.sh
-systemctl status manta-backend.service manta-bridge.service manta-gimbal-stream.service
+sudo bash scripts/python_service.sh scripts/manta_doctor.py --installed
+systemctl status manta-backend.service manta-bridge.service manta-gimbal-stream.service manta-mediamtx.service
 ```
 
 手机连接 `Manta-Control`，打开 `http://10.42.0.1:3000`。

@@ -45,14 +45,14 @@ TX/RX 必须交叉连接，所有设备必须共地。当前串口配置为：
 
 ## 3. 安装
 
-要求 Ubuntu 22.04、root 权限、Node.js 18+、Python 3、FFmpeg 和 NetworkManager。
+要求兼容 LubanCat RK3588 的 Ubuntu 22.04/24.04 aarch64 系统和 root 权限。安装器会配置 Node.js 20+、项目 Python 虚拟环境、FFmpeg、NetworkManager 与 MediaMTX。此仓库安装应用层，不能替代厂家系统镜像烧录。
 
 ```bash
 cd /root/Pixhawk_RK3588/rk3588_control_system
 bash quickstart.sh
 ```
 
-安装脚本会验证配置、安装依赖和八个 systemd 服务。UART/摄像头 overlay 首次变更后需要由操作人员确认并手动重启板子，脚本不会自动重启。
+安装脚本会验证配置、安装依赖和九个 systemd 服务，并为每块板生成独立的 Wi-Fi/蓝牙凭据到 `/etc/manta/manta.env`。UART/摄像头 overlay 首次变更后需要由操作人员确认并手动重启板子；脚本不会启动 MANTA 服务、重启服务或自动重启板子。无硬件副作用检查使用 `bash quickstart.sh --check-only`；暂不改 overlay 使用 `--skip-boot-config`。
 
 ## 4. 启停与状态
 
@@ -77,6 +77,8 @@ sudo journalctl -u manta-backend.service -f
 | SSH/VSCode | SSH Host `manta` |
 
 手机连接 `Manta-Control` 后，系统连通性探测会返回成功，避免 iPhone/iPad 将热点标记为受限并中断下载。请在 Safari 中打开 `http://10.42.0.1:3000`。
+
+地图页的位置只来自 Pixhawk MAVLink `GPS_RAW_INT`/`GLOBAL_POSITION_INT`，有效性以 `fix_type >= 2` 为准。高德底图需要在 `/etc/manta/manta.env` 配置 `MANTA_AMAP_JS_KEY` 和 `MANTA_AMAP_SECURITY_CODE`；原始 WGS84 GPS 会通过高德 `AMap.convertFrom(..., "gps")` 转为 GCJ-02。安全密钥留在板端代理，断网或未配置时自动回退本地轨迹图。
 
 ## 6. 云台视频与录像
 
@@ -111,7 +113,7 @@ npm run check
 npm run maintenance
 ```
 
-`npm run check:config` 只校验主配置。`npm run check` 会统一检查 JavaScript、Python、Shell、JSON 和 systemd 服务模板；`npm run maintenance` 会先运行自动化测试，再运行全部静态检查。配置校验覆盖串口、端口、热点密码、RTSP 地址、手机预览参数、录像编码器和跟踪保持区。
+`npm run check:config` 只校验主配置。`npm run check` 会在对应解释器可用时检查 JavaScript、Python、Shell、JSON 和 systemd 服务模板；跳过项会明确输出。`npm run maintenance` 会先运行自动化测试，再运行全部静态检查。配置校验覆盖串口、端口、热点密码占位符、RTSP 地址、手机预览参数、录像编码器和跟踪保持区。
 
 ## 9. 目录职责
 

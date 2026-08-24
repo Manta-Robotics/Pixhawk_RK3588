@@ -1,7 +1,7 @@
 [Unit]
 Description=Manta MAVLink Bridge
-After=network-online.target
-Wants=network-online.target
+After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
@@ -9,7 +9,7 @@ User=__RUN_USER__
 WorkingDirectory=__PROJECT_DIR__
 Environment=PYTHONUNBUFFERED=1
 UMask=0027
-ExecStart=/usr/bin/python3 __PROJECT_DIR__/backend/mavlink_bridge.py
+ExecStart=/bin/bash __PROJECT_DIR__/scripts/python_service.sh backend/mavlink_bridge.py
 Restart=always
 RestartSec=2
 TimeoutStopSec=10

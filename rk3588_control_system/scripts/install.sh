@@ -1,137 +1,103 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-################################################################################
-# RK3588 Pixhawk Control System - Ubuntu Installation Script
-# Run this script first to set up all dependencies
-################################################################################
-
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║  RK3588 Pixhawk Control System - Ubuntu Setup              ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-
-set -e  # Exit on error
+set -Eeuo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$PROJECT_DIR"
+OFFLINE=0
 
-# Prefer the board-wide Node 20 install, then the current user's local install.
-for node_dir in "/opt/node20/bin" "$HOME/.local/node20/bin"; do
-    if [ -d "$node_dir" ]; then
-        export PATH="$node_dir:$PATH"
-        break
-    fi
+for argument in "$@"; do
+    case "$argument" in
+        --offline) OFFLINE=1 ;;
+        *) echo "[install] Unknown argument: $argument" >&2; exit 2 ;;
+    esac
 done
 
-# Check if running on Ubuntu
-if ! grep -q "Ubuntu" /etc/os-release; then
-    echo "⚠️  This script is designed for Ubuntu. Please run on Ubuntu 22.04 LTS"
+if [[ $EUID -ne 0 ]]; then
+    echo "[install] Run as root: sudo bash scripts/install.sh [--offline]" >&2
     exit 1
 fi
 
-echo ""
-echo "📦 Step 1: Update system packages"
-sudo apt-get update
-
-echo ""
-echo "📦 Step 2: Install Node.js and npm (LTS version)"
-if ! command -v node &> /dev/null; then
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-else
-    echo "✅ Node.js already installed: $(node --version)"
+if ! grep -qi "Ubuntu" /etc/os-release; then
+    echo "[install] Ubuntu is required." >&2
+    exit 1
 fi
 
-echo ""
-echo "📦 Step 3: Install Python3 and pip"
-sudo apt-get install -y python3 python3-pip python3-dev
-python3 --version
-
-echo ""
-echo "📦 Step 4: Install system dependencies for serial communication"
-sudo apt-get install -y \
-    build-essential \
-    libssl-dev \
-    libffi-dev \
-    python3-setuptools \
-    libopenblas-dev \
-    libatlas-base-dev \
-    libjpeg-dev \
-    libtiff5 \
-    libopenjp2-7
-
-echo ""
-echo "📦 Step 5: Install Bluetooth tools"
-sudo apt-get install -y \
-    bluez \
-    bluez-tools \
-    rfkill
-
-echo ""
-echo "📦 Step 6: Install serial port tools for debugging"
-sudo apt-get install -y \
-    minicom \
-    screen \
-    picocom \
-    usbutils \
-    lsof
-
-echo ""
-echo "📦 Step 7: Set up serial port permissions"
-sudo usermod -a -G dialout $USER
-if getent group gpio > /dev/null; then
-    sudo usermod -a -G gpio $USER
-else
-    echo "ℹ️  Group 'gpio' not found on this system, skipping"
+if [[ "$(uname -m)" != "aarch64" ]]; then
+    echo "[install] Warning: target hardware is aarch64; detected $(uname -m)." >&2
 fi
-echo "✅ Serial port groups added (logout and login required for effect)"
 
-echo ""
-echo "📦 Step 8: Install Node.js dependencies"
-npm install
+cd "$PROJECT_DIR"
+RUN_USER="${MANTA_RUN_USER:-${SUDO_USER:-root}}"
 
-echo ""
-echo "📦 Step 9: Install Python dependencies"
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
+SYSTEM_PACKAGES=(
+    build-essential ca-certificates curl git openssl
+    python3 python3-dev python3-pip python3-setuptools python3-venv python3-numpy python3-opencv python3-dbus python3-gi
+    libssl-dev libffi-dev libopenblas-dev libjpeg-dev libopenjp2-7
+    bluez bluez-tools rfkill network-manager dnsmasq iw
+    minicom picocom screen usbutils lsof v4l-utils ffmpeg
+)
 
-echo ""
-echo "📦 Step 10: Create necessary directories"
-mkdir -p logs
-mkdir -p frontend/assets/map
-mkdir -p data
+if [[ $OFFLINE -eq 0 ]]; then
+    echo "[install] Installing Ubuntu packages"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${SYSTEM_PACKAGES[@]}"
+else
+    echo "[install] Offline mode: skipping apt repositories"
+fi
 
-echo ""
-echo "📦 Step 11: Set up Bluetooth service"
-sudo systemctl enable bluetooth
-sudo systemctl restart bluetooth
+node_major=0
+if command -v node >/dev/null 2>&1; then
+    node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
+fi
+if [[ ! "$node_major" =~ ^[0-9]+$ || $node_major -lt 20 ]]; then
+    if [[ $OFFLINE -eq 1 ]]; then
+        echo "[install] Node.js 20+ is required in offline mode." >&2
+        exit 1
+    fi
+    echo "[install] Installing Node.js 20 LTS"
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+fi
 
-echo ""
-echo "════════════════════════════════════════════════════════════"
-echo "✅ Installation Complete!"
-echo "════════════════════════════════════════════════════════════"
-echo ""
-echo "📝 Next steps:"
-echo "  1. Edit config/system.config.json - Set correct serial port"
-echo "  2. Run: bash start.sh"
-echo "  3. Open browser: http://localhost:3000"
-echo ""
-echo "⚙️ Configuration:"
-echo "  Serial Port: /dev/ttyUSB0 (check with: ls /dev/tty*)"
-echo "  Baud Rate: 57600"
-echo "  Web Port: 3000"
-echo ""
-echo "🔧 To find your serial port:"
-echo "  $ dmesg | grep -i tty"
-echo "  $ ls -la /dev/tty* | grep USB"
-echo ""
-echo "💡 To test serial connection:"
-echo "  $ minicom -D /dev/ttyUSB0 -b 57600"
-echo ""
-echo "📱 Bluetooth pairing:"
-echo "  $ bluetoothctl"
-echo "  > power on"
-echo "  > scan on"
-echo "  > pair <MAC_ADDRESS>"
-echo "  > connect <MAC_ADDRESS>"
-echo ""
-echo "🚀 System is ready for launch!"
+echo "[install] Installing deterministic Node dependencies"
+npm ci
+
+echo "[install] Creating project Python environment"
+if [[ ! -x "$PROJECT_DIR/.venv/bin/python" ]]; then
+    python3 -m venv --system-site-packages "$PROJECT_DIR/.venv"
+fi
+
+PIP_ARGS=(install --upgrade-strategy only-if-needed -r "$PROJECT_DIR/requirements.txt")
+if [[ $OFFLINE -eq 1 ]]; then
+    WHEELHOUSE="${MANTA_WHEELHOUSE:-$PROJECT_DIR/wheelhouse}"
+    if [[ ! -d "$WHEELHOUSE" ]]; then
+        echo "[install] Offline wheelhouse not found: $WHEELHOUSE" >&2
+        exit 1
+    fi
+    PIP_ARGS+=(--no-index --find-links "$WHEELHOUSE")
+else
+    "$PROJECT_DIR/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
+fi
+"$PROJECT_DIR/.venv/bin/python" -m pip "${PIP_ARGS[@]}"
+
+install -d -o "$RUN_USER" -g "$RUN_USER" \
+    "$PROJECT_DIR/logs" \
+    "$PROJECT_DIR/data" \
+    "$PROJECT_DIR/recordings/gimbal" \
+    "$PROJECT_DIR/frontend/assets/map"
+
+if getent group dialout >/dev/null; then
+    usermod -a -G dialout "$RUN_USER"
+fi
+if getent group gpio >/dev/null; then
+    usermod -a -G gpio "$RUN_USER"
+fi
+if getent group video >/dev/null; then
+    usermod -a -G video "$RUN_USER"
+fi
+
+systemctl enable bluetooth.service NetworkManager.service
+
+echo "[install] Runtime dependencies installed; services were not started."
+echo "[install] Pixhawk default: /dev/ttyS1 @ 115200"
+echo "[install] Gimbal default : /dev/ttyS3 @ 115200"

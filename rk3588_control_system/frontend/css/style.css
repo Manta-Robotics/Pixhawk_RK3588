@@ -927,12 +927,41 @@ a {
 }
 
 .map-canvas {
+    display: block;
     width: 100%;
     min-height: 480px;
     border-radius: 16px;
     border: 1px solid rgba(126, 176, 210, 0.22);
     overflow: hidden;
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.map-stack {
+    position: relative;
+    min-height: 480px;
+    border-radius: 16px;
+}
+
+.map-stack .map-canvas,
+.map-stack .amap-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.map-stack .amap-canvas {
+    display: none;
+    overflow: hidden;
+    border-radius: inherit;
+}
+
+.map-stack[data-provider="amap"] .amap-canvas {
+    display: block;
+}
+
+.map-stack[data-provider="amap"] .map-canvas {
+    display: none;
 }
 
 .horizon-shell {
@@ -1504,6 +1533,10 @@ a {
     }
 
     .map-canvas {
+        min-height: 360px;
+    }
+
+    .map-stack {
         min-height: 360px;
     }
 }

@@ -42,7 +42,7 @@ def load_config():
         "dhcp_end": str(pan.get("dhcp_end", "10.43.0.80")),
         "discoverable": bool(pan.get("discoverable", True)),
         "pairable": bool(pan.get("pairable", True)),
-        "pin": str(cfg.get("security", {}).get("pin", "1234")),
+        "pin": str(os.environ.get("MANTA_BLUETOOTH_PIN") or cfg.get("security", {}).get("pin", "CHANGE_ME_AT_INSTALL")),
     }
 
 

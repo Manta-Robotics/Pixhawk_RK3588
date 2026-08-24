@@ -1,7 +1,7 @@
 [Unit]
 Description=Manta WebRTC Low-Latency Video Relay
-After=network-online.target manta-gimbal-route.service
-Wants=network-online.target
+After=network.target manta-gimbal-route.service
+Wants=network.target
 
 [Service]
 Type=simple
@@ -18,4 +18,3 @@ ReadWritePaths=__PROJECT_DIR__/logs
 
 [Install]
 WantedBy=multi-user.target
-

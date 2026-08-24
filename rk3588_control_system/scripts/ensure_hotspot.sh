@@ -6,7 +6,6 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
 ACTION="${1:-start}"
 HOTSPOT_WAIT_SECONDS="${HOTSPOT_WAIT_SECONDS:-20}"
-HOTSPOT_DEFAULT_PASSWORD="manta8888"
 
 eval "$(python3 - "$CONFIG_FILE" <<'PY'
 import json
@@ -19,7 +18,7 @@ values = {
     'HOTSPOT_ENABLED': '1' if hotspot.get('enabled', True) else '0',
     'HOTSPOT_CONNECTION_NAME': hotspot.get('connection_name', 'Manta-Control-Hotspot'),
     'HOTSPOT_SSID': hotspot.get('ssid', 'Manta-Control'),
-    'HOTSPOT_PASSWORD': hotspot.get('password', 'manta8888'),
+    'HOTSPOT_PASSWORD': hotspot.get('password', 'CHANGE_ME_AT_INSTALL'),
     'HOTSPOT_INTERFACE': hotspot.get('interface', 'p2p0'),
     'HOTSPOT_FALLBACK_INTERFACE': hotspot.get('fallback_interface', 'wlan0'),
     'HOTSPOT_BAND': hotspot.get('band', 'bg'),
@@ -31,6 +30,8 @@ for key, value in values.items():
     print(f"{key}={shlex.quote(str(value))}")
 PY
 )"
+
+HOTSPOT_PASSWORD="${MANTA_HOTSPOT_PASSWORD:-$HOTSPOT_PASSWORD}"
 
 if [[ "$HOTSPOT_ENABLED" != "1" ]]; then
     echo "[hotspot] Disabled in config, nothing to do."
@@ -89,9 +90,9 @@ if ! nmcli -t -f NAME connection show | grep -Fxq "$HOTSPOT_CONNECTION_NAME"; th
     nmcli connection add type wifi ifname "$HOTSPOT_IFACE" con-name "$HOTSPOT_CONNECTION_NAME" ssid "$HOTSPOT_SSID" autoconnect yes >/dev/null
 fi
 
-if [[ ${#HOTSPOT_PASSWORD} -lt 8 ]]; then
-    echo "[hotspot] Configured password is shorter than WPA allows; using ${HOTSPOT_DEFAULT_PASSWORD}." >&2
-    HOTSPOT_PASSWORD="$HOTSPOT_DEFAULT_PASSWORD"
+if [[ "$HOTSPOT_PASSWORD" == "CHANGE_ME_AT_INSTALL" || ${#HOTSPOT_PASSWORD} -lt 8 ]]; then
+    echo "[hotspot] A per-device WPA password is required in /etc/manta/manta.env." >&2
+    exit 1
 fi
 
 nmcli connection modify "$HOTSPOT_CONNECTION_NAME" \

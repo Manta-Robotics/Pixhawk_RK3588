@@ -32,7 +32,7 @@
         downloading: false,
         logFilter: "all",
         osdEnabled: true,
-        gps: { satellites: 0, hdop: null, estimated: true },
+        gps: { satellites: 0, hdop: null, fixType: 0, estimated: true },
         calibrating: false,
         calibrationStarted: false,
         calibrationStepCode: null,
@@ -212,6 +212,7 @@
             if (telemetry.gps) {
                 state.gps.satellites = Math.max(0, Number(telemetry.gps.satellites) || 0);
                 state.gps.hdop = Number.isFinite(Number(telemetry.gps.hdop)) ? Number(telemetry.gps.hdop) : null;
+                state.gps.fixType = Math.max(0, Number(telemetry.gps.fixType) || 0);
                 state.gps.estimated = true;
             }
             if (telemetry.imuCalibration) handleImuCalibrationTelemetry(telemetry.imuCalibration);
@@ -288,7 +289,7 @@
         if (!state.connected) {
             card.dataset.state = "waiting";
             $("#gpsStatus").textContent = localize("等待设备连接", "Waiting for device");
-        } else if (satellites >= 4) {
+        } else if (Number(state.gps.fixType) >= 2) {
             card.dataset.state = "available";
             $("#gpsStatus").textContent = state.transportMode === "mock"
                 ? localize("GPS 可用（模拟）", "GPS available (simulated)")

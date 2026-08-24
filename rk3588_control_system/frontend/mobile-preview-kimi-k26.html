@@ -756,7 +756,7 @@ var $=function(s,r){return(r||document).querySelector(s)};
 var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
 var shell=$("#appShell");
 var isLocalPreview=location.protocol==="file:"||/^(4173|4175)$/.test(location.port);
-var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",runningTrackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
+var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",runningTrackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,fixType:0,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
 var logEntries=[];
 var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false,mediaFilter="all";
 var transport=null,liveRecordings=[],gimbalModeBusy=false,gimbalWebrtcReader=null,gimbalWebrtcFallbackTimer=null,gimbalWebrtcFallbackLogged=false;
@@ -1229,7 +1229,7 @@ function renderGpsStatus(){
   var card=$("#gpsSourceCard");if(!card)return;
   var sats=Math.max(0,Number(state.gps.satellites)||0);
   if(!state.connected){card.dataset.state="waiting";$("#gpsStatus").textContent=localize("等待设备连接","Waiting for device");}
-  else if(sats>=4){card.dataset.state="available";$("#gpsStatus").textContent=localize("GPS 可用（模拟）","GPS available (simulated)");}
+  else if(Number(state.gps.fixType)>=2){card.dataset.state="available";$("#gpsStatus").textContent=localize("GPS 可用（模拟）","GPS available (simulated)");}
   else{card.dataset.state="unavailable";$("#gpsStatus").textContent=localize("GPS 暂不可用","GPS currently unavailable");}
   var label=sats+localize(" 颗卫星"," satellites");
   if(state.gps.hdop!==null&&Number.isFinite(Number(state.gps.hdop)))label+=" · HDOP "+Number(state.gps.hdop).toFixed(1);
@@ -1401,7 +1401,7 @@ function startMockTelemetry(){
     state.speed=Math.hypot(state.vector.x,state.vector.y)*2.2;
     state.temperature=45+Math.sin(elapsed/18)*2;
     state.attitude={roll:Math.sin(elapsed/4)*2.2,pitch:Math.cos(elapsed/5)*1.4,yaw:(184+elapsed*0.7)%360};
-    state.gps={satellites:9,hdop:1.2,estimated:true};
+    state.gps={satellites:9,hdop:1.2,fixType:3,estimated:true};
     renderTelemetry();renderGpsStatus();
   },500);
 }

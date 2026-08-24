@@ -2,6 +2,7 @@ logs/
 *.pyc
 __pycache__/
 node_modules/
+.venv/
 .vscode/
 recordings/
 wheelhouse*/
@@ -10,8 +11,10 @@ wheelhouse*/
 .env
 .coverage
 *.tmp
+vendor/*.tar.gz
 
 # Manta iPad app build artifacts (large binaries)
 rk3588_control_system/MantaApp-iPad-*.zip
 rk3588_control_system/MantaApp.swiftpm/
-rk3588_control_system/frontend/assets/
+# Runtime-generated map caches may be large, but shipped UI assets must stay tracked.
+rk3588_control_system/frontend/assets/map/

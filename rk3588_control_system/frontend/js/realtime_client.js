@@ -17,6 +17,16 @@
         return Number.isFinite(parsed) ? parsed : fallback;
     }
 
+    function mergeNullableNumber(source, key, fallback) {
+        if (!source || !Object.prototype.hasOwnProperty.call(source, key)) {
+            return fallback;
+        }
+        if (source[key] === null || source[key] === "") {
+            return null;
+        }
+        return asNumber(source[key], fallback);
+    }
+
     function deepMergeTelemetry(previous, incoming) {
         var next = {
             position: Object.assign({}, previous.position),
@@ -37,6 +47,10 @@
                 next.position.lat = asNumber(incoming.position.lat, next.position.lat);
                 next.position.lon = asNumber(incoming.position.lon, next.position.lon);
                 next.position.alt = asNumber(incoming.position.alt, next.position.alt);
+                if (typeof incoming.position.source === "string") {
+                    next.position.source = incoming.position.source;
+                }
+                next.position.updatedAt = mergeNullableNumber(incoming.position, "updatedAt", next.position.updatedAt);
             }
             if (incoming.attitude) {
                 next.attitude.roll = asNumber(incoming.attitude.roll, next.attitude.roll);
@@ -67,6 +81,15 @@
             if (incoming.gps) {
                 next.gps.satellites = Math.max(0, asNumber(incoming.gps.satellites, next.gps.satellites));
                 next.gps.hdop = asNumber(incoming.gps.hdop, next.gps.hdop);
+                next.gps.fixType = Math.max(0, asNumber(incoming.gps.fixType, next.gps.fixType));
+                next.gps.latitude = asNumber(incoming.gps.latitude, next.gps.latitude);
+                next.gps.longitude = asNumber(incoming.gps.longitude, next.gps.longitude);
+                next.gps.altitude = asNumber(incoming.gps.altitude, next.gps.altitude);
+                next.gps.horizontalAccuracy = mergeNullableNumber(incoming.gps, "horizontalAccuracy", next.gps.horizontalAccuracy);
+                next.gps.verticalAccuracy = mergeNullableNumber(incoming.gps, "verticalAccuracy", next.gps.verticalAccuracy);
+                next.gps.groundSpeed = mergeNullableNumber(incoming.gps, "groundSpeed", next.gps.groundSpeed);
+                next.gps.course = mergeNullableNumber(incoming.gps, "course", next.gps.course);
+                next.gps.updatedAt = mergeNullableNumber(incoming.gps, "updatedAt", next.gps.updatedAt);
             }
             if (incoming.imuCalibration && typeof incoming.imuCalibration === "object") {
                 if (typeof incoming.imuCalibration.active === "boolean") {
@@ -150,13 +173,25 @@
             host: "10.42.0.1"
         },
         telemetry: {
-            position: { lat: 0, lon: 0, alt: 0 },
+            position: { lat: 0, lon: 0, alt: 0, source: "", updatedAt: null },
             attitude: { roll: 0, pitch: 0, yaw: 0 },
             velocity: { vx: 0, vy: 0, vz: 0 },
             battery: { voltage: 0, current: 0, percentage: 100 },
             servoOutputs: { ch1: 0, ch2: 0, ch3: 0, ch4: 0 },
             temperature: { hostBoard: null, flightController: null, motorLeft: null, motorRight: null },
-            gps: { satellites: 0, hdop: 999 },
+            gps: {
+                satellites: 0,
+                hdop: 999,
+                fixType: 0,
+                latitude: 0,
+                longitude: 0,
+                altitude: 0,
+                horizontalAccuracy: null,
+                verticalAccuracy: null,
+                groundSpeed: null,
+                course: null,
+                updatedAt: null
+            },
             imuCalibration: {
                 active: false,
                 mode: "IDLE",

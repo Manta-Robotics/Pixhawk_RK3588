@@ -23,3 +23,23 @@ test('invalid face hold hysteresis is rejected', () => {
   candidate.gimbal.face.track_hold_enter_x_px = candidate.gimbal.face.track_hold_exit_x_px;
   assert.ok(validateSystemConfig(candidate).some((error) => error.includes('horizontal hold')));
 });
+
+test('gimbal control selects exactly one supported transport', () => {
+  const candidate = structuredClone(config);
+  candidate.gimbal.control_transport = 'uart+udp';
+  assert.ok(validateSystemConfig(candidate).some((error) => error.includes('control_transport')));
+});
+
+test('UDP gimbal control does not require a UART overlay', () => {
+  const candidate = structuredClone(config);
+  candidate.gimbal.control_transport = 'udp';
+  delete candidate.gimbal.uart_overlay;
+  delete candidate.gimbal.boot_config;
+  assert.deepEqual(validateSystemConfig(candidate), []);
+});
+
+test('Pixhawk map input remains WGS84 before provider conversion', () => {
+  const candidate = structuredClone(config);
+  candidate.map.coordinate_system = 'gcj02';
+  assert.ok(validateSystemConfig(candidate).some((error) => error.includes('coordinate_system')));
+});

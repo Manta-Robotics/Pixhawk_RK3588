@@ -14,7 +14,7 @@
     }
   ],
   "security": {
-    "pin": "1234",
+    "pin": "CHANGE_ME_AT_INSTALL",
     "authentication_required": true,
     "encryption_enabled": false
   },

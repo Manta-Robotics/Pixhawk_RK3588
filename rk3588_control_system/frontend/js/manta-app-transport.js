@@ -128,7 +128,7 @@
                     pitch: Math.cos(elapsed / 5) * 1.4,
                     yaw: (184 + elapsed * 0.7) % 360
                 },
-                gps: { satellites: 9, hdop: 1.2, estimated: true },
+                gps: { satellites: 9, hdop: 1.2, fixType: 3, estimated: true },
                 vector: this.vector
             });
         }.bind(this);

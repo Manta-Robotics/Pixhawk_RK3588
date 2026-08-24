@@ -40,6 +40,14 @@ export function validateSystemConfig(config) {
     errors.push('baud_rate must be a positive number');
   }
 
+  const map = isObject(config.map) ? config.map : {};
+  if (!['amap', 'local'].includes(String(map.provider || '').toLowerCase())) {
+    errors.push('map.provider must be amap or local');
+  }
+  if (String(map.coordinate_system || '').toLowerCase() !== 'wgs84') {
+    errors.push('map.coordinate_system must be wgs84 for Pixhawk GPS data');
+  }
+
   const hotspot = isObject(config.hotspot) ? config.hotspot : {};
   if (hotspot.enabled !== false) {
     if (!String(hotspot.ssid || '').trim()) errors.push('hotspot.ssid is required');
@@ -48,6 +56,12 @@ export function validateSystemConfig(config) {
   }
 
   const gimbal = isObject(config.gimbal) ? config.gimbal : {};
+  const controlTransport = String(gimbal.control_transport || '').toLowerCase();
+  if (!['uart', 'udp'].includes(controlTransport)) errors.push('gimbal.control_transport must be uart or udp');
+  if (controlTransport === 'uart') {
+    if (!String(gimbal.boot_config || '').startsWith('/')) errors.push('gimbal.boot_config must be an absolute path');
+    if (!String(gimbal.uart_overlay || '').trim()) errors.push('gimbal.uart_overlay is required for UART control');
+  }
   const video = isObject(gimbal.video) ? gimbal.video : {};
   for (const key of ['recognition_input', 'record_input']) {
     if (!String(video[key] || '').startsWith('rtsp://')) errors.push(`gimbal.video.${key} must be an RTSP URL`);

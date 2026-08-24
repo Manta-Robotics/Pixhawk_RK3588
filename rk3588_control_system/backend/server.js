@@ -9,7 +9,6 @@ import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import cors from 'cors';
 import bodyParser from 'body-parser';
 import dgram from 'dgram';
 import { spawn, spawnSync } from 'child_process';
@@ -19,6 +18,7 @@ import http from 'http';
 import https from 'https';
 import { Bonjour } from 'bonjour-service';
 import { validateSystemConfig } from '../scripts/validate_config.mjs';
+import { isSameOriginRequest, rejectCrossOrigin } from './origin_policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -124,10 +124,7 @@ const app = express();
 app.disable('x-powered-by');
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  },
+  allowRequest: (request, callback) => callback(null, isSameOriginRequest(request)),
   transports: ['polling', 'websocket'],
   perMessageDeflate: false
 });
@@ -135,6 +132,8 @@ const io = new Server(httpServer, {
 const commandSocket = dgram.createSocket('udp4');
 const telemetrySocket = dgram.createSocket('udp4');
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
+const AMAP_JS_KEY = String(process.env.MANTA_AMAP_JS_KEY || '').trim();
+const AMAP_SECURITY_CODE = String(process.env.MANTA_AMAP_SECURITY_CODE || '').trim();
 
 const GIMBAL_FRAME_LENGTH = 44;
 const GIMBAL_COMMAND_HZ = Math.max(1, Number(gimbalConfig.command_hz || 25));
@@ -622,13 +621,25 @@ const systemState = {
   pixhawkStatus: 'disconnected',
   vehicleType: 'rover',
   telemetry: {
-    position: { lat: 0, lon: 0, alt: 0 },
+    position: { lat: 0, lon: 0, alt: 0, source: '', updatedAt: null },
     attitude: { roll: 0, pitch: 0, yaw: 0 },
     velocity: { vx: 0, vy: 0, vz: 0 },
     battery: { voltage: 0, current: 0, percentage: 100 },
     servoOutputs: { ch1: 0, ch2: 0, ch3: 0, ch4: 0 },
     temperature: { hostBoard: null, flightController: null, motorLeft: null, motorRight: null },
-    gps: { satellites: 0, hdop: 999 },
+    gps: {
+      satellites: 0,
+      hdop: 999,
+      fixType: 0,
+      latitude: 0,
+      longitude: 0,
+      altitude: 0,
+      horizontalAccuracy: null,
+      verticalAccuracy: null,
+      groundSpeed: null,
+      course: null,
+      updatedAt: null
+    },
     imuCalibration: createDefaultImuCalibrationState(),
     flightMode: 'MANUAL',
     systemStatus: 'STANDBY',
@@ -653,11 +664,15 @@ const systemState = {
 
 refreshPeripheralState();
 
-app.use(cors());
+app.use(rejectCrossOrigin);
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self' data: blob:; connect-src 'self' ws: wss: https://*.amap.com https://*.autonavi.com; img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com; media-src 'self' blob:; style-src 'self' 'unsafe-inline' https://*.amap.com https://*.autonavi.com; script-src 'self' 'unsafe-inline' https://webapi.amap.com; worker-src 'self' blob:"
+  );
   next();
 });
 app.use(bodyParser.json({ limit: '1mb' }));
@@ -667,6 +682,49 @@ app.get(['/', '/index.html'], (_req, res) => {
   res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
 });
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
+
+app.get('/api/map/config', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    success: true,
+    data: {
+      provider: 'amap',
+      enabled: Boolean(AMAP_JS_KEY && AMAP_SECURITY_CODE),
+      jsKey: AMAP_JS_KEY,
+      coordinateSystem: 'wgs84',
+      serviceHost: '/_AMapService'
+    }
+  });
+});
+
+app.use('/_AMapService', (req, res) => {
+  if (!AMAP_SECURITY_CODE) {
+    res.status(503).json({ success: false, message: 'Amap security proxy is not configured' });
+    return;
+  }
+  if (req.method !== 'GET' || !/^\/v[34]\//.test(req.url)) {
+    res.status(404).json({ success: false, message: 'Unsupported Amap proxy path' });
+    return;
+  }
+
+  const target = new URL(req.url, 'https://restapi.amap.com');
+  target.searchParams.set('jscode', AMAP_SECURITY_CODE);
+  const upstream = https.get(target, {
+    headers: { Accept: req.get('Accept') || 'application/json', 'User-Agent': 'MANTA-RK3588/1.0' },
+    timeout: 8000
+  }, (upstreamResponse) => {
+    res.status(upstreamResponse.statusCode || 502);
+    const contentType = upstreamResponse.headers['content-type'];
+    if (contentType) res.setHeader('Content-Type', contentType);
+    upstreamResponse.pipe(res);
+  });
+  upstream.on('timeout', () => upstream.destroy(new Error('Amap proxy timeout')));
+  upstream.on('error', (error) => {
+    if (!res.headersSent) res.status(502).json({ success: false, message: 'Amap proxy unavailable' });
+    else res.end();
+    addLog('WARNING', `Amap proxy error: ${error.message}`);
+  });
+});
 
 const telemetryCsvBuffer = [];
 let telemetryCsvFlushTimer = null;
@@ -683,6 +741,16 @@ function mergeOptionalFiniteNumber(value, fallback = null) {
 
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function mergeNullableFiniteNumber(source, key, fallback = null) {
+  if (!source || !Object.prototype.hasOwnProperty.call(source, key)) {
+    return fallback;
+  }
+  if (source[key] === null || source[key] === '') {
+    return null;
+  }
+  return asFiniteNumber(source[key], fallback);
 }
 
 function clamp(value, min, max) {
@@ -2515,6 +2583,14 @@ function updateTelemetry(newTelemetry = {}) {
     nextTelemetry.position.lat = asFiniteNumber(newTelemetry.position.lat, nextTelemetry.position.lat);
     nextTelemetry.position.lon = asFiniteNumber(newTelemetry.position.lon, nextTelemetry.position.lon);
     nextTelemetry.position.alt = asFiniteNumber(newTelemetry.position.alt, nextTelemetry.position.alt);
+    if (typeof newTelemetry.position.source === 'string') {
+      nextTelemetry.position.source = newTelemetry.position.source;
+    }
+    nextTelemetry.position.updatedAt = mergeNullableFiniteNumber(
+      newTelemetry.position,
+      'updatedAt',
+      nextTelemetry.position.updatedAt
+    );
   }
 
   if (newTelemetry.attitude) {
@@ -2555,6 +2631,27 @@ function updateTelemetry(newTelemetry = {}) {
   if (newTelemetry.gps) {
     nextTelemetry.gps.satellites = asFiniteNumber(newTelemetry.gps.satellites, nextTelemetry.gps.satellites);
     nextTelemetry.gps.hdop = asFiniteNumber(newTelemetry.gps.hdop, nextTelemetry.gps.hdop);
+    nextTelemetry.gps.fixType = asFiniteNumber(newTelemetry.gps.fixType, nextTelemetry.gps.fixType);
+    nextTelemetry.gps.latitude = asFiniteNumber(newTelemetry.gps.latitude, nextTelemetry.gps.latitude);
+    nextTelemetry.gps.longitude = asFiniteNumber(newTelemetry.gps.longitude, nextTelemetry.gps.longitude);
+    nextTelemetry.gps.altitude = asFiniteNumber(newTelemetry.gps.altitude, nextTelemetry.gps.altitude);
+    nextTelemetry.gps.horizontalAccuracy = mergeNullableFiniteNumber(
+      newTelemetry.gps,
+      'horizontalAccuracy',
+      nextTelemetry.gps.horizontalAccuracy
+    );
+    nextTelemetry.gps.verticalAccuracy = mergeNullableFiniteNumber(
+      newTelemetry.gps,
+      'verticalAccuracy',
+      nextTelemetry.gps.verticalAccuracy
+    );
+    nextTelemetry.gps.groundSpeed = mergeNullableFiniteNumber(
+      newTelemetry.gps,
+      'groundSpeed',
+      nextTelemetry.gps.groundSpeed
+    );
+    nextTelemetry.gps.course = mergeNullableFiniteNumber(newTelemetry.gps, 'course', nextTelemetry.gps.course);
+    nextTelemetry.gps.updatedAt = mergeNullableFiniteNumber(newTelemetry.gps, 'updatedAt', nextTelemetry.gps.updatedAt);
   }
 
   if (newTelemetry.imuCalibration && typeof newTelemetry.imuCalibration === 'object') {

@@ -11,6 +11,11 @@
   "wireless_interface": "p2p0",
   "can_interface": "can0",
   "manta_host": "10.42.0.1",
+  "map": {
+    "provider": "amap",
+    "coordinate_system": "wgs84",
+    "fallback": "local_track"
+  },
   "rover_throttle_min": -100,
   "rover_throttle_max": 100,
   "rover_steering_min": -45,
@@ -28,7 +33,7 @@
   "default_motor_pwm": 1500,
   "motor_channels": 8,
   "auto_start_mavlink": true,
-  "debug_mode": true,
+  "debug_mode": false,
   "recordings": {
     "dir": "./recordings/gimbal"
   },
@@ -36,7 +41,7 @@
     "enabled": true,
     "connection_name": "Manta-Control-Hotspot",
     "ssid": "Manta-Control",
-    "password": "manta8888",
+    "password": "CHANGE_ME_AT_INSTALL",
     "interface": "p2p0",
     "fallback_interface": "wlan0",
     "band": "bg",
@@ -80,6 +85,8 @@
   "gimbal": {
     "enabled": true,
     "control_transport": "uart",
+    "boot_config": "/boot/firmware/ubuntuEnv.txt",
+    "uart_overlay": "rk3588-lubancat-uart3-m0-overlay",
     "serial_port": "/dev/ttyS3",
     "baud_rate": 115200,
     "command_hz": 25,

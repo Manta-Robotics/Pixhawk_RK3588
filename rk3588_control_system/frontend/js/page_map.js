@@ -1,145 +1,88 @@
 (function () {
-    var map = null;
-    var marker = null;
-    var pathLine = null;
-    var pathPoints = [];
-    var hasCentered = false;
+    "use strict";
+    var controller = null;
+    var amapAdapter = null;
+    var mapProvider = "local";
 
-    function fmt(value, digits) {
-        return Number(value || 0).toFixed(digits);
+    function fmt(value, digits, fallback) {
+        var number = Number(value);
+        return Number.isFinite(number) ? number.toFixed(digits) : fallback;
     }
-
     function setText(id, value) {
         var element = document.getElementById(id);
-        if (element) {
-            element.textContent = value;
-        }
+        if (element) element.textContent = value;
     }
-
-    function hasValidFix(position, gps) {
-        var lat = Number(position.lat || 0);
-        var lon = Number(position.lon || 0);
-        var sats = Number(gps.satellites || 0);
-
-        if (Math.abs(lat) < 0.000001 && Math.abs(lon) < 0.000001) {
-            return false;
-        }
-
-        return sats >= 4;
+    function ageLabel(ageMs) {
+        if (ageMs === null || !Number.isFinite(Number(ageMs))) return "--";
+        if (ageMs < 1000) return "< 1 s";
+        return (ageMs / 1000).toFixed(1) + " s";
     }
-
-    function ensureMap(lat, lon) {
-        if (map || typeof L === "undefined") {
-            return;
-        }
-
-        map = L.map("gpsMap", { zoomControl: true }).setView([lat, lon], 17);
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-            maxZoom: 19,
-            attribution: "&copy; OpenStreetMap contributors"
-        }).addTo(map);
-
-        marker = L.circleMarker([lat, lon], {
-            radius: 7,
-            color: "#3ec7ff",
-            fillColor: "#3ec7ff",
-            fillOpacity: 0.85,
-            weight: 2
-        }).addTo(map);
-
-        pathLine = L.polyline([], {
-            color: "#f2b24c",
-            weight: 3,
-            opacity: 0.9
-        }).addTo(map);
-    }
-
-    function pushPathPoint(lat, lon) {
-        var point = [lat, lon];
-        var last = pathPoints[pathPoints.length - 1];
-
-        if (!last || Math.abs(last[0] - lat) > 0.000005 || Math.abs(last[1] - lon) > 0.000005) {
-            pathPoints.push(point);
-            if (pathPoints.length > 1500) {
-                pathPoints.shift();
-            }
-            if (pathLine) {
-                pathLine.setLatLngs(pathPoints);
-            }
-        }
-    }
-
     function render(telemetry) {
-        var position = telemetry.position || {};
-        var gps = telemetry.gps || {};
-
-        var lat = Number(position.lat || 0);
-        var lon = Number(position.lon || 0);
-        var alt = Number(position.alt || 0);
-
-        setText("mapLat", fmt(lat, 6));
-        setText("mapLon", fmt(lon, 6));
-        setText("mapAlt", fmt(alt, 1) + " m");
-        setText("mapSats", fmt(gps.satellites, 0));
-        setText("mapHdop", fmt(gps.hdop, 1));
-        setText("mapYaw", fmt(telemetry.attitude.yaw, 1) + "°");
-        setText("mapHeadingQuick", fmt(telemetry.attitude.yaw, 1) + "°");
-        setText("mapSatQuick", fmt(gps.satellites, 0) + " sat");
-
+        if (!controller) return;
+        var snapshot = controller.update(telemetry);
+        var location = snapshot.location;
+        if (amapAdapter) amapAdapter.update(location);
+        var statusText = location.status === "available" ? location.fixLabel :
+            location.status === "stale" ? location.fixLabel + " · stale" : location.fixLabel;
+        setText("mapFixStatus", statusText);
+        setText("mapHeadingQuick", fmt(location.heading, 1, "--") + "°");
+        setText("mapSatQuick", location.satellites + " sat");
+        setText("mapLat", location.fixValid ? fmt(location.latitude, 7, "--") : "--");
+        setText("mapLon", location.fixValid ? fmt(location.longitude, 7, "--") : "--");
+        setText("mapAlt", location.fixValid ? fmt(location.altitude, 1, "--") + " m" : "--");
+        setText("mapSats", String(location.satellites));
+        setText("mapHdop", fmt(location.hdop, 1, "--"));
+        setText("mapYaw", fmt(location.heading, 1, "--") + "°");
+        setText("mapAccuracy", location.horizontalAccuracy === null ? "--" : "±" + fmt(location.horizontalAccuracy, 1, "--") + " m");
+        setText("mapSpeed", location.groundSpeed === null ? "--" : fmt(location.groundSpeed, 2, "--") + " m/s");
+        setText("mapAge", ageLabel(location.ageMs));
+        setText("mapDistance", snapshot.distanceMeters < 1000 ? snapshot.distanceMeters.toFixed(1) + " m" : (snapshot.distanceMeters / 1000).toFixed(2) + " km");
+        var card = document.getElementById("mapStatusCard");
+        if (card) card.dataset.state = location.status;
         var hint = document.getElementById("mapHint");
-        var guide = document.getElementById("mapGuideText");
-        var validFix = hasValidFix(position, gps);
-
-        if (!validFix) {
-            setText("mapFixStatus", "Awaiting fix");
-            if (hint) {
-                hint.textContent = "Awaiting valid GPS coordinates (satellites >= 4)...";
-            }
-            if (guide) {
-                guide.textContent = "Make sure at least 4 satellites are available and HDOP is reasonably low before expecting a stable track.";
-            }
-            return;
-        }
-
-        setText("mapFixStatus", "Fix valid");
-        if (hint) {
-            hint.textContent = "GPS locked. Map is updating live.";
-        }
-        if (guide) {
-            guide.textContent = "The GPS fix is valid. If the map stays blank, check the map network before checking the FCU link.";
-        }
-
-        ensureMap(lat, lon);
-
-        if (!map || !marker) {
-            setText("mapFixStatus", "Map offline");
-            if (hint) {
-                hint.textContent = "Map initialization failed. Check network access to OpenStreetMap.";
-            }
-            if (guide) {
-                guide.textContent = "Latitude and longitude are updating, but the basemap failed to load. This is usually an OpenStreetMap network issue.";
-            }
-            return;
-        }
-
-        marker.setLatLng([lat, lon]);
-        pushPathPoint(lat, lon);
-
-        if (!hasCentered) {
-            map.setView([lat, lon], 18);
-            hasCentered = true;
-        }
+        if (!hint) return;
+        if (location.status === "available" && mapProvider === "amap") hint.textContent = "Pixhawk GPS is valid. WGS84 coordinates are converted to GCJ-02 and displayed on Amap.";
+        else if (location.status === "available") hint.textContent = "GPS fix is valid. The offline local track is updating.";
+        else if (location.status === "stale") hint.textContent = "The last valid location is retained, but GPS data is more than five seconds old.";
+        else if (location.fixType < 2) hint.textContent = "Waiting for a 2D or 3D flight-controller GPS fix.";
+        else hint.textContent = "GPS reports a fix, but no valid coordinates have arrived yet.";
     }
 
+    function initializeAmap() {
+        var stack = document.getElementById("mapStack");
+        var container = document.getElementById("amapMap");
+        var providerText = document.getElementById("mapProviderText");
+        if (!stack || !container || !window.MantaAmapAdapter) return;
+        fetch("/api/map/config", { cache: "no-store" })
+            .then(function (response) { if (!response.ok) throw new Error("Map config unavailable"); return response.json(); })
+            .then(function (payload) {
+                var config = payload && payload.data ? payload.data : {};
+                if (!config.enabled || !config.jsKey) {
+                    if (providerText) providerText.textContent = "高德地图 Key 未配置，当前使用板端离线轨迹图。";
+                    return;
+                }
+                amapAdapter = window.MantaAmapAdapter.create(container, config, function (state, detail) {
+                    if (state === "ready") {
+                        mapProvider = "amap";
+                        stack.dataset.provider = "amap";
+                        if (providerText) providerText.textContent = "地图来源：高德地图；位置来源：Pixhawk GPS（WGS84 转 GCJ-02）。";
+                    } else {
+                        mapProvider = "local";
+                        stack.dataset.provider = "local";
+                        if (providerText) providerText.textContent = "高德地图不可用，已切换板端离线轨迹图。" + (detail ? " " + detail : "");
+                    }
+                });
+            })
+            .catch(function () {
+                if (providerText) providerText.textContent = "地图配置读取失败，当前使用板端离线轨迹图。";
+            });
+    }
     document.addEventListener("DOMContentLoaded", function () {
-        if (!window.RoverClient) {
-            return;
-        }
-
-        window.RoverClient.on("telemetry", function (telemetry) {
-            render(telemetry);
-        });
-
+        var canvas = document.getElementById("gpsMap");
+        if (!canvas || !window.MantaGpsMapCore || !window.RoverClient) return;
+        controller = window.MantaGpsMapCore.create(canvas);
+        initializeAmap();
+        window.RoverClient.on("telemetry", render);
         render(window.RoverClient.state.telemetry);
     });
 })();

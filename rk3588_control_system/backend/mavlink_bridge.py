@@ -110,6 +110,17 @@ class FlightData:
     motor_right_temperature: Optional[float] = None
     gps_satellites: int = 0
     gps_hdop: float = 999.0
+    gps_fix_type: int = 0
+    gps_latitude: float = 0.0
+    gps_longitude: float = 0.0
+    gps_altitude: float = 0.0
+    gps_horizontal_accuracy: Optional[float] = None
+    gps_vertical_accuracy: Optional[float] = None
+    gps_ground_speed: Optional[float] = None
+    gps_course: Optional[float] = None
+    gps_updated_at: Optional[int] = None
+    position_source: str = ''
+    position_updated_at: Optional[int] = None
     flight_mode: str = 'STABILIZE'
     system_status: str = 'STANDBY'
     armed: bool = False
@@ -966,14 +977,44 @@ class MAVLinkBridge:
 
         elif msg_type == 'GPS_RAW_INT':
             self.flight_data.gps_satellites = int(getattr(msg, 'satellites_visible', 0) or 0)
+            self.flight_data.gps_fix_type = int(getattr(msg, 'fix_type', 0) or 0)
             eph = int(getattr(msg, 'eph', 65535) or 65535)
             self.flight_data.gps_hdop = eph / 100.0 if eph != 65535 else self.flight_data.gps_hdop
 
-            gps_fix_ok = self.flight_data.gps_satellites >= 4
+            raw_latitude = float(getattr(msg, 'lat', 0) or 0) / 1e7
+            raw_longitude = float(getattr(msg, 'lon', 0) or 0) / 1e7
+            raw_altitude = float(getattr(msg, 'alt', 0) or 0) / 1000.0
+            has_fix = self.flight_data.gps_fix_type >= 2
+            if has_fix and (abs(raw_latitude) > 0.000001 or abs(raw_longitude) > 0.000001):
+                self.flight_data.gps_latitude = raw_latitude
+                self.flight_data.gps_longitude = raw_longitude
+                self.flight_data.gps_altitude = raw_altitude
+
+            horizontal_accuracy = int(getattr(msg, 'h_acc', 0) or 0)
+            vertical_accuracy = int(getattr(msg, 'v_acc', 0) or 0)
+            velocity = int(getattr(msg, 'vel', 65535))
+            course = int(getattr(msg, 'cog', 65535))
+            self.flight_data.gps_horizontal_accuracy = (
+                horizontal_accuracy / 1000.0
+                if has_fix and 0 < horizontal_accuracy < 1_000_000
+                else None
+            )
+            self.flight_data.gps_vertical_accuracy = (
+                vertical_accuracy / 1000.0
+                if has_fix and 0 < vertical_accuracy < 1_000_000
+                else None
+            )
+            self.flight_data.gps_ground_speed = velocity / 100.0 if has_fix and velocity != 65535 else None
+            self.flight_data.gps_course = course / 100.0 if has_fix and course != 65535 else None
+            self.flight_data.gps_updated_at = int(time.time() * 1000)
+
+            gps_fix_ok = has_fix
             if self._last_gps_fix_reported is None or gps_fix_ok != self._last_gps_fix_reported:
                 self._send_node_log(
                     'INFO' if gps_fix_ok else 'WARNING',
-                    f'GPS fix {"acquired" if gps_fix_ok else "lost"} (sat={self.flight_data.gps_satellites}, hdop={self.flight_data.gps_hdop:.1f})',
+                    f'GPS fix {"acquired" if gps_fix_ok else "lost"} '
+                    f'(type={self.flight_data.gps_fix_type}, sat={self.flight_data.gps_satellites}, '
+                    f'hdop={self.flight_data.gps_hdop:.1f})',
                     key='gps-fix-change',
                     min_interval=2.0,
                 )
@@ -986,6 +1027,8 @@ class MAVLinkBridge:
             self.flight_data.vx = float(getattr(msg, 'vx', 0)) / 100.0
             self.flight_data.vy = float(getattr(msg, 'vy', 0)) / 100.0
             self.flight_data.vz = float(getattr(msg, 'vz', 0)) / 100.0
+            self.flight_data.position_source = 'GLOBAL_POSITION_INT'
+            self.flight_data.position_updated_at = int(time.time() * 1000)
 
         elif msg_type == 'ATTITUDE':
             self.flight_data.roll = math.degrees(float(getattr(msg, 'roll', 0.0)))
@@ -1137,6 +1180,8 @@ class MAVLinkBridge:
                 'lat': self.flight_data.latitude,
                 'lon': self.flight_data.longitude,
                 'alt': self.flight_data.altitude,
+                'source': self.flight_data.position_source,
+                'updatedAt': self.flight_data.position_updated_at,
             },
             'attitude': {
                 'roll': self.flight_data.roll,
@@ -1158,6 +1203,15 @@ class MAVLinkBridge:
             'gps': {
                 'satellites': self.flight_data.gps_satellites,
                 'hdop': self.flight_data.gps_hdop,
+                'fixType': self.flight_data.gps_fix_type,
+                'latitude': self.flight_data.gps_latitude,
+                'longitude': self.flight_data.gps_longitude,
+                'altitude': self.flight_data.gps_altitude,
+                'horizontalAccuracy': self.flight_data.gps_horizontal_accuracy,
+                'verticalAccuracy': self.flight_data.gps_vertical_accuracy,
+                'groundSpeed': self.flight_data.gps_ground_speed,
+                'course': self.flight_data.gps_course,
+                'updatedAt': self.flight_data.gps_updated_at,
             },
             'imuCalibration': {
                 'active': self.imu_calibration.active,
