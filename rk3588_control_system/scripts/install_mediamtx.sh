@@ -27,7 +27,7 @@ echo "${EXPECTED_SHA256}  ${ARCHIVE_PATH}" | sha256sum --check --status
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir"' EXIT
 tar -xzf "$ARCHIVE_PATH" -C "$temp_dir" mediamtx LICENSE
+install -d -m 0755 /usr/local/share/doc
 install -m 0755 "$temp_dir/mediamtx" /usr/local/bin/mediamtx
 install -m 0644 "$temp_dir/LICENSE" /usr/local/share/doc/mediamtx-LICENSE
 /usr/local/bin/mediamtx --version
-

@@ -69,6 +69,8 @@ def command_version(command, args=("--version",)):
     if not path:
         return None
     result = run([path, *args])
+    if result.returncode != 0 and args == ("--version",):
+        result = run([path, "-version"])
     if result.returncode != 0:
         return None
     output = (result.stdout or result.stderr).strip().splitlines()
