@@ -43,6 +43,8 @@ TX/RX 必须交叉连接，所有设备必须共地。当前串口配置为：
 - Pixhawk：`/dev/ttyS1 @ 115200`
 - 云台：`/dev/ttyS3 @ 115200`
 
+新板安装器会按主配置启用 `rk3588-lubancat-uart1-m1-overlay`（Pixhawk UART1）和 `rk3588-lubancat-uart3-m0-overlay`（云台 UART3）。接口定义与原板保持一致；overlay 写入后需手动重启才会生成对应设备节点。
+
 ## 3. 安装
 
 要求兼容 LubanCat RK3588 的 Ubuntu 22.04/24.04 aarch64 系统和 root 权限。安装器会配置 Node.js 20+、项目 Python 虚拟环境、FFmpeg、NetworkManager 与 MediaMTX。此仓库安装应用层，不能替代厂家系统镜像烧录。

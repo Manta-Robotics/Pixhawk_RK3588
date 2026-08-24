@@ -1,6 +1,10 @@
 {
   "serial_port": "/dev/ttyS1",
   "baud_rate": 115200,
+  "pixhawk": {
+    "boot_config": "/boot/firmware/ubuntuEnv.txt",
+    "uart_overlay": "rk3588-lubancat-uart1-m1-overlay"
+  },
   "web_port": 3000,
   "web_host": "0.0.0.0",
   "telemetry_rate": 100,

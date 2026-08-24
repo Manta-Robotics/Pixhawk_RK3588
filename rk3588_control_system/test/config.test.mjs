@@ -43,3 +43,9 @@ test('Pixhawk map input remains WGS84 before provider conversion', () => {
   candidate.map.coordinate_system = 'gcj02';
   assert.ok(validateSystemConfig(candidate).some((error) => error.includes('coordinate_system')));
 });
+
+test('Pixhawk UART overlay is required for portable board installation', () => {
+  const candidate = structuredClone(config);
+  delete candidate.pixhawk.uart_overlay;
+  assert.ok(validateSystemConfig(candidate).some((error) => error.includes('pixhawk.uart_overlay')));
+});

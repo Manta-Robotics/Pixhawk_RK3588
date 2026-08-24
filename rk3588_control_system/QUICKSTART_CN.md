@@ -10,6 +10,8 @@ sudo bash quickstart.sh
 
 安装会为每块板单独生成热点密码和蓝牙 PIN，保存到权限为 `0600` 的 `/etc/manta/manta.env`；Git 中不保存通用密码。脚本只安装并启用服务，不会启动 MANTA 服务或自动重启板子。
 
+默认硬件接口与原板一致：Pixhawk TELEM2 使用物理针脚 8/10/6、`/dev/ttyS1 @ 115200`，安装时启用 UART1 overlay；云台使用物理针脚 5/3/9、`/dev/ttyS3 @ 115200`，安装时启用 UART3 overlay。
+
 网页地图使用 Pixhawk 的 GPS（WGS84）并转换到高德 GCJ-02。高德要求 Web 端 JS API Key 与安全密钥；将它们只写入板端 `/etc/manta/manta.env`：
 
 ```bash

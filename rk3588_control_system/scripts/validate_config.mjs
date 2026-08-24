@@ -39,6 +39,13 @@ export function validateSystemConfig(config) {
   if (!Number.isFinite(Number(config.baud_rate)) || Number(config.baud_rate) <= 0) {
     errors.push('baud_rate must be a positive number');
   }
+  const pixhawk = isObject(config.pixhawk) ? config.pixhawk : {};
+  if (!String(pixhawk.boot_config || '').startsWith('/')) {
+    errors.push('pixhawk.boot_config must be an absolute path');
+  }
+  if (!String(pixhawk.uart_overlay || '').trim()) {
+    errors.push('pixhawk.uart_overlay is required');
+  }
 
   const map = isObject(config.map) ? config.map : {};
   if (!['amap', 'local'].includes(String(map.provider || '').toLowerCase())) {

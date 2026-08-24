@@ -54,6 +54,7 @@ python3 "$PROJECT_DIR/scripts/generate_device_env.py" /etc/manta/manta.env
 if [[ "$SKIP_BOOT_CONFIG" == "1" ]]; then
     echo "[install-boot] skipping camera and UART boot configuration"
 else
+    bash "$PROJECT_DIR/scripts/enable_pixhawk_uart.sh"
     bash "$PROJECT_DIR/scripts/enable_camera_overlay.sh"
     bash "$PROJECT_DIR/scripts/enable_gimbal_uart.sh"
 fi

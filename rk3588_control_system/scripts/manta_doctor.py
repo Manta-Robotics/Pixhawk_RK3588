@@ -178,11 +178,14 @@ def check_board(report, config, installed):
 
     camera = config.get("camera", {})
     overlay = str(camera.get("overlay", ""))
+    pixhawk = config.get("pixhawk", {})
+    pixhawk_uart_overlay = str(pixhawk.get("uart_overlay", ""))
     gimbal = config.get("gimbal", {})
     uart_overlay = str(gimbal.get("uart_overlay", ""))
-    boot_config = Path(str(camera.get("boot_config") or gimbal.get("boot_config") or "/boot/firmware/ubuntuEnv.txt"))
+    boot_config = Path(str(pixhawk.get("boot_config") or camera.get("boot_config") or gimbal.get("boot_config") or "/boot/firmware/ubuntuEnv.txt"))
     boot_text = boot_config.read_text(encoding="utf-8", errors="ignore") if boot_config.exists() else ""
     overlay_checks = []
+    overlay_checks.append(("Pixhawk UART overlay", pixhawk_uart_overlay))
     if camera.get("enabled", True):
         overlay_checks.append(("camera overlay", overlay))
     if str(gimbal.get("control_transport", "uart")).lower() == "uart":
