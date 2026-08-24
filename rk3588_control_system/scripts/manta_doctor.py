@@ -203,6 +203,12 @@ def check_board(report, config, installed):
     else:
         report.warn("Wi-Fi device", "wlan0 missing")
 
+    bluetooth_adapters = sorted(Path("/sys/class/bluetooth").glob("hci*"))
+    if bluetooth_adapters:
+        report.ok("Bluetooth adapter", ", ".join(path.name for path in bluetooth_adapters))
+    else:
+        report.warn("Bluetooth adapter", "no hci device detected; PAN service will wait")
+
     if DEVICE_ENV.exists():
         mode = DEVICE_ENV.stat().st_mode & 0o777
         if mode == 0o600:

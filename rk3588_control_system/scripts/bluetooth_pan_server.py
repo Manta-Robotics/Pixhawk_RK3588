@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import dbus
@@ -72,9 +73,34 @@ def stop_existing_dnsmasq(pidfile):
         pass
 
 
-def configure_adapter(bus, cfg):
+def find_adapter_path(bus):
+    manager = dbus.Interface(
+        bus.get_object("org.bluez", "/"),
+        "org.freedesktop.DBus.ObjectManager",
+    )
+    for path, interfaces in manager.GetManagedObjects().items():
+        if "org.bluez.Adapter1" in interfaces:
+            return str(path)
+    return None
+
+
+def wait_for_adapter(bus):
+    while True:
+        try:
+            adapter_path = find_adapter_path(bus)
+        except dbus.DBusException as error:
+            print(f"[bt-pan] BlueZ not ready: {error.get_dbus_name()}; retrying", flush=True)
+            adapter_path = None
+        if adapter_path:
+            print(f"[bt-pan] Bluetooth adapter found: {adapter_path}", flush=True)
+            return adapter_path
+        print("[bt-pan] no Bluetooth adapter detected; waiting", flush=True)
+        time.sleep(5)
+
+
+def configure_adapter(bus, cfg, adapter_path):
     adapter = dbus.Interface(
-        bus.get_object("org.bluez", "/org/bluez/hci0"),
+        bus.get_object("org.bluez", adapter_path),
         "org.freedesktop.DBus.Properties",
     )
     adapter.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(True))
@@ -85,9 +111,9 @@ def configure_adapter(bus, cfg):
     adapter.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(cfg["discoverable"]))
 
 
-def register_network_server(bus, bridge):
+def register_network_server(bus, bridge, adapter_path):
     server = dbus.Interface(
-        bus.get_object("org.bluez", "/org/bluez/hci0"),
+        bus.get_object("org.bluez", adapter_path),
         "org.bluez.NetworkServer1",
     )
     try:
@@ -172,9 +198,10 @@ def main():
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
-    configure_adapter(bus, cfg)
+    adapter_path = wait_for_adapter(bus)
+    configure_adapter(bus, cfg, adapter_path)
     agent_manager, _agent = register_agent(bus, cfg["pin"])
-    server = register_network_server(bus, cfg["bridge"])
+    server = register_network_server(bus, cfg["bridge"], adapter_path)
 
     pidfile = str(RUN_DIR / "manta-bluetooth-pan-dnsmasq.pid")
     stop_existing_dnsmasq(pidfile)
