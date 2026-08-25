@@ -320,7 +320,7 @@
             manifest = payload;
             zoom = finite(manifest.initialZoom, zoom);
             setCenter(finite(manifest.center && manifest.center[0], 114.0579), finite(manifest.center && manifest.center[1], 22.5431));
-            emit("ready", manifest.sourceResolution);
+            emit("ready", manifest);
             render();
             return manifest;
         }).catch(function (error) {
