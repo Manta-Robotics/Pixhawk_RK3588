@@ -33,7 +33,7 @@ SYSTEM_PACKAGES=(
     build-essential ca-certificates curl git openssl
     python3 python3-dev python3-pip python3-setuptools python3-venv python3-numpy python3-opencv python3-dbus python3-gi
     libssl-dev libffi-dev libopenblas-dev libjpeg-dev libopenjp2-7
-    bluez bluez-tools rfkill network-manager dnsmasq iw
+    bluez bluez-tools rfkill network-manager dnsmasq iptables iw
     minicom picocom screen usbutils lsof v4l-utils ffmpeg
 )
 

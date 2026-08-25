@@ -104,6 +104,10 @@ nmcli connection modify "$HOTSPOT_CONNECTION_NAME" \
     802-11-wireless.band "$HOTSPOT_BAND" \
     802-11-wireless.channel "$HOTSPOT_CHANNEL" \
     wifi-sec.key-mgmt wpa-psk \
+    wifi-sec.proto rsn \
+    wifi-sec.pairwise ccmp \
+    wifi-sec.group ccmp \
+    wifi-sec.pmf 1 \
     wifi-sec.psk "$HOTSPOT_PASSWORD" \
     ipv4.method shared \
     ipv6.method disabled >/dev/null
