@@ -575,7 +575,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
         <span><i></i>GPS 状态</span>
         <strong id="gpsStatus">等待设备连接</strong>
         <small id="gpsDetail">0 颗卫星</small>
-        <small id="mapSource">地图来源：板载 NASA 离线卫星影像</small>
+        <small id="mapSource">地图来源：板载深圳 Sentinel-2 10 米级离线卫星影像</small>
       </div>
     </div>
   </section>
@@ -767,7 +767,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/socket.io/socket.io.js"></script>
 <script src="js/mediamtx-webrtc-reader.js?v=1.19.2"></script>
-<script src="js/offline-satellite-map.js?v=20260825v1"></script>
+<script src="js/offline-satellite-map.js?v=20260825v2"></script>
 <script src="js/manta-app-transport.js?v=20260720v11"></script>
 <script>
 document.addEventListener("click",function(event){
@@ -1296,7 +1296,7 @@ function initializeOfflineMap(){
   offlineMap=window.MantaOfflineSatelliteMap.create($("#offlineSatelliteMap"),{onState:function(status,detail){
     if(status==="ready"){
       mapProvider="offline-satellite";$("#mapCanvas").dataset.provider="offline-satellite";
-      $("#mapSource").textContent=localize("板载 NASA 离线卫星图 · 500 米影像 · GPS：Pixhawk","Offline NASA satellite · 500 m imagery · GPS: Pixhawk");
+      $("#mapSource").textContent=localize("板载深圳 Sentinel-2 离线卫星图 · 10 米级 · GPS：Pixhawk","Offline Shenzhen Sentinel-2 · 10 m · GPS: Pixhawk");
       updateOfflineMapPosition();
     }else{
       mapProvider="offline-error";$("#mapSource").textContent=localize("离线卫星地图加载失败：","Offline satellite map failed: ")+detail;
@@ -1322,7 +1322,7 @@ function renderGpsStatus(){
   var location=currentMapLocation();
   $("#mapCoordinates").textContent=location.fresh?location.latitude.toFixed(6)+", "+location.longitude.toFixed(6):"--, --";
   $("#mapHeading").textContent=localize("航向 ","Heading ")+(Number.isFinite(Number(state.gps.course))?Number(state.gps.course).toFixed(1)+"°":"--°");
-  if(mapProvider==="offline-satellite")$("#mapSource").textContent=localize("板载 NASA 离线卫星图 · 500 米影像 · GPS：Pixhawk","Offline NASA satellite · 500 m imagery · GPS: Pixhawk");
+  if(mapProvider==="offline-satellite")$("#mapSource").textContent=localize("板载深圳 Sentinel-2 离线卫星图 · 10 米级 · GPS：Pixhawk","Offline Shenzhen Sentinel-2 · 10 m · GPS: Pixhawk");
   updateOfflineMapPosition();
 }
 

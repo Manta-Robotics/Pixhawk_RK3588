@@ -60,7 +60,7 @@
             onState: function (state, detail) {
                 if (!providerText) return;
                 providerText.textContent = state === "ready" ?
-                    "地图来源：板载 NASA 离线卫星影像（500 米源）；位置来源：Pixhawk GPS。" :
+                    "地图来源：板载深圳 Sentinel-2 离线卫星影像（10 米级）；位置来源：Pixhawk GPS。" :
                     "离线卫星地图加载失败。" + (detail ? " " + detail : "");
             }
         });

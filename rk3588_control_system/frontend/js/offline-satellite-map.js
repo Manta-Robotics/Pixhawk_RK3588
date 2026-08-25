@@ -41,8 +41,8 @@
         var manifestUrl = options.manifestUrl || "/assets/offline-map/manifest.json";
         var tileRoot = manifestUrl.slice(0, manifestUrl.lastIndexOf("/"));
         var manifest = null;
-        var zoom = 3.2;
-        var center = { x: longitudeToWorld(105), y: latitudeToWorld(35) };
+        var zoom = 10.2;
+        var center = { x: longitudeToWorld(114.0579), y: latitudeToWorld(22.5431) };
         var location = null;
         var track = [];
         var distanceMeters = 0;
@@ -203,7 +203,9 @@
             context.font = "600 9px system-ui, sans-serif";
             context.textAlign = "right";
             context.fillStyle = "rgba(235, 245, 250, 0.82)";
-            context.fillText("NASA Earth Observatory / GIBS · 500 m source · 非航海图", width - 8, height - 8);
+            var attribution = manifest && manifest.attribution ? manifest.attribution : "离线卫星影像";
+            var resolution = manifest && manifest.shortResolution ? " · " + manifest.shortResolution : "";
+            context.fillText(attribution + resolution + " · 非航海图", width - 8, height - 8);
             context.restore();
         }
         function render() {
@@ -242,7 +244,7 @@
                 addTrackPoint(location);
                 if (followLocation && insideBounds(location)) {
                     setCenter(location.longitude, location.latitude);
-                    setZoom(Math.max(zoom, Math.min(8, finite(manifest && manifest.maxZoom, 8))));
+                    setZoom(Math.max(zoom, finite(manifest && manifest.maxZoom, 14)));
                 }
             }
             render();
@@ -317,7 +319,7 @@
         }).then(function (payload) {
             manifest = payload;
             zoom = finite(manifest.initialZoom, zoom);
-            setCenter(finite(manifest.center && manifest.center[0], 105), finite(manifest.center && manifest.center[1], 35));
+            setCenter(finite(manifest.center && manifest.center[0], 114.0579), finite(manifest.center && manifest.center[1], 22.5431));
             emit("ready", manifest.sourceResolution);
             render();
             return manifest;

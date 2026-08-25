@@ -1,22 +1,26 @@
 {
-  "version": 1,
-  "name": "China offline satellite overview",
+  "version": 2,
+  "name": "Shenzhen Sentinel-2 offline satellite map",
   "bounds": {
-    "west": 70.0,
-    "south": 15.0,
-    "east": 140.0,
-    "north": 55.0
+    "west": 113.72,
+    "south": 22.38,
+    "east": 114.65,
+    "north": 22.9
   },
   "center": [
-    105.0,
-    35.0
+    114.0579,
+    22.5431
   ],
   "tileSize": 256,
-  "minZoom": 0,
-  "maxZoom": 8,
-  "initialZoom": 3.2,
-  "source": "NASA Blue Marble Shaded Relief and Bathymetry",
-  "sourceResolution": "500 m/pixel source; offline tiles through zoom 8",
-  "attribution": "NASA Earth Observatory / NASA GIBS",
+  "minZoom": 9,
+  "maxZoom": 14,
+  "initialZoom": 10.2,
+  "source": "ESA WorldCover Sentinel-2 RGBNIR 2021 annual cloudless composite",
+  "sourceResolution": "approximately 10 m/pixel source; offline XYZ through zoom 14",
+  "shortResolution": "Sentinel-2 10 m",
+  "attribution": "ESA WorldCover / Copernicus Sentinel-2",
+  "license": "CC BY 4.0",
+  "coverage": "Shenzhen municipality and nearby coastal waters",
+  "tileCount": 1595,
   "notForNavigation": true
 }
