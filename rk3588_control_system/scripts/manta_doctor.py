@@ -219,15 +219,11 @@ def check_board(report, config, installed):
             report.ok("device credentials", "/etc/manta/manta.env mode 0600")
         else:
             report.fail("device credentials", f"unexpected mode {mode:o}")
-        device_values = parse_env_file(DEVICE_ENV)
-        amap_key = device_values.get("MANTA_AMAP_JS_KEY", "")
-        amap_secret = device_values.get("MANTA_AMAP_SECURITY_CODE", "")
-        if amap_key and amap_secret:
-            report.ok("Amap credentials", "JS key and server-side security code configured")
-        elif amap_key or amap_secret:
-            report.fail("Amap credentials", "both MANTA_AMAP_JS_KEY and MANTA_AMAP_SECURITY_CODE are required")
+        offline_manifest = PROJECT_DIR / "frontend" / "assets" / "offline-map" / "manifest.json"
+        if offline_manifest.exists() and offline_manifest.stat().st_size > 0:
+            report.ok("offline satellite map", "board-hosted China map package installed")
         else:
-            report.warn("Amap credentials", "not configured; local track fallback will be used")
+            report.fail("offline satellite map", "frontend/assets/offline-map/manifest.json is missing")
     elif installed:
         report.fail("device credentials", "missing /etc/manta/manta.env")
     else:

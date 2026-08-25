@@ -12,15 +12,7 @@ sudo bash quickstart.sh
 
 默认硬件接口与原板一致：Pixhawk TELEM2 使用物理针脚 8/10/6、`/dev/ttyS1 @ 115200`，安装时启用 UART1 overlay；云台使用物理针脚 5/3/9、`/dev/ttyS3 @ 115200`，安装时启用 UART3 overlay。
 
-网页地图使用 Pixhawk 的 GPS（WGS84）并转换到高德 GCJ-02。高德要求 Web 端 JS API Key 与安全密钥；将它们只写入板端 `/etc/manta/manta.env`：
-
-```bash
-sudoedit /etc/manta/manta.env
-# MANTA_AMAP_JS_KEY=你的Web端JS_API_Key
-# MANTA_AMAP_SECURITY_CODE=你的安全密钥
-```
-
-安全密钥由板端 `/_AMapService` 代理使用，不会通过 `/api/map/config` 返回。未配置或无法联网时，页面自动显示本地轨迹图。
+网页地图直接读取 Pixhawk 的 WGS84 GPS，并显示在板载中国离线卫星影像上。地图瓦片、渲染代码和轨迹都由 RK3588 本机提供，不需要电脑、互联网、API Key 或坐标偏移。全国包使用 NASA 500 米源影像，适合概览和定位，不作为航海图；项目保留追加局部 Sentinel-2 10 米高清包的能力。
 
 只做无副作用检查：
 

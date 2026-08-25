@@ -48,8 +48,8 @@ export function validateSystemConfig(config) {
   }
 
   const map = isObject(config.map) ? config.map : {};
-  if (!['amap', 'local'].includes(String(map.provider || '').toLowerCase())) {
-    errors.push('map.provider must be amap or local');
+  if (!['offline_satellite', 'local'].includes(String(map.provider || '').toLowerCase())) {
+    errors.push('map.provider must be offline_satellite or local');
   }
   if (String(map.coordinate_system || '').toLowerCase() !== 'wgs84') {
     errors.push('map.coordinate_system must be wgs84 for Pixhawk GPS data');

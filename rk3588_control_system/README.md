@@ -80,7 +80,7 @@ sudo journalctl -u manta-backend.service -f
 
 手机无需密码即可连接 `Manta-Control`。系统连通性探测会返回成功，避免 iPhone/iPad 将热点标记为受限并中断下载；请在 Safari 中打开 `http://10.42.0.1:3000`。开放热点不提供链路加密，只应在可信、近距离环境中使用。
 
-地图页的位置只来自 Pixhawk MAVLink `GPS_RAW_INT`/`GLOBAL_POSITION_INT`，有效性以 `fix_type >= 2` 为准。高德底图需要在 `/etc/manta/manta.env` 配置 `MANTA_AMAP_JS_KEY` 和 `MANTA_AMAP_SECURITY_CODE`；原始 WGS84 GPS 会通过高德 `AMap.convertFrom(..., "gps")` 转为 GCJ-02。安全密钥留在板端代理，断网或未配置时自动回退本地轨迹图。
+地图页的位置只来自 Pixhawk MAVLink `GPS_RAW_INT`/`GLOBAL_POSITION_INT`，有效性以 `fix_type >= 2` 为准。中国离线卫星瓦片与地图引擎随项目存放在 RK3588 上，手机只连接 MANTA Wi-Fi 即可浏览，不依赖电脑、互联网或第三方 API。GPS 坐标保持 WGS84，不做 GCJ-02 偏移；全国概览采用 NASA 500 米源影像，不作为航海图。
 
 ## 6. 云台视频与录像
 

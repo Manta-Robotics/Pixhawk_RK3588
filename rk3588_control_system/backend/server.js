@@ -133,8 +133,6 @@ const io = new Server(httpServer, {
 const commandSocket = dgram.createSocket('udp4');
 const telemetrySocket = dgram.createSocket('udp4');
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
-const AMAP_JS_KEY = String(process.env.MANTA_AMAP_JS_KEY || '').trim();
-const AMAP_SECURITY_CODE = String(process.env.MANTA_AMAP_SECURITY_CODE || '').trim();
 
 const GIMBAL_FRAME_LENGTH = 44;
 const GIMBAL_COMMAND_HZ = Math.max(1, Number(gimbalConfig.command_hz || 25));
@@ -715,7 +713,7 @@ app.use((_req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self' data: blob:; connect-src 'self' ws: wss: https://*.amap.com https://*.autonavi.com; img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com; media-src 'self' blob:; style-src 'self' 'unsafe-inline' https://*.amap.com https://*.autonavi.com; script-src 'self' 'unsafe-inline' https://webapi.amap.com; worker-src 'self' blob:"
+    "default-src 'self' data: blob:; connect-src 'self' ws: wss:; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
   );
   next();
 });
@@ -726,49 +724,6 @@ app.get(['/', '/index.html'], (_req, res) => {
   res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
 });
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
-
-app.get('/api/map/config', (_req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-  res.json({
-    success: true,
-    data: {
-      provider: 'amap',
-      enabled: Boolean(AMAP_JS_KEY && AMAP_SECURITY_CODE),
-      jsKey: AMAP_JS_KEY,
-      coordinateSystem: 'wgs84',
-      serviceHost: '/_AMapService'
-    }
-  });
-});
-
-app.use('/_AMapService', (req, res) => {
-  if (!AMAP_SECURITY_CODE) {
-    res.status(503).json({ success: false, message: 'Amap security proxy is not configured' });
-    return;
-  }
-  if (req.method !== 'GET' || !/^\/v[34]\//.test(req.url)) {
-    res.status(404).json({ success: false, message: 'Unsupported Amap proxy path' });
-    return;
-  }
-
-  const target = new URL(req.url, 'https://restapi.amap.com');
-  target.searchParams.set('jscode', AMAP_SECURITY_CODE);
-  const upstream = https.get(target, {
-    headers: { Accept: req.get('Accept') || 'application/json', 'User-Agent': 'MANTA-RK3588/1.0' },
-    timeout: 8000
-  }, (upstreamResponse) => {
-    res.status(upstreamResponse.statusCode || 502);
-    const contentType = upstreamResponse.headers['content-type'];
-    if (contentType) res.setHeader('Content-Type', contentType);
-    upstreamResponse.pipe(res);
-  });
-  upstream.on('timeout', () => upstream.destroy(new Error('Amap proxy timeout')));
-  upstream.on('error', (error) => {
-    if (!res.headersSent) res.status(502).json({ success: false, message: 'Amap proxy unavailable' });
-    else res.end();
-    addLog('WARNING', `Amap proxy error: ${error.message}`);
-  });
-});
 
 const telemetryCsvBuffer = [];
 let telemetryCsvFlushTimer = null;

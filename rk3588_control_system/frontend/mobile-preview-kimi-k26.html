@@ -178,8 +178,15 @@ body[data-theme="light"] select{color-scheme:light}
 .gimbal-vision-overlay{position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none}
 .video-overlay{position:absolute;inset:0;z-index:3;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:12px}
 .video-topline{display:flex;align-items:center;justify-content:space-between}
-.live-badge{display:flex;align-items:center;gap:5px;background:rgba(239,68,68,.15);color:var(--red);font-size:10px;font-weight:600;letter-spacing:.5px;padding:3px 8px;border-radius:8px}
-.live-badge i{width:6px;height:6px;border-radius:50%;background:var(--red);animation:live-pulse 1.5s ease-in-out infinite}
+.live-badge{display:flex;align-items:center;gap:5px;background:rgba(148,163,184,.14);color:var(--t2);font-size:10px;font-weight:600;letter-spacing:.3px;padding:3px 8px;border-radius:8px}
+.live-badge i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.live-badge.is-loading,.live-badge.is-refreshing{background:var(--ice-dim);color:var(--ice)}
+.live-badge.is-loading i,.live-badge.is-refreshing i{animation:live-pulse 1s ease-in-out infinite}
+.live-badge.is-live{background:rgba(34,197,94,.14);color:var(--green)}
+.live-badge.is-live i{animation:live-pulse 1.5s ease-in-out infinite}
+.live-badge.is-warning{background:rgba(245,158,11,.15);color:var(--orange)}
+.live-badge.is-warning i{animation:live-pulse .7s ease-in-out infinite}
+.live-badge.is-offline{background:rgba(148,163,184,.14);color:var(--t3)}
 @keyframes live-pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .video-specs{font-size:11px;color:var(--t3);font-family:var(--fm)}
 .record-timer{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--red);font-family:var(--fm);background:rgba(239,68,68,.1);padding:3px 8px;border-radius:8px}
@@ -207,6 +214,12 @@ body[data-theme="light"] select{color-scheme:light}
 .gimbal-action-btn.record-btn i{width:10px;height:10px;border-radius:50%;background:currentColor}
 .gimbal-action-btn.osd-btn{font-size:10px;font-weight:600;letter-spacing:.3px;width:auto;padding:0 10px}
 .gimbal-action-btn.osd-btn.active{color:var(--ice)}
+.gimbal-actions .refresh-stream-btn{width:auto;min-width:58px;padding:0 9px;gap:5px;color:var(--ice);background:rgba(56,189,248,.16);font-size:10px;font-weight:600;white-space:nowrap}
+.gimbal-actions .refresh-stream-btn:hover{background:rgba(56,189,248,.25);color:#fff}
+.gimbal-actions .refresh-stream-btn[disabled]{opacity:.65;cursor:wait}
+.gimbal-actions .refresh-stream-btn svg{width:14px;height:14px}
+.gimbal-actions .refresh-stream-btn[aria-busy="true"] svg{animation:refresh-spin .8s linear infinite}
+@keyframes refresh-spin{to{transform:rotate(360deg)}}
 .tracking-reticle{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:60px;height:60px;border:1px solid var(--ice);border-radius:50%;pointer-events:none;display:flex;align-items:center;justify-content:center}
 .tracking-reticle::before,.tracking-reticle::after{content:'';position:absolute;border:1px solid var(--ice);border-radius:50%;opacity:.3}
 .tracking-reticle::before{width:80px;height:80px}.tracking-reticle::after{width:40px;height:40px}
@@ -227,9 +240,10 @@ body[data-theme="light"] select{color-scheme:light}
 .log-footer span[data-state="offline"] i{background:var(--red);box-shadow:0 0 7px rgba(255,92,92,.42)}
 .map-view{padding:12px 16px 16px;gap:12px}
 .map-canvas{flex:1;position:relative;overflow:hidden;border-radius:var(--rx);background:linear-gradient(160deg,#0a1a2a,#051018,#0a1520);border:1px solid var(--border)}
-.amap-map,.map-fallback{position:absolute;inset:0}.amap-map{z-index:1}.map-fallback{z-index:0;display:grid;place-items:center;text-align:center;color:var(--t3)}
-.map-fallback strong{display:block;font-size:16px;color:var(--t1);margin-bottom:6px}.map-fallback span{font-size:11px;max-width:390px;line-height:1.6;padding:0 18px}
-.map-canvas[data-provider="amap"] .map-fallback{display:none}
+.offline-satellite-map{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:block;background:#07131d}
+.offline-map-controls{position:absolute;z-index:6;top:14px;right:14px;display:flex;gap:5px}
+.offline-map-controls button{height:30px;min-width:30px;padding:0 9px;border:1px solid var(--border2);border-radius:9px;background:rgba(5,14,22,.78);color:var(--t1);font-size:13px;font-weight:700;backdrop-filter:blur(12px);cursor:pointer}
+.offline-map-controls button:hover{border-color:rgba(126,217,255,.55);color:var(--ice)}
 .map-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(126,200,227,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(126,200,227,.03) 1px,transparent 1px);background-size:40px 40px}
 .map-shore{position:absolute;border-radius:var(--rx);background:linear-gradient(135deg,rgba(126,200,227,.06),transparent);border:1px solid rgba(126,200,227,.08)}
 .map-shore.a{top:8%;left:5%;width:25%;height:20%}.map-shore.b{bottom:12%;right:8%;width:20%;height:25%}
@@ -468,7 +482,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
             <canvas id="gimbalOverlay" class="gimbal-vision-overlay" aria-hidden="true"></canvas>
             <div class="video-overlay">
               <div class="video-topline">
-                <span class="live-badge"><i></i><b id="videoTransportBadge">LIVE</b></span>
+                <span class="live-badge is-offline" id="videoLinkState" aria-live="polite"><i></i><b id="videoTransportBadge">未连接</b></span>
                 <span class="video-specs">1080P · 30FPS</span>
                 <span id="recordTimer" class="record-timer" hidden><i></i>REC 00:00</span>
               </div>
@@ -495,7 +509,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
                 <button class="gimbal-action-btn" type="button" data-gimbal-action="stop" title="停止云台"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg></button>
                 <button class="gimbal-action-btn record-btn" id="recordButton" type="button" data-gimbal-action="record" title="录像"><i></i></button>
                 <button class="gimbal-action-btn osd-btn active" id="gimbalOsd" type="button" aria-pressed="true" title="OSD">OSD</button>
-                <button class="gimbal-action-btn" type="button" id="gimbalMore" title="更多"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+                <button class="gimbal-action-btn refresh-stream-btn" type="button" id="refreshGimbalVideo" title="只刷新云台画面" aria-label="只刷新云台画面"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M18.5 9a7 7 0 0 0-11.8-2.4L4 9"/><path d="M5.5 15a7 7 0 0 0 11.8 2.4L20 15"/></svg><span>刷新</span></button>
               </div>
             </div>
           </div>
@@ -547,9 +561,13 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
   </section>
   <!-- Map -->
   <section class="view map-view" id="mapView" data-view="map" hidden>
-    <div class="map-canvas" id="mapCanvas" data-provider="local">
-      <div class="amap-map" id="amapMap" aria-label="高德地图"></div>
-      <div class="map-fallback" id="mapFallback"><div><strong>高德地图待配置</strong><span id="mapFallbackMessage">地图接口已接通；配置 Web JS API Key 与安全密钥后自动显示地图。</span></div></div>
+    <div class="map-canvas" id="mapCanvas" data-provider="offline-satellite">
+      <canvas class="offline-satellite-map" id="offlineSatelliteMap" aria-label="中国板载离线卫星地图"></canvas>
+      <div class="offline-map-controls" aria-label="地图控制">
+        <button type="button" id="offlineMapZoomOut" aria-label="缩小地图">−</button>
+        <button type="button" id="offlineMapLocate" aria-label="定位 MANTA">定位</button>
+        <button type="button" id="offlineMapZoomIn" aria-label="放大地图">+</button>
+      </div>
       <div class="map-info-card">
         <span>飞控 GPS 坐标</span><strong id="mapCoordinates">--, --</strong><small id="mapHeading">航向 --°</small>
       </div>
@@ -557,7 +575,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
         <span><i></i>GPS 状态</span>
         <strong id="gpsStatus">等待设备连接</strong>
         <small id="gpsDetail">0 颗卫星</small>
-        <small id="mapSource">地图来源：等待高德地图配置</small>
+        <small id="mapSource">地图来源：板载 NASA 离线卫星影像</small>
       </div>
     </div>
   </section>
@@ -749,7 +767,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/socket.io/socket.io.js"></script>
 <script src="js/mediamtx-webrtc-reader.js?v=1.19.2"></script>
-<script src="js/amap-adapter.js?v=20260825v1"></script>
+<script src="js/offline-satellite-map.js?v=20260825v1"></script>
 <script src="js/manta-app-transport.js?v=20260720v11"></script>
 <script>
 document.addEventListener("click",function(event){
@@ -769,8 +787,8 @@ var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,i
 var logEntries=[];
 var seenAlertLogKeys={};
 var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false,mediaFilter="all";
-var transport=null,liveRecordings=[],gimbalModeBusy=false,gimbalWebrtcReader=null,gimbalWebrtcFallbackTimer=null,gimbalWebrtcFallbackLogged=false;
-var amapAdapter=null,mapInitStarted=false,mapProvider="local";
+var transport=null,liveRecordings=[],gimbalModeBusy=false,gimbalWebrtcReader=null,gimbalWebrtcFallbackTimer=null,gimbalMjpegRetryTimer=null,gimbalWebrtcFallbackLogged=false,gimbalStreamGeneration=0,gimbalVideoStatus="offline",gimbalVideoTransport="";
+var offlineMap=null,mapInitStarted=false,mapProvider="offline-satellite";
 
 function ensureTransport(){
   if(transport&&transport.mode===state.transportMode)return transport;
@@ -1200,6 +1218,7 @@ function renderConnection(){
   var dot=$("#connDot");dot.className="status-dot "+(state.connection==="connected"?"connected":state.connection==="offline"||state.connection==="emergency"?"offline":state.connection==="degraded"?"degraded":state.connection==="pairing"?"pairing":"");
   $("#landingScreen").hidden=state.connected;
   $("#controlScreen").hidden=!state.connected;
+  if(!state.connected)setGimbalVideoState("offline");
   $("#primaryNav").hidden=!state.connected;
   $("#joystick").setAttribute("aria-disabled",String(!state.connected||!state.controlLink||!state.armed||state.calibrating));
   shell.dataset.calibrating=String(state.calibrating);
@@ -1262,29 +1281,31 @@ function renderUwbStatus(){
 function currentMapLocation(){
   var gps=state.gps||{},latitude=Number(gps.latitude),longitude=Number(gps.longitude),updatedAt=Number(gps.updatedAt)||0;
   var valid=Number(gps.fixType)>=2&&Number.isFinite(latitude)&&Number.isFinite(longitude)&&(Math.abs(latitude)>0.000001||Math.abs(longitude)>0.000001);
-  return{latitude:latitude,longitude:longitude,fresh:Boolean(valid&&updatedAt>0&&Date.now()-updatedAt<5000)};
+  var heading=Number.isFinite(Number(gps.course))?Number(gps.course):Number(state.attitude&&state.attitude.yaw)||0;
+  return{latitude:latitude,longitude:longitude,heading:heading,course:heading,updatedAt:updatedAt,fixValid:valid,fresh:Boolean(valid&&updatedAt>0&&Date.now()-updatedAt<5000)};
 }
 
-function updateAmapPosition(){
-  if(amapAdapter)amapAdapter.update(currentMapLocation());
+function updateOfflineMapPosition(){
+  if(offlineMap)offlineMap.update(currentMapLocation());
 }
 
-function initializeAmap(){
-  if(mapInitStarted||!window.MantaAmapAdapter)return;
+function initializeOfflineMap(){
+  if(mapInitStarted||!window.MantaOfflineSatelliteMap)return;
   mapInitStarted=true;
-  fetch("/api/map/config",{cache:"no-store"}).then(function(response){if(!response.ok)throw new Error("地图配置读取失败");return response.json()}).then(function(payload){
-    var config=payload&&payload.data?payload.data:{};
-    if(!config.enabled||!config.jsKey)throw new Error("缺少高德 Web JS API Key 或安全密钥");
-    amapAdapter=window.MantaAmapAdapter.create($("#amapMap"),config,function(status,detail){
-      if(status==="ready"){
-        mapProvider="amap";$("#mapCanvas").dataset.provider="amap";$("#mapSource").textContent=localize("地图来源：高德地图 · GPS 来源：Pixhawk","Map: Amap · GPS: Pixhawk");
-        updateAmapPosition();setTimeout(function(){if(amapAdapter)amapAdapter.resize()},50);
-      }else{
-        mapProvider="local";$("#mapCanvas").dataset.provider="local";$("#mapFallbackMessage").textContent=detail||"高德地图当前不可用";$("#mapSource").textContent=localize("高德地图暂不可用","Amap currently unavailable");
-      }
-    });
-  }).catch(function(error){
-    mapProvider="local";$("#mapCanvas").dataset.provider="local";$("#mapFallbackMessage").textContent=error.message;$("#mapSource").textContent=localize("高德地图待配置","Amap credentials required");
+  offlineMap=window.MantaOfflineSatelliteMap.create($("#offlineSatelliteMap"),{onState:function(status,detail){
+    if(status==="ready"){
+      mapProvider="offline-satellite";$("#mapCanvas").dataset.provider="offline-satellite";
+      $("#mapSource").textContent=localize("板载 NASA 离线卫星图 · 500 米影像 · GPS：Pixhawk","Offline NASA satellite · 500 m imagery · GPS: Pixhawk");
+      updateOfflineMapPosition();
+    }else{
+      mapProvider="offline-error";$("#mapSource").textContent=localize("离线卫星地图加载失败：","Offline satellite map failed: ")+detail;
+    }
+  }});
+  $("#offlineMapZoomOut").onclick=function(){offlineMap.zoomBy(-1)};
+  $("#offlineMapZoomIn").onclick=function(){offlineMap.zoomBy(1)};
+  $("#offlineMapLocate").onclick=function(){if(!offlineMap.locate())showToast("等待 Pixhawk GPS 定位","Waiting for Pixhawk GPS fix")};
+  offlineMap.ready.catch(function(error){
+    $("#mapSource").textContent=localize("离线卫星地图不可用：","Offline satellite map unavailable: ")+error.message;
   });
 }
 
@@ -1300,8 +1321,8 @@ function renderGpsStatus(){
   var location=currentMapLocation();
   $("#mapCoordinates").textContent=location.fresh?location.latitude.toFixed(6)+", "+location.longitude.toFixed(6):"--, --";
   $("#mapHeading").textContent=localize("航向 ","Heading ")+(Number.isFinite(Number(state.gps.course))?Number(state.gps.course).toFixed(1)+"°":"--°");
-  if(mapProvider==="amap")$("#mapSource").textContent=localize("地图来源：高德地图 · GPS 来源：Pixhawk","Map: Amap · GPS: Pixhawk");
-  updateAmapPosition();
+  if(mapProvider==="offline-satellite")$("#mapSource").textContent=localize("板载 NASA 离线卫星图 · 500 米影像 · GPS：Pixhawk","Offline NASA satellite · 500 m imagery · GPS: Pixhawk");
+  updateOfflineMapPosition();
 }
 
 function signedAngle(v){v=Number(v)||0;return(v>=0?"+":"−")+Math.abs(v).toFixed(1)+"°"}
@@ -1320,7 +1341,7 @@ function showView(view){
   toggleDrawer($("#toolDrawer"),false);
   if(view!=="media")pauseMediaPreview();
   if(view==="media"&&state.transportMode==="live")loadLiveRecordings();
-  if(view==="map"){initializeAmap();renderGpsStatus();setTimeout(function(){if(amapAdapter)amapAdapter.resize()},50);}
+  if(view==="map"){initializeOfflineMap();renderGpsStatus();setTimeout(function(){if(offlineMap)offlineMap.resize()},50);}
   syncVideoSource();
 }
 
@@ -1329,7 +1350,7 @@ function syncVideoSource(){
   var shouldRun=state.connected&&state.view==="device";
   if(!shouldRun){stopLiveGimbalStream();video.pause();return;}
   if(state.transportMode==="live"){video.hidden=true;startLiveGimbalStream();}
-  else{stopLiveGimbalStream();img.hidden=true;webrtcVideo.hidden=true;video.hidden=false;video.play().catch(function(){})}
+  else{stopLiveGimbalStream({keepStatus:true});img.hidden=true;webrtcVideo.hidden=true;video.hidden=false;video.play().catch(function(){});setGimbalVideoState("live","DEMO")}
   requestAnimationFrame(drawGimbalOverlay);
 }
 
@@ -1342,39 +1363,79 @@ function setVideoTransportBadge(value){
   var badge=$("#videoTransportBadge");if(badge)badge.textContent=value;
 }
 
+function setGimbalVideoState(status,transport){
+  var chip=$("#videoLinkState"),button=$("#refreshGimbalVideo");
+  var labels={
+    offline:localize("未连接","Disconnected"),
+    loading:localize("画面加载中","Video loading"),
+    refreshing:localize("正在刷新画面","Refreshing video"),
+    warning:localize("画面中断 · 重连中","Video lost · Reconnecting"),
+    live:(transport||"LIVE")+" · "+localize("正常","Live")
+  };
+  gimbalVideoStatus=status;gimbalVideoTransport=transport||"";
+  if(chip)chip.className="live-badge is-"+status;
+  setVideoTransportBadge(labels[status]||labels.offline);
+  if(button){var busy=status==="refreshing";button.disabled=busy;button.setAttribute("aria-busy",String(busy));}
+}
+
 function startMjpegFallback(reason){
   if(!state.connected||state.view!=="device"||state.transportMode!=="live")return;
   var img=$("#liveGimbalFeed"),webrtcVideo=$("#liveGimbalWebrtc");
   webrtcVideo.hidden=true;img.hidden=false;
-  if(!img.src||!/api\/gimbal\/stream/.test(img.src))img.src="/api/gimbal/stream?fallback="+Date.now();
-  setVideoTransportBadge("MJPEG");
+  clearTimeout(gimbalMjpegRetryTimer);gimbalMjpegRetryTimer=null;
+  var currentSource=img.getAttribute("src")||"";
+  if(!/api\/gimbal\/stream/.test(currentSource)){
+    setGimbalVideoState("warning");img.src="/api/gimbal/stream?fallback="+Date.now();
+  }else if(gimbalVideoStatus!=="live"||gimbalVideoTransport!=="MJPEG")setGimbalVideoState("warning");
   if(reason&&!gimbalWebrtcFallbackLogged){gimbalWebrtcFallbackLogged=true;addLog({level:"WARNING",source:"VIDEO",message:"WebRTC 暂不可用，已切换 MJPEG 备用流",messageEn:"WebRTC unavailable; MJPEG fallback active",category:"hardware"})}
 }
 
 function startLiveGimbalStream(){
   var img=$("#liveGimbalFeed"),video=$("#liveGimbalWebrtc");
   if(gimbalWebrtcReader)return;
+  var generation=++gimbalStreamGeneration;
+  setGimbalVideoState("loading");
   if(typeof MediaMTXWebRTCReader!=="function"||!location.hostname){startMjpegFallback("reader-unavailable");return;}
-  img.hidden=true;img.removeAttribute("src");video.hidden=false;setVideoTransportBadge("WEBRTC");
-  gimbalWebrtcFallbackTimer=setTimeout(function(){if(!video.srcObject)startMjpegFallback("handshake-timeout")},3200);
+  img.hidden=true;img.removeAttribute("src");video.hidden=false;
+  gimbalWebrtcFallbackTimer=setTimeout(function(){if(generation===gimbalStreamGeneration&&!video.srcObject)startMjpegFallback("handshake-timeout")},3200);
   var readerOptions={
     url:gimbalWebrtcUrl(),user:"",pass:"",token:"",
-    onError:function(error){if(state.connected&&state.view==="device")startMjpegFallback(String(error||"webrtc-error"))},
+    onError:function(error){if(generation===gimbalStreamGeneration&&state.connected&&state.view==="device")startMjpegFallback(String(error||"webrtc-error"))},
     onTrack:function(event){
+      if(generation!==gimbalStreamGeneration)return;
       clearTimeout(gimbalWebrtcFallbackTimer);gimbalWebrtcFallbackTimer=null;
       var stream=event&&event.streams&&event.streams[0];if(!stream)return;
-      gimbalWebrtcFallbackLogged=false;video.srcObject=stream;video.hidden=false;img.hidden=true;img.removeAttribute("src");setVideoTransportBadge("WEBRTC");
+      gimbalWebrtcFallbackLogged=false;video.srcObject=stream;video.hidden=false;img.hidden=true;img.removeAttribute("src");setGimbalVideoState("live","WEBRTC");
       video.play().catch(function(){});requestAnimationFrame(drawGimbalOverlay);
     }
   };
   try{gimbalWebrtcReader=new MediaMTXWebRTCReader(readerOptions)}catch(error){gimbalWebrtcReader=null;startMjpegFallback(error.message||"reader-start-failed")}
 }
 
-function stopLiveGimbalStream(){
+function stopLiveGimbalStream(options){
+  gimbalStreamGeneration+=1;
   clearTimeout(gimbalWebrtcFallbackTimer);gimbalWebrtcFallbackTimer=null;
+  clearTimeout(gimbalMjpegRetryTimer);gimbalMjpegRetryTimer=null;
   if(gimbalWebrtcReader){try{gimbalWebrtcReader.close()}catch(_error){}gimbalWebrtcReader=null}
   var img=$("#liveGimbalFeed"),video=$("#liveGimbalWebrtc");
-  gimbalWebrtcFallbackLogged=false;img.hidden=true;img.removeAttribute("src");video.pause();video.srcObject=null;video.hidden=true;setVideoTransportBadge("LIVE");
+  gimbalWebrtcFallbackLogged=false;img.hidden=true;img.removeAttribute("src");video.pause();video.srcObject=null;video.hidden=true;
+  if(!options||!options.keepStatus)setGimbalVideoState("offline");
+}
+
+function refreshGimbalVideoStream(){
+  if(!state.connected||state.view!=="device"){
+    setGimbalVideoState("offline");
+    showToast(localize("Manta 未连接，暂时无法刷新画面","Manta is disconnected; video cannot be refreshed"));
+    return;
+  }
+  if(state.transportMode!=="live"){
+    var demoVideo=$("#gimbalVideo");setGimbalVideoState("refreshing");demoVideo.load();
+    demoVideo.play().then(function(){setGimbalVideoState("live","DEMO")}).catch(function(){setGimbalVideoState("warning")});
+  }else{
+    stopLiveGimbalStream({keepStatus:true});setGimbalVideoState("refreshing");
+    setTimeout(function(){if(state.connected&&state.view==="device"&&state.transportMode==="live")startLiveGimbalStream()},120);
+  }
+  showToast(localize("只刷新云台画面，控制链路保持不变","Refreshing gimbal video only; control link remains unchanged"));
 }
 
 function deviceSignalLevel(rssi){rssi=Number(rssi);if(!Number.isFinite(rssi))return 3;if(rssi>=-50)return 4;if(rssi>=-65)return 3;if(rssi>=-78)return 2;return 1}
@@ -1809,6 +1870,10 @@ function setVideoLost(active){
   $("#videoAlertMessage").textContent=localize("控制链路仍然在线，请谨慎移动","Control link remains online. Move with caution.");
   $("#videoAlert").hidden=!active;
   state.connection=active?"degraded":(state.emergency?"emergency":"connected");
+  if(active)setGimbalVideoState("warning");
+  else if(!state.connected)setGimbalVideoState("offline");
+  else if(state.transportMode!=="live")setGimbalVideoState("live","DEMO");
+  else setGimbalVideoState("loading");
   renderConnection();
   if(active)addLog({level:"WARNING",source:"VIDEO",message:"影像信号中断，控制链路保持在线",messageEn:"Video signal lost; control link remains online",category:"hardware"});
 }
@@ -2107,9 +2172,15 @@ if(!state.controlLink||state.gimbalFault){showToast("云台当前不可控制","
     showToast(requestedMode==="click"?localize("点击居中","Click center"):requestedMode==="face"?localize("人脸跟踪","Face track"):localize("泳者跟踪","Swimmer track"));
   })});
   $(".video-feed").addEventListener("click",handleGimbalVideoClick);
-  $("#gimbalVideo").addEventListener("loadedmetadata",drawGimbalOverlay);
-  $("#liveGimbalWebrtc").addEventListener("loadedmetadata",drawGimbalOverlay);
-  $("#liveGimbalFeed").addEventListener("load",drawGimbalOverlay);
+  $("#gimbalVideo").addEventListener("loadedmetadata",function(){drawGimbalOverlay();if(state.connected&&state.transportMode!=="live")setGimbalVideoState("live","DEMO")});
+  $("#liveGimbalWebrtc").addEventListener("loadedmetadata",function(){drawGimbalOverlay();if(state.connected&&state.transportMode==="live")setGimbalVideoState("live","WEBRTC")});
+  $("#liveGimbalFeed").addEventListener("load",function(){clearTimeout(gimbalMjpegRetryTimer);gimbalMjpegRetryTimer=null;setGimbalVideoState("live","MJPEG");drawGimbalOverlay()});
+  $("#liveGimbalFeed").addEventListener("error",function(){
+    if(!state.connected||state.view!=="device"||state.transportMode!=="live")return;
+    setGimbalVideoState("warning");clearTimeout(gimbalMjpegRetryTimer);
+    gimbalMjpegRetryTimer=setTimeout(function(){var image=$("#liveGimbalFeed");image.removeAttribute("src");startMjpegFallback("mjpeg-error")},900);
+  });
+  $("#refreshGimbalVideo").addEventListener("click",refreshGimbalVideoStream);
   window.addEventListener("resize",drawGimbalOverlay);
 
 

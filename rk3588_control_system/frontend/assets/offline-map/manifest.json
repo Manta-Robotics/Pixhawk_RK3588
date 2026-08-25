@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "China offline satellite overview",
+  "bounds": {
+    "west": 70.0,
+    "south": 15.0,
+    "east": 140.0,
+    "north": 55.0
+  },
+  "center": [
+    105.0,
+    35.0
+  ],
+  "tileSize": 256,
+  "minZoom": 0,
+  "maxZoom": 8,
+  "initialZoom": 3.2,
+  "source": "NASA Blue Marble Shaded Relief and Bathymetry",
+  "sourceResolution": "500 m/pixel source; offline tiles through zoom 8",
+  "attribution": "NASA Earth Observatory / NASA GIBS",
+  "notForNavigation": true
+}

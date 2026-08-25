@@ -93,8 +93,9 @@ if (bashAvailable) {
 for (const relativePath of [
   'frontend/assets/manta-app/manta-hero.jpg',
   'frontend/assets/manta-app/gimbal-demo.mp4',
+  'frontend/assets/offline-map/manifest.json',
   'frontend/js/gps-map-core.js',
-  'frontend/js/amap-adapter.js',
+  'frontend/js/offline-satellite-map.js',
   'scripts/generate_device_env.py',
   'scripts/manta_doctor.py',
   'scripts/python_service.sh',

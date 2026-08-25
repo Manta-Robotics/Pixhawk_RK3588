@@ -54,12 +54,11 @@
             <div class="section-header">
                 <div>
                     <h2>Live GPS Track</h2>
-                    <p class="panel-subtitle">The map follows the rover after a valid GPS fix is available.</p>
+                    <p class="panel-subtitle">The board-hosted satellite map works without a computer or Internet connection.</p>
                 </div>
             </div>
-            <div id="mapStack" class="map-stack" data-provider="local">
-                <div id="amapMap" class="amap-canvas" aria-label="高德地图上的 Pixhawk GPS 轨迹"></div>
-                <canvas id="gpsMap" class="map-canvas" aria-label="Live local GPS track">Live GPS track requires a browser with canvas support.</canvas>
+            <div id="mapStack" class="map-stack" data-provider="offline-satellite">
+                <canvas id="offlineSatelliteMap" class="map-canvas" aria-label="China offline satellite map and Pixhawk GPS track">Offline satellite map requires canvas support.</canvas>
             </div>
             <p id="mapHint" class="tip">Awaiting valid GPS coordinates...</p>
         </section>
@@ -99,7 +98,7 @@
                 </article>
                 <article class="advisory-card" id="mapStatusCard" data-state="waiting">
                     <h3>Map Provider</h3>
-                    <p id="mapProviderText">高德地图未配置或离线时，自动使用板端本地轨迹图。该页面不是航海导航图。</p>
+                    <p id="mapProviderText">地图来源：板载 NASA 离线卫星影像；位置来源：Pixhawk GPS。该页面不是航海导航图。</p>
                 </article>
             </div>
         </section>
@@ -107,7 +106,7 @@
 
     <script src="/socket.io/socket.io.js?v=20260528"></script>
     <script src="js/gps-map-core.js?v=20260821"></script>
-    <script src="js/amap-adapter.js?v=20260821"></script>
+    <script src="js/offline-satellite-map.js?v=20260825v1"></script>
     <script src="js/realtime_client.js?v=20260528"></script>
     <script src="js/common_ui.js?v=20260528"></script>
     <script src="js/page_map.js?v=20260528"></script>

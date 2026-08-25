@@ -17,8 +17,10 @@
   "can_interface": "can0",
   "manta_host": "10.42.0.1",
   "map": {
-    "provider": "amap",
+    "provider": "offline_satellite",
     "coordinate_system": "wgs84",
+    "coverage": "china",
+    "max_zoom": 8,
     "fallback": "local_track"
   },
   "rover_throttle_min": -100,

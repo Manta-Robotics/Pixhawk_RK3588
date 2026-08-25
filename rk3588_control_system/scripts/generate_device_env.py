@@ -28,9 +28,8 @@ def generated_values(existing):
         "MANTA_BLUETOOTH_PIN",
         os.environ.get("MANTA_BLUETOOTH_PIN") or f"{secrets.randbelow(1_000_000):06d}",
     )
-    for key in ("MANTA_AMAP_JS_KEY", "MANTA_AMAP_SECURITY_CODE"):
-        if not values.get(key) and os.environ.get(key):
-            values[key] = os.environ[key]
+    values.pop("MANTA_AMAP_JS_KEY", None)
+    values.pop("MANTA_AMAP_SECURITY_CODE", None)
     return values
 
 
