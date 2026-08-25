@@ -449,6 +449,8 @@ class MAVLinkBridge:
     def _send_node_log(self, level: str, message: str, key: Optional[str] = None, min_interval: float = 0.0) -> None:
         now = time.time()
         log_key = key or f'{level}:{message}'
+        if 'uwb: no frame' in str(message).lower():
+            log_key = 'statustext:uwb-no-frame'
         alert_level = str(level).upper() in {'WARNING', 'ERROR', 'CRITICAL'}
         if alert_level and log_key in _NODE_ALERT_KEYS_SEEN:
             return

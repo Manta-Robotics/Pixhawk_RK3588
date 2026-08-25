@@ -66,7 +66,7 @@
         var normalizedSource = String(source || "APP").toUpperCase();
         var normalizedMessage = String(message || "");
         var isAlert = normalizedLevel === "WARNING" || normalizedLevel === "ERROR" || normalizedLevel === "CRITICAL";
-        var alertKey = normalizedLevel + ":" + normalizedSource + ":" + normalizedMessage;
+        var alertKey = /\bUWB:\s*no frame\b/i.test(normalizedMessage) ? normalizedLevel + ":FCU_UWB_NO_FRAME" : normalizedLevel + ":" + normalizedSource + ":" + normalizedMessage;
         if (isAlert && this.alertLogKeys[alertKey]) return;
         if (isAlert) this.alertLogKeys[alertKey] = true;
         this.emit("log", {

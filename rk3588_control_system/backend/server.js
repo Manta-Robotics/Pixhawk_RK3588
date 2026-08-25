@@ -871,7 +871,9 @@ function addLog(level, message) {
   const normalizedLevel = String(level || 'INFO').toUpperCase();
   const normalizedMessage = String(message || '').trim();
   const alertLevel = normalizedLevel === 'WARNING' || normalizedLevel === 'ERROR' || normalizedLevel === 'CRITICAL';
-  const alertKey = `${normalizedLevel}:${normalizedMessage}`;
+  const alertKey = /\bUWB:\s*no frame\b/i.test(normalizedMessage)
+    ? `${normalizedLevel}:FCU_UWB_NO_FRAME`
+    : `${normalizedLevel}:${normalizedMessage}`;
   if (alertLevel && seenAlertLogs.has(alertKey)) {
     return null;
   }

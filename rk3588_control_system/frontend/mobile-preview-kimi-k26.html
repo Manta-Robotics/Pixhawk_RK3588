@@ -1164,7 +1164,7 @@ function addLog(entry){
     category:entry.category||"system"
   };
   var isAlert=normalized.level==="WARNING"||normalized.level==="ERROR"||normalized.level==="CRITICAL";
-  var alertKey=normalized.level+":"+normalized.source+":"+normalized.message;
+  var alertKey=/\bUWB:\s*no frame\b/i.test(normalized.message)?normalized.level+":FCU_UWB_NO_FRAME":normalized.level+":"+normalized.source+":"+normalized.message;
   if(isAlert&&seenAlertLogKeys[alertKey])return;
   if(isAlert)seenAlertLogKeys[alertKey]=true;
   logEntries.push(normalized);
