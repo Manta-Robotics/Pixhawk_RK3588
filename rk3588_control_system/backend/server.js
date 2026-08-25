@@ -75,6 +75,7 @@ const ROVER_LEFT_CHANNEL = Number(config.rover_left_channel ?? 1);
 const ROVER_RIGHT_CHANNEL = Number(config.rover_right_channel ?? 3);
 const ROVER_STEERING_INPUT_CHANNEL = Number(config.rover_steering_input_channel ?? 1);
 const ROVER_THROTTLE_INPUT_CHANNEL = Number(config.rover_throttle_input_channel ?? 3);
+const HARDWARE_FEEDBACK_TIMEOUT_MS = Math.max(1000, Number(config.hardware_feedback_timeout_ms || 3000));
 const IMU_CALIBRATION_POSITIONS = {
   1: 'LEVEL',
   2: 'LEFT',
@@ -275,6 +276,8 @@ let gimbalLastRx = { ascii: '', hex: '', updatedAt: null };
 const gimbalState = {
   enabled: Boolean(gimbalConfig.enabled),
   connected: false,
+  portOpen: false,
+  linkStatus: 'offline',
   transport: String(gimbalConfig.control_transport || 'uart'),
   serialPort: GIMBAL_SERIAL_PORT,
   baudRate: GIMBAL_BAUD_RATE,
@@ -303,8 +306,27 @@ const GIMBAL_AUTO_CONNECT = gimbalConfig.auto_connect === true;
 const GIMBAL_AUTO_HOME_ON_CONNECT = gimbalConfig.auto_home_on_connect === true;
 
 function updateGimbalDiagnostics() {
+  const now = Date.now();
+  const feedbackUpdatedAt = Number(gimbalState.feedback && gimbalState.feedback.updatedAt) || 0;
+  const feedbackFresh = Boolean(
+    feedbackUpdatedAt &&
+    gimbalState.feedback &&
+    gimbalState.feedback.checksumValid !== false &&
+    now - feedbackUpdatedAt <= HARDWARE_FEEDBACK_TIMEOUT_MS
+  );
+  gimbalState.portOpen = Boolean(gimbalStream);
+  gimbalState.connected = Boolean(gimbalState.portOpen && feedbackFresh);
+  gimbalState.linkStatus = gimbalState.connected ? 'feedback' : gimbalState.portOpen ? 'port_only' : 'offline';
+
   if (!fs.existsSync(GIMBAL_SERIAL_PORT)) {
     gimbalState.lastError = `${GIMBAL_SERIAL_PORT} not present; reboot after enabling UART3`;
+    gimbalState.connected = false;
+    gimbalState.portOpen = false;
+    gimbalState.linkStatus = 'missing';
+  } else if (gimbalState.portOpen && !feedbackFresh) {
+    gimbalState.lastError = `No valid gimbal feedback within ${HARDWARE_FEEDBACK_TIMEOUT_MS} ms`;
+  } else if (gimbalState.connected && /^No valid gimbal feedback/.test(gimbalState.lastError)) {
+    gimbalState.lastError = '';
   }
 }
 
@@ -655,6 +677,14 @@ const systemState = {
     ch1: PWM_CENTER, ch2: PWM_CENTER, ch3: PWM_CENTER, ch4: PWM_CENTER,
     ch5: PWM_CENTER, ch6: PWM_CENTER, ch7: PWM_CENTER, ch8: PWM_CENTER
   },
+  hardware: {
+    pixhawk: { online: false, status: 'offline', source: 'heartbeat', lastSeenAt: null },
+    motors: {
+      left: { online: false, outputOnline: false, status: 'offline', channel: ROVER_LEFT_CHANNEL, outputPwm: 0, outputUpdatedAt: null, feedbackUpdatedAt: null, feedbackSource: 'none' },
+      right: { online: false, outputOnline: false, status: 'offline', channel: ROVER_RIGHT_CHANNEL, outputPwm: 0, outputUpdatedAt: null, feedbackUpdatedAt: null, feedbackSource: 'none' }
+    },
+    gimbal: { online: false, portOpen: false, status: 'offline', source: 'feedback', lastSeenAt: null }
+  },
   connectivity: readConnectivityState(),
   accessUrls: [],
   camera: readCameraState(readConnectivityState()),
@@ -728,10 +758,61 @@ app.use('/_AMapService', (req, res) => {
 
 const telemetryCsvBuffer = [];
 let telemetryCsvFlushTimer = null;
+const seenAlertLogs = new Set();
 
 function asFiniteNumber(value, fallback = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function isFreshTimestamp(value, timeoutMs = HARDWARE_FEEDBACK_TIMEOUT_MS) {
+  const timestamp = Number(value) || 0;
+  return Boolean(timestamp && Date.now() - timestamp <= timeoutMs);
+}
+
+function refreshHardwareState() {
+  const hardware = systemState.hardware || {};
+  const pixhawk = hardware.pixhawk || {};
+  const pixhawkOnline = Boolean(systemState.isConnected && isFreshTimestamp(pixhawk.lastSeenAt));
+  systemState.isConnected = pixhawkOnline;
+  systemState.pixhawkStatus = pixhawkOnline ? 'connected' : 'disconnected';
+  hardware.pixhawk = {
+    ...pixhawk,
+    online: pixhawkOnline,
+    status: pixhawkOnline ? 'heartbeat' : 'offline',
+    source: 'heartbeat'
+  };
+
+  const incomingMotors = hardware.motors || {};
+  hardware.motors = {};
+  for (const [side, channel] of [['left', ROVER_LEFT_CHANNEL], ['right', ROVER_RIGHT_CHANNEL]]) {
+    const motor = incomingMotors[side] || {};
+    const feedbackOnline = Boolean(pixhawkOnline && isFreshTimestamp(motor.feedbackUpdatedAt));
+    const outputOnline = Boolean(
+      pixhawkOnline &&
+      isFreshTimestamp(motor.outputUpdatedAt) &&
+      Number(motor.outputPwm) > 0
+    );
+    hardware.motors[side] = {
+      ...motor,
+      channel,
+      online: feedbackOnline,
+      outputOnline,
+      status: feedbackOnline ? 'feedback' : outputOnline ? 'output_only' : 'offline',
+      feedbackSource: feedbackOnline ? (motor.feedbackSource || 'esc_telemetry') : 'none'
+    };
+  }
+
+  updateGimbalDiagnostics();
+  hardware.gimbal = {
+    online: Boolean(gimbalState.connected),
+    portOpen: Boolean(gimbalState.portOpen),
+    status: gimbalState.linkStatus,
+    source: 'validated_status_frame',
+    lastSeenAt: Number(gimbalState.feedback && gimbalState.feedback.updatedAt) || null
+  };
+  systemState.hardware = hardware;
+  return hardware;
 }
 
 function mergeOptionalFiniteNumber(value, fallback = null) {
@@ -787,8 +868,17 @@ function calibrationAllowedError() {
 }
 
 function addLog(level, message) {
+  const normalizedLevel = String(level || 'INFO').toUpperCase();
+  const normalizedMessage = String(message || '').trim();
+  const alertLevel = normalizedLevel === 'WARNING' || normalizedLevel === 'ERROR' || normalizedLevel === 'CRITICAL';
+  const alertKey = `${normalizedLevel}:${normalizedMessage}`;
+  if (alertLevel && seenAlertLogs.has(alertKey)) {
+    return null;
+  }
+  if (alertLevel) seenAlertLogs.add(alertKey);
+
   const timestamp = new Date().toISOString();
-  const entry = { timestamp, level, message };
+  const entry = { timestamp, level: normalizedLevel, message: normalizedMessage };
 
   systemState.logs.push(entry);
   if (systemState.logs.length > 1000) {
@@ -802,7 +892,8 @@ function addLog(level, message) {
   }
 
   io.emit('log_entry', entry);
-  console.log(`[${level}] ${message}`);
+  console.log(`[${normalizedLevel}] ${normalizedMessage}`);
+  return entry;
 }
 
 function emitTelemetryUpdate() {
@@ -1054,7 +1145,8 @@ function openGimbalPort(source = 'auto') {
     configureGimbalSerial();
     gimbalStream = fs.createWriteStream(GIMBAL_SERIAL_PORT, { flags: 'w' });
     gimbalStream.on('open', () => {
-      gimbalState.connected = true;
+      gimbalState.portOpen = true;
+      gimbalState.connected = false;
       gimbalState.lastError = '';
       addLog('GIMBAL', `Serial opened ${GIMBAL_SERIAL_PORT} @ ${GIMBAL_BAUD_RATE}`);
       openGimbalReadStream();
@@ -1070,6 +1162,7 @@ function openGimbalPort(source = 'auto') {
     });
     gimbalStream.on('error', (error) => {
       gimbalState.connected = false;
+      gimbalState.portOpen = false;
       gimbalState.lastError = error.message;
       addLog('GIMBAL_ERR', error.message);
       emitGimbalState();
@@ -1077,12 +1170,14 @@ function openGimbalPort(source = 'auto') {
     });
     gimbalStream.on('close', () => {
       gimbalState.connected = false;
-      emitGimbalState();
+      gimbalState.portOpen = false;
       gimbalStream = null;
+      emitGimbalState();
     });
     return true;
   } catch (error) {
     gimbalState.connected = false;
+    gimbalState.portOpen = false;
     gimbalState.lastError = error.message;
     addLog('GIMBAL_ERR', error.message);
     emitGimbalState();
@@ -1148,6 +1243,7 @@ function disconnectGimbalPort() {
     gimbalReadStream = null;
   }
   gimbalState.connected = false;
+  gimbalState.portOpen = false;
   gimbalState.mode = 'idle';
   gimbalState.lastCommand = 'disconnected';
   emitGimbalState();
@@ -1577,7 +1673,7 @@ function sendGimbalHome(source = 'web', options = {}) {
   const frame = buildGimbalFrame({ command: 0x71 });
   setGimbalFrame(frame, `home:${source}`, preserveTracking ? 'track' : 'home', 900, null);
   writeGimbalFrameBurst(frame, 3);
-  gimbalState.connected = Boolean(gimbalStream);
+  updateGimbalDiagnostics();
   addLog('GIMBAL', `Home command sent (${source}) preserveTracking=${preserveTracking}`);
 }
 
@@ -1601,7 +1697,7 @@ function stopGimbalSerial(source = 'web') {
     const stopFrame = buildGimbalFrame({ joystickCommand: 0x00, joystickX: 0, joystickY: 0 });
     writeGimbalFrameBurst(stopFrame, 5);
   }
-  gimbalState.connected = Boolean(gimbalStream);
+  updateGimbalDiagnostics();
   emitGimbalState();
   addLog('GIMBAL', `Serial stopped (${source})`);
 }
@@ -2471,6 +2567,10 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
   }
 
   const { channel: validChannel, pwm: validPwm } = validation;
+  refreshHardwareState();
+  if (!systemState.isConnected && validPwm !== PWM_CENTER) {
+    return { ok: false, error: 'Pixhawk heartbeat is offline; non-neutral motor command rejected' };
+  }
   const leftKey = `ch${ROVER_LEFT_CHANNEL}`;
   const rightKey = `ch${ROVER_RIGHT_CHANNEL}`;
 
@@ -2528,6 +2628,12 @@ function normalizeRoverControl(input = {}) {
 
 function applyRoverControl(controlInput = {}, sourceLabel = 'WEB') {
   const normalized = normalizeRoverControl(controlInput);
+  refreshHardwareState();
+  const neutralCommand = normalized.throttle === 0 && normalized.steering === 0;
+  if (!systemState.isConnected && !neutralCommand) {
+    addLog('ERROR', `${sourceLabel} non-neutral drive command rejected: Pixhawk heartbeat offline`);
+    return { ok: false, error: 'Pixhawk heartbeat is offline; drive command rejected' };
+  }
   sendMavlinkCommand('ROVER_DRIVE', {
     throttle: normalized.throttle,
     steering: normalized.steering,
@@ -2732,23 +2838,50 @@ function updateTelemetry(newTelemetry = {}) {
     nextTelemetry.armed = newTelemetry.armed;
   }
 
+  if (newTelemetry.hardware && typeof newTelemetry.hardware === 'object') {
+    const incomingHardware = newTelemetry.hardware;
+    if (incomingHardware.pixhawk && typeof incomingHardware.pixhawk === 'object') {
+      systemState.hardware.pixhawk = {
+        ...systemState.hardware.pixhawk,
+        ...incomingHardware.pixhawk
+      };
+    }
+    if (incomingHardware.motors && typeof incomingHardware.motors === 'object') {
+      for (const side of ['left', 'right']) {
+        if (incomingHardware.motors[side] && typeof incomingHardware.motors[side] === 'object') {
+          systemState.hardware.motors[side] = {
+            ...systemState.hardware.motors[side],
+            ...incomingHardware.motors[side]
+          };
+        }
+      }
+    }
+  }
+
   systemState.telemetry = nextTelemetry;
+  refreshHardwareState();
   emitTelemetryUpdate();
   appendTelemetryCsv(systemState.telemetry);
 }
 
 function updateConnectionStatus(isConnected) {
-  systemState.isConnected = isConnected;
-  systemState.pixhawkStatus = isConnected ? 'connected' : 'disconnected';
+  const previousStatus = systemState.pixhawkStatus;
+  systemState.isConnected = Boolean(isConnected);
+  if (isConnected) {
+    systemState.hardware.pixhawk.lastSeenAt = Date.now();
+  }
+  refreshHardwareState();
 
   const payload = {
-    isConnected,
+    isConnected: systemState.isConnected,
     status: systemState.pixhawkStatus,
     timestamp: new Date().toISOString()
   };
 
   io.emit('connection_status', payload);
-  addLog('INFO', `Pixhawk connection: ${payload.status}`);
+  if (previousStatus !== payload.status) {
+    addLog(payload.isConnected ? 'INFO' : 'ERROR', `Pixhawk connection: ${payload.status}`);
+  }
 }
 
 telemetrySocket.on('message', (rawMessage) => {
@@ -2787,6 +2920,7 @@ telemetrySocket.bind(BRIDGE_TELEMETRY_PORT, '127.0.0.1', () => {
 refreshHostBoardTemperature();
 setInterval(refreshHostBoardTemperature, 5000);
 setInterval(refreshPeripheralState, 5000);
+setInterval(refreshHardwareState, 1000);
 if (GIMBAL_AUTO_CONNECT) {
   startGimbalLoop();
   openGimbalPort();
@@ -2794,6 +2928,7 @@ if (GIMBAL_AUTO_CONNECT) {
 
 app.get('/api/status', (req, res) => {
   refreshPeripheralState();
+  refreshHardwareState();
   systemState.camera = readCameraState(systemState.connectivity, req);
   res.json({
     success: true,

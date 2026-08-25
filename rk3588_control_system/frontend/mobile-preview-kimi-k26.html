@@ -147,6 +147,7 @@ body[data-theme="light"] select{color-scheme:light}
 .motor-status-card header{display:flex;align-items:center;gap:5px;font-size:9px;color:var(--t3);white-space:nowrap}
 .motor-link-dot{width:6px;height:6px;border-radius:50%;background:var(--t4);box-shadow:none;flex:0 0 auto}
 .motor-status-card.connected .motor-link-dot{background:var(--green);box-shadow:0 0 7px rgba(74,222,128,.62)}
+.motor-status-card.output-only .motor-link-dot{background:var(--orange);box-shadow:0 0 7px rgba(251,146,60,.52)}
 .motor-status-card.offline .motor-link-dot{background:var(--red);box-shadow:0 0 7px rgba(248,113,113,.42)}
 .motor-status-card.offline strong,.motor-status-card.offline small b{color:var(--t3)}
 .motor-status-card strong{display:block;margin-top:6px;font:650 13px/1 var(--fm);color:var(--t1);white-space:nowrap}
@@ -378,6 +379,8 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
   </nav>
   <div class="status-bar">
     <div class="status-item"><div class="status-dot" id="connDot"></div><span>连接</span><strong id="connectionMetric">未连接</strong></div>
+    <div class="status-item"><span>Pixhawk</span><strong id="pixhawkMetric">OFF</strong></div>
+    <div class="status-item"><span>云台</span><strong id="gimbalMetric">OFF</strong></div>
     <div class="status-item"><span>延迟</span><strong id="latencyMetric">-- ms</strong></div>
     <div class="status-item"><span>速度</span><strong id="speedMetric">0.0 m/s</strong></div>
     <div class="status-item"><span>飞控温度</span><strong id="temperatureMetric">-- °C</strong><div class="temp-bar" id="tempBar"><b></b></div></div>
@@ -756,8 +759,9 @@ var $=function(s,r){return(r||document).querySelector(s)};
 var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
 var shell=$("#appShell");
 var isLocalPreview=location.protocol==="file:"||/^(4173|4175)$/.test(location.port);
-var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",runningTrackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,fixType:0,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
+var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,motorLinks:{left:{online:false,outputOnline:false,status:"offline"},right:{online:false,outputOnline:false,status:"offline"}},gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",runningTrackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,fixType:0,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
 var logEntries=[];
+var seenAlertLogKeys={};
 var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false,mediaFilter="all";
 var transport=null,liveRecordings=[],gimbalModeBusy=false,gimbalWebrtcReader=null,gimbalWebrtcFallbackTimer=null,gimbalWebrtcFallbackLogged=false;
 
@@ -789,6 +793,8 @@ function ensureTransport(){
   });
   transport.on("hardwareStatus",function(payload){
     payload=payload||{};["boardOnline","pixhawkOnline","imuOnline","motorsOnline","gimbalOnline"].forEach(function(key){if(Object.prototype.hasOwnProperty.call(payload,key))state[key]=Boolean(payload[key])});
+    if(payload.leftMotor)state.motorLinks.left=payload.leftMotor;
+    if(payload.rightMotor)state.motorLinks.right=payload.rightMotor;
     if(state.connected){state.connection=state.boardOnline?(state.pixhawkOnline?"connected":"offline"):"degraded";state.controlLink=state.boardOnline&&state.pixhawkOnline;}
     renderConnection();renderTelemetry();renderHardwareStatus();
   });
@@ -1149,14 +1155,19 @@ function toggleDrawer(node,open){
 
 function addLog(entry){
   entry=entry||{};
-  logEntries.push({
+  var normalized={
     timestamp:entry.timestamp||new Date().toISOString(),
     level:String(entry.level||"INFO").toUpperCase(),
     source:String(entry.source||"APP").toUpperCase(),
     message:String(entry.message||""),
     messageEn:String(entry.messageEn||STATIC_EN[entry.message]||entry.message||""),
     category:entry.category||"system"
-  });
+  };
+  var isAlert=normalized.level==="WARNING"||normalized.level==="ERROR"||normalized.level==="CRITICAL";
+  var alertKey=normalized.level+":"+normalized.source+":"+normalized.message;
+  if(isAlert&&seenAlertLogKeys[alertKey])return;
+  if(isAlert)seenAlertLogKeys[alertKey]=true;
+  logEntries.push(normalized);
   if(logEntries.length>120)logEntries.shift();
   renderLogs();
 }
@@ -1449,15 +1460,25 @@ function installJoystick(){
 }
 
 function renderMotorStatus(){
-  var connected=Boolean(state.connected&&state.motorsOnline);
-  ["leftMotorCard","rightMotorCard"].forEach(function(id){var card=$("#"+id);if(card){card.classList.toggle("connected",connected);card.classList.toggle("offline",state.connected&&!connected)}});
-  $("#leftMotorLabel").textContent=localize("左电机","Left motor")+" · "+(connected?localize("在线","Online"):localize("离线","Offline"));
-  $("#rightMotorLabel").textContent=localize("右电机","Right motor")+" · "+(connected?localize("在线","Online"):localize("离线","Offline"));
-  if(!connected){$("#leftMotorPwm").textContent="-- μs";$("#rightMotorPwm").textContent="-- μs";$("#leftMotor").textContent="--";$("#rightMotor").textContent="--";}
+  function renderSide(side,label){
+    var link=state.motorLinks[side]||{};
+    var feedback=Boolean(state.connected&&link.online);
+    var outputOnly=Boolean(state.connected&&!feedback&&link.outputOnline);
+    var card=$("#"+side+"MotorCard");
+    if(card){card.classList.toggle("connected",feedback);card.classList.toggle("output-only",outputOnly);card.classList.toggle("offline",state.connected&&!feedback&&!outputOnly);}
+    var status=feedback?localize("反馈在线","Feedback online"):outputOnly?localize("仅 PWM 输出","PWM output only"):localize("离线","Offline");
+    $("#"+side+"MotorLabel").textContent=localize(label,side==="left"?"Left motor":"Right motor")+" · "+status;
+    var pwm=Number(link.outputPwm)||0;
+    $("#"+side+"MotorPwm").textContent=link.outputOnline&&pwm>0?Math.round(pwm)+" μs":"-- μs";
+    $("#"+side+"Motor").textContent=link.outputOnline&&pwm>0?signedPercent(Math.round((pwm-1500)/5)):"--";
+  }
+  renderSide("left","左电机");renderSide("right","右电机");
 }
 
 function renderHardwareStatus(){
   var identityDot=$(".control-identity i");if(identityDot)identityDot.classList.toggle("offline",state.connected&&!state.pixhawkOnline);
+  if($("#pixhawkMetric"))$("#pixhawkMetric").textContent=state.pixhawkOnline?"LIVE":"OFF";
+  if($("#gimbalMetric"))$("#gimbalMetric").textContent=state.gimbalOnline?"LIVE":"OFF";
   var imuOffline=$("#imuOffline");if(imuOffline)imuOffline.hidden=!state.connected||state.imuOnline;
   var showGimbalOffline=state.connected&&!state.gimbalOnline&&!state.videoLost&&!state.gimbalFault;
   if(showGimbalOffline){$("#videoAlertTitle").textContent=localize("云台未连接","Gimbal offline");$("#videoAlertMessage").textContent=localize("等待云台串口与影像链路恢复","Waiting for the gimbal serial and video links");}

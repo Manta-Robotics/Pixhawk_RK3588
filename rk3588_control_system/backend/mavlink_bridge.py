@@ -11,6 +11,7 @@ Responsibilities:
 import json
 import logging
 import math
+import os
 import socket
 import sys
 import time
@@ -31,12 +32,11 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 MAVLINK_LOG_PATH = LOGS_DIR / 'mavlink.log'
 
 _log_handlers = [logging.StreamHandler()]
-try:
-    _log_handlers.append(logging.FileHandler(MAVLINK_LOG_PATH))
-except PermissionError:
-    # systemd already captures stdout into the same file as root; skip the
-    # in-process file handler if the existing log isn't writable by us.
-    pass
+if not os.environ.get('INVOCATION_ID'):
+    try:
+        _log_handlers.append(logging.FileHandler(MAVLINK_LOG_PATH))
+    except PermissionError:
+        pass
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +44,7 @@ logging.basicConfig(
     handlers=_log_handlers,
 )
 logger = logging.getLogger('mavlink-bridge')
+_NODE_ALERT_KEYS_SEEN = set()
 
 ACCELCAL_POSITION_LABELS = {
     1: 'LEVEL',
@@ -105,9 +106,12 @@ class FlightData:
         'ch3': 0,
         'ch4': 0,
     })
+    servo_outputs_updated_at: Optional[int] = None
     board_temperature: Optional[float] = None
     motor_left_temperature: Optional[float] = None
     motor_right_temperature: Optional[float] = None
+    motor_left_esc_updated_at: Optional[int] = None
+    motor_right_esc_updated_at: Optional[int] = None
     gps_satellites: int = 0
     gps_hdop: float = 999.0
     gps_fix_type: int = 0
@@ -184,6 +188,7 @@ class MAVLinkBridge:
 
         self._last_telemetry_sent = 0.0
         self._last_heartbeat_sent = 0.0
+        self._last_fcu_heartbeat_at = 0.0
         self._last_mode_reported = ''
         self._last_armed_reported: Optional[bool] = None
         self._last_system_status_reported = ''
@@ -323,6 +328,16 @@ class MAVLinkBridge:
             getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_SYS_STATUS', 1): 10.0,
         }
 
+        esc_groups = {
+            (self.rover_left_output_channel - 1) // 4,
+            (self.rover_right_output_channel - 1) // 4,
+        }
+        for group in esc_groups:
+            message_name = f'MAVLINK_MSG_ID_ESC_TELEMETRY_{group * 4 + 1}_TO_{group * 4 + 4}'
+            message_id = getattr(mavutil.mavlink, message_name, None)
+            if message_id is not None:
+                rates[int(message_id)] = 10.0
+
         for message_id, rate_hz in rates.items():
             self._set_message_interval(int(message_id), float(rate_hz))
 
@@ -353,6 +368,7 @@ class MAVLinkBridge:
             self.target_system = int(getattr(hb, 'srcSystem', 1) or 1)
             self.target_component = int(getattr(hb, 'srcComponent', 1) or 1)
             self.connected = True
+            self._last_fcu_heartbeat_at = time.time()
 
             logger.info(
                 'Connected to Pixhawk (target system=%d, component=%d)',
@@ -367,6 +383,9 @@ class MAVLinkBridge:
             )
             self._ensure_rover_motor_outputs()
             self._configure_message_intervals()
+            # Parameter reads during initialization may consume queued
+            # heartbeats. Start runtime freshness from the completed setup.
+            self._last_fcu_heartbeat_at = time.time()
             self._send_node_packet('connection', {'connected': True})
             return True
         except Exception as exc:
@@ -430,11 +449,16 @@ class MAVLinkBridge:
     def _send_node_log(self, level: str, message: str, key: Optional[str] = None, min_interval: float = 0.0) -> None:
         now = time.time()
         log_key = key or f'{level}:{message}'
+        alert_level = str(level).upper() in {'WARNING', 'ERROR', 'CRITICAL'}
+        if alert_level and log_key in _NODE_ALERT_KEYS_SEEN:
+            return
         last_at = self._last_log_sent_at.get(log_key, 0.0)
         if min_interval > 0.0 and now - last_at < min_interval:
             return
 
         self._last_log_sent_at[log_key] = now
+        if alert_level:
+            _NODE_ALERT_KEYS_SEEN.add(log_key)
         self._send_node_packet('log', {'level': level, 'message': message})
 
     def _send_heartbeat(self) -> None:
@@ -867,6 +891,27 @@ class MAVLinkBridge:
         if right_temperature is not None:
             self.flight_data.motor_right_temperature = right_temperature
 
+        now_ms = int(time.time() * 1000)
+        feedback_fields = ('count', 'voltage', 'current', 'totalcurrent', 'rpm', 'temperature')
+
+        def channel_has_feedback(target_channel: int) -> bool:
+            index = int(target_channel) - int(base_channel)
+            if index < 0 or index > 3:
+                return False
+            for field_name in feedback_fields:
+                values = getattr(msg, field_name, None)
+                try:
+                    if float(list(values)[index] or 0) != 0:
+                        return True
+                except (IndexError, TypeError, ValueError):
+                    continue
+            return False
+
+        if channel_has_feedback(self.rover_left_output_channel):
+            self.flight_data.motor_left_esc_updated_at = now_ms
+        if channel_has_feedback(self.rover_right_output_channel):
+            self.flight_data.motor_right_esc_updated_at = now_ms
+
     def _handle_command_packet(self, raw_data: bytes) -> None:
         try:
             packet = json.loads(raw_data.decode('utf-8'))
@@ -938,6 +983,7 @@ class MAVLinkBridge:
         msg_type = msg.get_type()
 
         if msg_type == 'HEARTBEAT':
+            self._last_fcu_heartbeat_at = time.time()
             self.flight_data.armed = bool(getattr(msg, 'base_mode', 0) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
             self.flight_data.flight_mode = mavutil.mode_string_v10(msg)
             status_code = int(getattr(msg, 'system_status', 0))
@@ -1123,6 +1169,7 @@ class MAVLinkBridge:
             self.flight_data.servo_outputs['ch2'] = int(getattr(msg, 'servo2_raw', 0) or 0)
             self.flight_data.servo_outputs['ch3'] = int(getattr(msg, 'servo3_raw', 0) or 0)
             self.flight_data.servo_outputs['ch4'] = int(getattr(msg, 'servo4_raw', 0) or 0)
+            self.flight_data.servo_outputs_updated_at = int(time.time() * 1000)
 
         elif msg_type == 'ESC_TELEMETRY_1_TO_4':
             self._update_esc_telemetry(msg, 1)
@@ -1200,6 +1247,29 @@ class MAVLinkBridge:
             },
             'servoOutputs': self.flight_data.servo_outputs,
             'temperature': temperature_payload,
+            'hardware': {
+                'pixhawk': {
+                    'online': self.connected,
+                    'source': 'heartbeat',
+                    'lastSeenAt': int(self._last_fcu_heartbeat_at * 1000) if self._last_fcu_heartbeat_at else None,
+                },
+                'motors': {
+                    'left': {
+                        'channel': self.rover_left_output_channel,
+                        'outputPwm': self.flight_data.servo_outputs.get(f'ch{self.rover_left_output_channel}', 0),
+                        'outputUpdatedAt': self.flight_data.servo_outputs_updated_at,
+                        'feedbackUpdatedAt': self.flight_data.motor_left_esc_updated_at,
+                        'feedbackSource': 'esc_telemetry' if self.flight_data.motor_left_esc_updated_at else 'none',
+                    },
+                    'right': {
+                        'channel': self.rover_right_output_channel,
+                        'outputPwm': self.flight_data.servo_outputs.get(f'ch{self.rover_right_output_channel}', 0),
+                        'outputUpdatedAt': self.flight_data.servo_outputs_updated_at,
+                        'feedbackUpdatedAt': self.flight_data.motor_right_esc_updated_at,
+                        'feedbackSource': 'esc_telemetry' if self.flight_data.motor_right_esc_updated_at else 'none',
+                    },
+                },
+            },
             'gps': {
                 'satellites': self.flight_data.gps_satellites,
                 'hdop': self.flight_data.gps_hdop,
@@ -1240,6 +1310,16 @@ class MAVLinkBridge:
 
                 self._poll_commands()
                 self._poll_mavlink()
+
+                if self._last_fcu_heartbeat_at and now - self._last_fcu_heartbeat_at > max(3.0, self.heartbeat_interval * 3.5):
+                    self._send_node_log(
+                        'ERROR',
+                        'Pixhawk heartbeat lost; control link closed',
+                        key='runtime-heartbeat-lost',
+                    )
+                    self._send_node_packet('connection', {'connected': False})
+                    self.connected = False
+                    break
 
                 if now - self._last_heartbeat_sent >= self.heartbeat_interval:
                     self._send_heartbeat()

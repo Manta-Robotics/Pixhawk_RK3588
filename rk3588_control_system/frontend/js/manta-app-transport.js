@@ -43,6 +43,7 @@
         this.device = DEFAULT_DEVICE;
         this.mode = "base";
         this.motionLocked = false;
+        this.alertLogKeys = {};
     }
 
     TransportBase.prototype.on = function (event, handler) {
@@ -61,11 +62,18 @@
     };
 
     TransportBase.prototype.log = function (level, source, message, category, messageEn) {
+        var normalizedLevel = String(level || "INFO").toUpperCase();
+        var normalizedSource = String(source || "APP").toUpperCase();
+        var normalizedMessage = String(message || "");
+        var isAlert = normalizedLevel === "WARNING" || normalizedLevel === "ERROR" || normalizedLevel === "CRITICAL";
+        var alertKey = normalizedLevel + ":" + normalizedSource + ":" + normalizedMessage;
+        if (isAlert && this.alertLogKeys[alertKey]) return;
+        if (isAlert) this.alertLogKeys[alertKey] = true;
         this.emit("log", {
             timestamp: new Date().toISOString(),
-            level: level || "INFO",
-            source: source || "APP",
-            message: message || "",
+            level: normalizedLevel,
+            source: normalizedSource,
+            message: normalizedMessage,
             messageEn: messageEn || "",
             category: category || "system"
         });
@@ -262,7 +270,7 @@
         this.socket = window.io({ transports: ["websocket", "polling"], timeout: 5000 });
         this.socket.on("connect", function () { this.emit("connection", { connected: true, degraded: false }); }.bind(this));
         this.socket.on("telemetry_update", function (telemetry) { this.applyTelemetry(telemetry); }.bind(this));
-        this.socket.on("system_state", function (state) { if (state && state.telemetry) this.applyTelemetry(state.telemetry); }.bind(this));
+        this.socket.on("system_state", function (state) { if (state) this.applyStatus({ data: state }); }.bind(this));
         this.socket.on("rover_drive_ack", function (payload) { this.emit("driveAck", payload || {}); }.bind(this));
         this.socket.on("gimbal_state", function (state) { this.applyGimbalTrackingState(state); this.emit("gimbalState", state || {}); }.bind(this));
         this.socket.on("gimbal_target", function (target) { this.emit("gimbalTarget", target || {}); }.bind(this));
@@ -296,8 +304,22 @@
 
     LiveTransport.prototype.applyStatus = function (payload) {
         var data = payload && payload.data ? payload.data : {};
-        this.pixhawkOnline = Boolean(data.isConnected) && String(data.pixhawkStatus || "").toLowerCase() !== "disconnected";
-        this.emit("hardwareStatus", { boardOnline: true, pixhawkOnline: this.pixhawkOnline, imuOnline: this.pixhawkOnline, motorsOnline: this.pixhawkOnline });
+        var hardware = data.hardware || {};
+        var pixhawk = hardware.pixhawk || {};
+        var motors = hardware.motors || {};
+        var leftMotor = motors.left || { online: false, outputOnline: false, status: "offline" };
+        var rightMotor = motors.right || { online: false, outputOnline: false, status: "offline" };
+        var gimbal = hardware.gimbal || {};
+        this.pixhawkOnline = Boolean(pixhawk.online) && Boolean(data.isConnected) && String(data.pixhawkStatus || "").toLowerCase() !== "disconnected";
+        this.emit("hardwareStatus", {
+            boardOnline: true,
+            pixhawkOnline: this.pixhawkOnline,
+            imuOnline: this.pixhawkOnline,
+            motorsOnline: Boolean(leftMotor.online && rightMotor.online),
+            leftMotor: leftMotor,
+            rightMotor: rightMotor,
+            gimbalOnline: Boolean(gimbal.online)
+        });
         if (data.telemetry) this.applyTelemetry(data.telemetry);
         if (data.gimbal) { this.applyGimbalTrackingState(data.gimbal); this.emit("gimbalState", data.gimbal); }
     };

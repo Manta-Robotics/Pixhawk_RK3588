@@ -9,6 +9,7 @@
   "web_host": "0.0.0.0",
   "telemetry_rate": 100,
   "heartbeat_interval": 1,
+  "hardware_feedback_timeout_ms": 3000,
   "bridge_host": "127.0.0.1",
   "bridge_command_port": 14551,
   "bridge_telemetry_port": 14552,
