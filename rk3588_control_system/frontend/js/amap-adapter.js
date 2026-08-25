@@ -80,7 +80,7 @@
         }
 
         var ready = loadAmap(config).then(function (AMap) {
-            map = new AMap.Map(container, { zoom: 15, viewMode: "2D", mapStyle: "amap://styles/dark" });
+            map = new AMap.Map(container, { zoom: 5, center: [104.1954, 35.8617], viewMode: "2D", mapStyle: "amap://styles/dark" });
             map.addControl(new AMap.Scale());
             state("ready", "Amap online");
             return true;
@@ -89,7 +89,12 @@
             return false;
         });
 
-        return { ready: ready, update: update, destroy: function () { if (map) map.destroy(); } };
+        return {
+            ready: ready,
+            update: update,
+            resize: function () { if (map) map.resize(); },
+            destroy: function () { if (map) map.destroy(); }
+        };
     }
 
     root.MantaAmapAdapter = { create: create, loadAmap: loadAmap };

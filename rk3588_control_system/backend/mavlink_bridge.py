@@ -132,6 +132,50 @@ class FlightData:
 
 
 @dataclass
+class UWBData:
+    raw_distance_m: Optional[float] = None
+    raw_azimuth_deg: Optional[float] = None
+    raw_elevation_deg: Optional[float] = None
+    distance_m: Optional[float] = None
+    azimuth_deg: Optional[float] = None
+    elevation_deg: Optional[float] = None
+    good_count: int = 0
+    updated_at: Optional[int] = None
+
+
+class ScalarKalmanFilter:
+    """Small scalar Kalman filter with optional circular angle residuals."""
+
+    def __init__(self, process_noise: float, measurement_noise: float, angle: bool = False) -> None:
+        self.process_noise = max(1e-9, float(process_noise))
+        self.measurement_noise = max(1e-9, float(measurement_noise))
+        self.angle = angle
+        self.estimate: Optional[float] = None
+        self.uncertainty = 1.0
+
+    @staticmethod
+    def _wrap_angle(value: float) -> float:
+        return (value + 180.0) % 360.0 - 180.0
+
+    def update(self, measurement: float) -> float:
+        measurement = float(measurement)
+        if self.estimate is None:
+            self.estimate = self._wrap_angle(measurement) if self.angle else measurement
+            return self.estimate
+
+        predicted_uncertainty = self.uncertainty + self.process_noise
+        gain = predicted_uncertainty / (predicted_uncertainty + self.measurement_noise)
+        residual = measurement - self.estimate
+        if self.angle:
+            residual = self._wrap_angle(residual)
+        self.estimate += gain * residual
+        if self.angle:
+            self.estimate = self._wrap_angle(self.estimate)
+        self.uncertainty = (1.0 - gain) * predicted_uncertainty
+        return self.estimate
+
+
+@dataclass
 class IMUCalibrationState:
     active: bool = False
     mode: str = 'IDLE'
@@ -177,7 +221,13 @@ class MAVLinkBridge:
         self.target_system = 1
         self.target_component = 1
         self.flight_data = FlightData()
+        self.uwb_data = UWBData()
         self.imu_calibration = IMUCalibrationState()
+        self._uwb_filters = {
+            'UWB_DIST': ScalarKalmanFilter(process_noise=0.01, measurement_noise=0.16),
+            'UWB_AZ': ScalarKalmanFilter(process_noise=0.8, measurement_noise=9.0, angle=True),
+            'UWB_EL': ScalarKalmanFilter(process_noise=0.8, measurement_noise=9.0, angle=True),
+        }
 
         self.command_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.command_socket.bind((self.bridge_host, self.command_port))
@@ -200,6 +250,31 @@ class MAVLinkBridge:
         if isinstance(raw_name, bytes):
             return raw_name.decode('utf-8', 'ignore').rstrip('\x00')
         return str(raw_name).rstrip('\x00')
+
+    def _update_uwb_named_value(self, name: str, value: float) -> None:
+        if name not in {'UWB_DIST', 'UWB_AZ', 'UWB_EL', 'UWB_GOOD'} or not math.isfinite(value):
+            return
+
+        if name == 'UWB_GOOD':
+            self.uwb_data.good_count = max(0, int(value))
+            return
+
+        if name == 'UWB_DIST':
+            if value < 0:
+                return
+            filtered = self._uwb_filters[name].update(value)
+            self.uwb_data.raw_distance_m = value
+            self.uwb_data.distance_m = max(0.0, filtered)
+        elif name == 'UWB_AZ':
+            filtered = self._uwb_filters[name].update(value)
+            self.uwb_data.raw_azimuth_deg = value
+            self.uwb_data.azimuth_deg = filtered
+        elif name == 'UWB_EL':
+            filtered = self._uwb_filters[name].update(value)
+            self.uwb_data.raw_elevation_deg = value
+            self.uwb_data.elevation_deg = filtered
+
+        self.uwb_data.updated_at = int(time.time() * 1000)
 
     def _fetch_param(self, name: str, timeout: float = 2.0) -> Optional[float]:
         if self.master is None:
@@ -1129,6 +1204,14 @@ class MAVLinkBridge:
                 position_code = int(round(float(getattr(msg, 'param1', 0) or 0)))
                 self._handle_imu_pose_request(position_code)
 
+        elif msg_type == 'NAMED_VALUE_FLOAT':
+            name = self._param_name(getattr(msg, 'name', ''))
+            try:
+                value = float(getattr(msg, 'value', 0.0))
+            except (TypeError, ValueError):
+                value = math.nan
+            self._update_uwb_named_value(name, value)
+
         elif msg_type == 'STATUSTEXT':
             raw_text = getattr(msg, 'text', '')
             if isinstance(raw_text, bytes):
@@ -1224,6 +1307,21 @@ class MAVLinkBridge:
         if self.flight_data.motor_right_temperature is not None:
             temperature_payload['motorRight'] = self.flight_data.motor_right_temperature
 
+        now_ms = int(time.time() * 1000)
+        uwb_complete = all(
+            value is not None
+            for value in (
+                self.uwb_data.distance_m,
+                self.uwb_data.azimuth_deg,
+                self.uwb_data.elevation_deg,
+            )
+        )
+        uwb_fresh = bool(
+            uwb_complete
+            and self.uwb_data.updated_at is not None
+            and now_ms - self.uwb_data.updated_at <= 1500
+        )
+
         return {
             'position': {
                 'lat': self.flight_data.latitude,
@@ -1284,6 +1382,20 @@ class MAVLinkBridge:
                 'groundSpeed': self.flight_data.gps_ground_speed,
                 'course': self.flight_data.gps_course,
                 'updatedAt': self.flight_data.gps_updated_at,
+            },
+            'uwb': {
+                'online': uwb_fresh,
+                'fresh': uwb_fresh,
+                'distanceM': self.uwb_data.distance_m,
+                'azimuthDeg': self.uwb_data.azimuth_deg,
+                'elevationDeg': self.uwb_data.elevation_deg,
+                'rawDistanceM': self.uwb_data.raw_distance_m,
+                'rawAzimuthDeg': self.uwb_data.raw_azimuth_deg,
+                'rawElevationDeg': self.uwb_data.raw_elevation_deg,
+                'goodCount': self.uwb_data.good_count,
+                'updatedAt': self.uwb_data.updated_at,
+                'source': 'TELEM3_NAMED_VALUE_FLOAT',
+                'filter': 'scalar_kalman',
             },
             'imuCalibration': {
                 'active': self.imu_calibration.active,

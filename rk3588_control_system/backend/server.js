@@ -662,6 +662,20 @@ const systemState = {
       course: null,
       updatedAt: null
     },
+    uwb: {
+      online: false,
+      fresh: false,
+      distanceM: null,
+      azimuthDeg: null,
+      elevationDeg: null,
+      rawDistanceM: null,
+      rawAzimuthDeg: null,
+      rawElevationDeg: null,
+      goodCount: 0,
+      updatedAt: null,
+      source: 'TELEM3_NAMED_VALUE_FLOAT',
+      filter: 'scalar_kalman'
+    },
     imuCalibration: createDefaultImuCalibrationState(),
     flightMode: 'MANUAL',
     systemStatus: 'STANDBY',
@@ -2681,6 +2695,7 @@ function updateTelemetry(newTelemetry = {}) {
     servoOutputs: { ...(previous.servoOutputs || {}) },
     temperature: { ...previous.temperature },
     gps: { ...previous.gps },
+    uwb: { ...(previous.uwb || {}) },
     imuCalibration: { ...(previous.imuCalibration || createDefaultImuCalibrationState()) },
     flightMode: previous.flightMode,
     systemStatus: previous.systemStatus,
@@ -2760,6 +2775,22 @@ function updateTelemetry(newTelemetry = {}) {
     );
     nextTelemetry.gps.course = mergeNullableFiniteNumber(newTelemetry.gps, 'course', nextTelemetry.gps.course);
     nextTelemetry.gps.updatedAt = mergeNullableFiniteNumber(newTelemetry.gps, 'updatedAt', nextTelemetry.gps.updatedAt);
+  }
+
+  if (newTelemetry.uwb && typeof newTelemetry.uwb === 'object') {
+    const incomingUwb = newTelemetry.uwb;
+    for (const key of ['distanceM', 'azimuthDeg', 'elevationDeg', 'rawDistanceM', 'rawAzimuthDeg', 'rawElevationDeg', 'updatedAt']) {
+      if (Object.prototype.hasOwnProperty.call(incomingUwb, key)) {
+        nextTelemetry.uwb[key] = incomingUwb[key] === null
+          ? null
+          : asFiniteNumber(incomingUwb[key], nextTelemetry.uwb[key]);
+      }
+    }
+    nextTelemetry.uwb.goodCount = asFiniteNumber(incomingUwb.goodCount, nextTelemetry.uwb.goodCount || 0);
+    if (typeof incomingUwb.online === 'boolean') nextTelemetry.uwb.online = incomingUwb.online;
+    if (typeof incomingUwb.fresh === 'boolean') nextTelemetry.uwb.fresh = incomingUwb.fresh;
+    if (typeof incomingUwb.source === 'string') nextTelemetry.uwb.source = incomingUwb.source;
+    if (typeof incomingUwb.filter === 'string') nextTelemetry.uwb.filter = incomingUwb.filter;
   }
 
   if (newTelemetry.imuCalibration && typeof newTelemetry.imuCalibration === 'object') {

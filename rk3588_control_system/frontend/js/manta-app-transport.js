@@ -377,7 +377,8 @@
             attitude: telemetry.attitude || { roll: 0, pitch: 0, yaw: 0 },
             battery: telemetry.battery || {},
             imuCalibration: telemetry.imuCalibration || {},
-            gps: telemetry.gps || {}
+            gps: telemetry.gps || {},
+            uwb: telemetry.uwb || {}
         });
     };
 
