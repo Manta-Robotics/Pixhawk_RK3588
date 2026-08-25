@@ -54,7 +54,7 @@ cd /root/Pixhawk_RK3588/rk3588_control_system
 bash quickstart.sh
 ```
 
-安装脚本会验证配置、安装依赖和九个 systemd 服务，并为每块板生成独立的 Wi-Fi/蓝牙凭据到 `/etc/manta/manta.env`。UART/摄像头 overlay 首次变更后需要由操作人员确认并手动重启板子；脚本不会启动 MANTA 服务、重启服务或自动重启板子。无硬件副作用检查使用 `bash quickstart.sh --check-only`；暂不改 overlay 使用 `--skip-boot-config`。
+安装脚本会验证配置、安装依赖和九个 systemd 服务，并为每块板生成独立的蓝牙凭据到 `/etc/manta/manta.env`。当前主配置将 `Manta-Control` 设为开放热点，无需 Wi-Fi 密码；如改回 WPA2，可继续使用环境文件中的设备独立密码。UART/摄像头 overlay 首次变更后需要由操作人员确认并手动重启板子；脚本不会启动 MANTA 服务、重启服务或自动重启板子。无硬件副作用检查使用 `bash quickstart.sh --check-only`；暂不改 overlay 使用 `--skip-boot-config`。
 
 ## 4. 启停与状态
 
@@ -78,7 +78,7 @@ sudo journalctl -u manta-backend.service -f
 | 蓝牙 PAN | `http://10.43.0.1:3000` |
 | SSH/VSCode | SSH Host `manta` |
 
-手机连接 `Manta-Control` 后，系统连通性探测会返回成功，避免 iPhone/iPad 将热点标记为受限并中断下载。请在 Safari 中打开 `http://10.42.0.1:3000`。
+手机无需密码即可连接 `Manta-Control`。系统连通性探测会返回成功，避免 iPhone/iPad 将热点标记为受限并中断下载；请在 Safari 中打开 `http://10.42.0.1:3000`。开放热点不提供链路加密，只应在可信、近距离环境中使用。
 
 地图页的位置只来自 Pixhawk MAVLink `GPS_RAW_INT`/`GLOBAL_POSITION_INT`，有效性以 `fix_type >= 2` 为准。高德底图需要在 `/etc/manta/manta.env` 配置 `MANTA_AMAP_JS_KEY` 和 `MANTA_AMAP_SECURITY_CODE`；原始 WGS84 GPS 会通过高德 `AMap.convertFrom(..., "gps")` 转为 GCJ-02。安全密钥留在板端代理，断网或未配置时自动回退本地轨迹图。
 

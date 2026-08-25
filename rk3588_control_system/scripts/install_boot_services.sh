@@ -37,6 +37,7 @@ cfg = json.load(open(sys.argv[1], 'r', encoding='utf-8'))
 hotspot = cfg.get('hotspot', {})
 values = {
     'HOTSPOT_SSID': hotspot.get('ssid', 'Manta-Control'),
+    'HOTSPOT_SECURITY': str(hotspot.get('security', 'wpa2')).lower(),
     'HOTSPOT_PORTAL_IP': hotspot.get('portal_ip', '10.42.0.1')
 }
 for key, value in values.items():
@@ -78,7 +79,7 @@ systemctl enable manta-backend.service manta-bridge.service manta-camera.service
 
 echo "[install-boot] Installed boot services and captive portal settings."
 echo "[install-boot] Hotspot SSID    : $HOTSPOT_SSID"
-echo "[install-boot] Hotspot security: configured"
+echo "[install-boot] Hotspot security: $HOTSPOT_SECURITY"
 echo "[install-boot] Dashboard URL   : http://$HOTSPOT_PORTAL_IP:3000"
 echo "[install-boot] Units were enabled only; no MANTA service was started or restarted."
 echo "[install-boot] Reboot the LubanCat only after reviewing camera/UART overlay changes."

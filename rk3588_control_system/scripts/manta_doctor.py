@@ -114,9 +114,13 @@ def check_source(report, config):
     else:
         report.ok("gimbal control", f"single configured transport: {transport}")
 
-    password = str(config.get("hotspot", {}).get("password", ""))
-    if password != "CHANGE_ME_AT_INSTALL":
-        report.warn("hotspot defaults", "tracked config should use the install-time placeholder")
+    hotspot = config.get("hotspot", {})
+    security = str(hotspot.get("security", "wpa2")).lower()
+    password = str(hotspot.get("password", ""))
+    if security in {"open", "none"}:
+        report.ok("hotspot defaults", "open network explicitly configured")
+    elif password != "CHANGE_ME_AT_INSTALL":
+        report.warn("hotspot defaults", "tracked WPA config should use the install-time placeholder")
     else:
         report.ok("hotspot defaults", "per-device credential placeholder configured")
 

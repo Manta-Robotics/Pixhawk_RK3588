@@ -18,6 +18,7 @@ values = {
     'HOTSPOT_ENABLED': '1' if hotspot.get('enabled', True) else '0',
     'HOTSPOT_CONNECTION_NAME': hotspot.get('connection_name', 'Manta-Control-Hotspot'),
     'HOTSPOT_SSID': hotspot.get('ssid', 'Manta-Control'),
+    'HOTSPOT_SECURITY': str(hotspot.get('security', 'wpa2')).lower(),
     'HOTSPOT_PASSWORD': hotspot.get('password', 'CHANGE_ME_AT_INSTALL'),
     'HOTSPOT_INTERFACE': hotspot.get('interface', 'p2p0'),
     'HOTSPOT_FALLBACK_INTERFACE': hotspot.get('fallback_interface', 'wlan0'),
@@ -90,8 +91,15 @@ if ! nmcli -t -f NAME connection show | grep -Fxq "$HOTSPOT_CONNECTION_NAME"; th
     nmcli connection add type wifi ifname "$HOTSPOT_IFACE" con-name "$HOTSPOT_CONNECTION_NAME" ssid "$HOTSPOT_SSID" autoconnect yes >/dev/null
 fi
 
-if [[ "$HOTSPOT_PASSWORD" == "CHANGE_ME_AT_INSTALL" || ${#HOTSPOT_PASSWORD} -lt 8 ]]; then
+if [[ "$HOTSPOT_SECURITY" != "open" && "$HOTSPOT_SECURITY" != "none" ]] && \
+   [[ "$HOTSPOT_PASSWORD" == "CHANGE_ME_AT_INSTALL" || ${#HOTSPOT_PASSWORD} -lt 8 ]]; then
     echo "[hotspot] A per-device WPA password is required in /etc/manta/manta.env." >&2
+    exit 1
+fi
+
+if [[ "$HOTSPOT_SECURITY" != "open" && "$HOTSPOT_SECURITY" != "none" && \
+      "$HOTSPOT_SECURITY" != "wpa2" && "$HOTSPOT_SECURITY" != "wpa-psk" ]]; then
+    echo "[hotspot] Unsupported security mode: $HOTSPOT_SECURITY" >&2
     exit 1
 fi
 
@@ -103,18 +111,25 @@ nmcli connection modify "$HOTSPOT_CONNECTION_NAME" \
     802-11-wireless.ssid "$HOTSPOT_SSID" \
     802-11-wireless.band "$HOTSPOT_BAND" \
     802-11-wireless.channel "$HOTSPOT_CHANNEL" \
-    wifi-sec.key-mgmt wpa-psk \
-    wifi-sec.proto rsn \
-    wifi-sec.pairwise ccmp \
-    wifi-sec.group ccmp \
-    wifi-sec.pmf 1 \
-    wifi-sec.psk "$HOTSPOT_PASSWORD" \
     ipv4.method shared \
     ipv6.method disabled >/dev/null
+
+if [[ "$HOTSPOT_SECURITY" == "open" || "$HOTSPOT_SECURITY" == "none" ]]; then
+    nmcli connection modify "$HOTSPOT_CONNECTION_NAME" remove 802-11-wireless-security >/dev/null 2>&1 || true
+else
+    nmcli connection modify "$HOTSPOT_CONNECTION_NAME" \
+        wifi-sec.key-mgmt wpa-psk \
+        wifi-sec.proto rsn \
+        wifi-sec.pairwise ccmp \
+        wifi-sec.group ccmp \
+        wifi-sec.pmf 1 \
+        wifi-sec.psk "$HOTSPOT_PASSWORD" >/dev/null
+fi
 
 nmcli device disconnect "$HOTSPOT_IFACE" >/dev/null 2>&1 || true
 nmcli connection up "$HOTSPOT_CONNECTION_NAME" ifname "$HOTSPOT_IFACE" >/dev/null
 
 echo "[hotspot] Hotspot started on $HOTSPOT_IFACE"
 echo "[hotspot] SSID: $HOTSPOT_SSID"
+echo "[hotspot] Security: $HOTSPOT_SECURITY"
 echo "[hotspot] Connection name: $HOTSPOT_CONNECTION_NAME"

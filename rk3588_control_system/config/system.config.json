@@ -45,6 +45,7 @@
     "enabled": true,
     "connection_name": "Manta-Control-Hotspot",
     "ssid": "Manta-Control",
+    "security": "open",
     "password": "CHANGE_ME_AT_INSTALL",
     "interface": "p2p0",
     "fallback_interface": "wlan0",
