@@ -788,7 +788,7 @@ var logEntries=[];
 var seenAlertLogKeys={};
 var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false,mediaFilter="all";
 var transport=null,liveRecordings=[],gimbalModeBusy=false,gimbalWebrtcReader=null,gimbalWebrtcFallbackTimer=null,gimbalMjpegRetryTimer=null,gimbalWebrtcFallbackLogged=false,gimbalStreamGeneration=0,gimbalVideoStatus="offline",gimbalVideoTransport="";
-var offlineMap=null,mapInitStarted=false,mapProvider="offline-satellite";
+var offlineMap=null,mapInitStarted=false,mapProvider="offline-satellite",lastGpsSourceTimestamp=0,lastGpsReceivedAt=0;
 
 function ensureTransport(){
   if(transport&&transport.mode===state.transportMode)return transport;
@@ -1282,7 +1282,8 @@ function currentMapLocation(){
   var gps=state.gps||{},latitude=Number(gps.latitude),longitude=Number(gps.longitude),updatedAt=Number(gps.updatedAt)||0;
   var valid=Number(gps.fixType)>=2&&Number.isFinite(latitude)&&Number.isFinite(longitude)&&(Math.abs(latitude)>0.000001||Math.abs(longitude)>0.000001);
   var heading=Number.isFinite(Number(gps.course))?Number(gps.course):Number(state.attitude&&state.attitude.yaw)||0;
-  return{latitude:latitude,longitude:longitude,heading:heading,course:heading,updatedAt:updatedAt,fixValid:valid,fresh:Boolean(valid&&updatedAt>0&&Date.now()-updatedAt<5000)};
+  if(updatedAt>0&&updatedAt!==lastGpsSourceTimestamp){lastGpsSourceTimestamp=updatedAt;lastGpsReceivedAt=Date.now()}
+  return{latitude:latitude,longitude:longitude,heading:heading,course:heading,updatedAt:updatedAt,fixValid:valid,fresh:Boolean(valid&&lastGpsReceivedAt>0&&Date.now()-lastGpsReceivedAt<5000)};
 }
 
 function updateOfflineMapPosition(){

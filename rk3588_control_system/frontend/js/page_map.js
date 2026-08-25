@@ -1,6 +1,8 @@
 (function () {
     "use strict";
     var controller = null;
+    var lastGpsSourceTimestamp = 0;
+    var lastGpsReceivedAt = 0;
 
     function fmt(value, digits, fallback) {
         var number = Number(value);
@@ -17,7 +19,13 @@
     }
     function render(telemetry) {
         if (!controller) return;
-        var location = window.MantaGpsMapCore.normalizeTelemetry(telemetry, Date.now());
+        var gpsTimestamp = Number(telemetry && telemetry.gps && telemetry.gps.updatedAt) || 0;
+        if (gpsTimestamp > 0 && gpsTimestamp !== lastGpsSourceTimestamp) {
+            lastGpsSourceTimestamp = gpsTimestamp;
+            lastGpsReceivedAt = Date.now();
+        }
+        var normalizedNow = gpsTimestamp > 0 && lastGpsReceivedAt > 0 ? gpsTimestamp + (Date.now() - lastGpsReceivedAt) : Date.now();
+        var location = window.MantaGpsMapCore.normalizeTelemetry(telemetry, normalizedNow);
         var snapshot = controller.update(location);
         var statusText = location.status === "available" ? location.fixLabel :
             location.status === "stale" ? location.fixLabel + " · stale" : location.fixLabel;
