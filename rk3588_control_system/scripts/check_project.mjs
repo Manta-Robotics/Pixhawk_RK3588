@@ -70,6 +70,11 @@ if (pythonCommand) {
       runCheck(pythonCommand, ['-c', pythonSyntaxCheck, filePath], path.relative(PROJECT_ROOT, filePath));
     }
   }
+  runCheck(
+    pythonCommand,
+    ['-m', 'unittest', 'discover', '-s', 'test', '-p', 'test_*.py'],
+    'Python unit tests',
+  );
 } else {
   notices.push('Python syntax check skipped because no working Python interpreter is available.');
 }

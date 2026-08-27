@@ -12,6 +12,7 @@ import argparse
 from collections import deque
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,46 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = PROJECT_ROOT / "scripts" / "models" / "version-slim-320_without_postprocessing.onnx"
 DEFAULT_HAAR_CASCADE = PROJECT_ROOT / "scripts" / "models" / "haarcascade_frontalface_default.xml"
 DEFAULT_SOURCE = "http://127.0.0.1:8091/stream.mjpg"
+
+
+class ActivationController:
+    """Keeps a warmed detector resident while allowing inference to be paused."""
+
+    def __init__(self, active: bool = True) -> None:
+        self._event = threading.Event()
+        if active:
+            self._event.set()
+
+    def is_active(self) -> bool:
+        return self._event.is_set()
+
+    def set_active(self, active: bool) -> None:
+        if active:
+            self._event.set()
+        else:
+            self._event.clear()
+
+    def wait(self, timeout: float = 0.1) -> bool:
+        return self._event.wait(timeout)
+
+
+def start_control_reader(controller: ActivationController) -> None:
+    def control_loop() -> None:
+        for raw_line in sys.stdin:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+                if "active" not in payload:
+                    raise ValueError("control message requires active")
+                active = bool(payload["active"])
+                controller.set_active(active)
+                print("CONTROL:" + json.dumps({"active": active}, separators=(",", ":")), flush=True)
+            except Exception as exc:
+                print("CONTROL:" + json.dumps({"error": str(exc)}, separators=(",", ":")), flush=True)
+
+    threading.Thread(target=control_loop, name="face-control", daemon=True).start()
 
 
 class AdaptiveTargetFilter:
@@ -200,6 +241,9 @@ class UltraFaceDetector:
         self.net = cv2.dnn.readNetFromONNX(str(model_path))
         self.output_names = self.net.getUnconnectedOutLayersNames()
 
+    def warmup(self) -> None:
+        self.detect(np.zeros((self.input_height, self.input_width, 3), dtype=np.uint8))
+
     def detect(self, frame: np.ndarray) -> tuple[list[list[float]], list[float], list[int | None]]:
         h, w = frame.shape[:2]
         blob = cv2.dnn.blobFromImage(
@@ -252,6 +296,16 @@ class YoloFaceDetector:
         self.tracker = str(tracker) if tracker else "bytetrack.yaml"
         self.imgsz = int(max(160, imgsz))
 
+    def warmup(self) -> None:
+        self.model.predict(
+            np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8),
+            conf=self.conf,
+            iou=self.iou,
+            imgsz=self.imgsz,
+            max_det=1,
+            verbose=False,
+        )
+
     def detect(self, frame: np.ndarray) -> tuple[list[list[float]], list[float], list[int | None]]:
         results = self.model.predict(
             frame,
@@ -285,6 +339,84 @@ class YoloFaceDetector:
             scores.append(float(score))
             ids.append(None if track_id is None else int(track_id))
         return boxes, scores, ids
+
+
+class RknnFaceDetector:
+    """YOLOv8 face detector accelerated by RK3588's three-core NPU."""
+
+    def __init__(self, model_path: Path, conf: float, iou: float, imgsz: int) -> None:
+        from rknnlite.api import RKNNLite
+
+        self.conf = float(conf)
+        self.iou = float(iou)
+        self.imgsz = int(max(160, imgsz))
+        self.runtime = RKNNLite(verbose=False)
+        ret = self.runtime.load_rknn(str(model_path))
+        if ret != 0:
+            raise RuntimeError(f"Cannot load RKNN face model ({ret}): {model_path}")
+        ret = self.runtime.init_runtime(core_mask=RKNNLite.NPU_CORE_0_1_2)
+        if ret != 0:
+            self.runtime.release()
+            raise RuntimeError(f"Cannot initialize RKNN runtime ({ret})")
+
+    def warmup(self) -> None:
+        sample = np.zeros((1, self.imgsz, self.imgsz, 3), dtype=np.uint8)
+        outputs = self.runtime.inference(inputs=[sample], data_format=["nhwc"])
+        if not outputs:
+            raise RuntimeError("RKNN face detector warmup returned no output")
+
+    def detect(self, frame: np.ndarray) -> tuple[list[list[float]], list[float], list[int | None]]:
+        frame_h, frame_w = frame.shape[:2]
+        scale = min(self.imgsz / max(frame_w, 1), self.imgsz / max(frame_h, 1))
+        resized_w = max(1, int(round(frame_w * scale)))
+        resized_h = max(1, int(round(frame_h * scale)))
+        resized = cv2.resize(frame, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR)
+        pad_x = (self.imgsz - resized_w) // 2
+        pad_y = (self.imgsz - resized_h) // 2
+        canvas = np.full((self.imgsz, self.imgsz, 3), 114, dtype=np.uint8)
+        canvas[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = resized
+        rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)[None, ...]
+        outputs = self.runtime.inference(inputs=[rgb], data_format=["nhwc"])
+        if not outputs:
+            raise RuntimeError("RKNN face detector returned no output")
+
+        prediction = np.asarray(outputs[0], dtype=np.float32)
+        if prediction.ndim == 3:
+            prediction = prediction[0]
+        if prediction.ndim != 2:
+            raise RuntimeError(f"Unexpected RKNN face output shape: {prediction.shape}")
+        if prediction.shape[0] <= 8 and prediction.shape[1] > prediction.shape[0]:
+            prediction = prediction.T
+        if prediction.shape[1] < 5:
+            raise RuntimeError(f"Unexpected RKNN face output shape: {prediction.shape}")
+
+        candidates = prediction[prediction[:, 4] >= self.conf]
+        boxes: list[list[float]] = []
+        scores: list[float] = []
+        for candidate in candidates:
+            cx, cy, bw, bh, score = [float(v) for v in candidate[:5]]
+            x1 = (cx - bw * 0.5 - pad_x) / scale
+            y1 = (cy - bh * 0.5 - pad_y) / scale
+            x2 = (cx + bw * 0.5 - pad_x) / scale
+            y2 = (cy + bh * 0.5 - pad_y) / scale
+            x1 = float(np.clip(x1, 0, frame_w - 1))
+            y1 = float(np.clip(y1, 0, frame_h - 1))
+            x2 = float(np.clip(x2, 0, frame_w - 1))
+            y2 = float(np.clip(y2, 0, frame_h - 1))
+            if x2 - x1 < 8 or y2 - y1 < 8:
+                continue
+            boxes.append([x1, y1, x2, y2])
+            scores.append(score)
+        keep = nms(boxes, scores, self.iou)
+        return [boxes[i] for i in keep], [scores[i] for i in keep], [None] * len(keep)
+
+    def __del__(self) -> None:
+        runtime = getattr(self, "runtime", None)
+        if runtime is not None:
+            try:
+                runtime.release()
+            except Exception:
+                pass
 
 
 class HaarFaceDetector:
@@ -465,9 +597,10 @@ def choose_target(
 
 
 class DetectionWorker:
-    def __init__(self, detector: object, grabber: LatestFrameGrabber) -> None:
+    def __init__(self, detector: object, grabber: LatestFrameGrabber, controller: ActivationController) -> None:
         self.detector = detector
         self.grabber = grabber
+        self.controller = controller
         self.lock = threading.Lock()
         self.latest: dict[str, object] = {
             "frame_id": -1,
@@ -497,9 +630,26 @@ class DetectionWorker:
         with self.lock:
             self.predicted = None if box is None else np.asarray(box, dtype=np.float32).copy()
 
+    def reset_session(self) -> None:
+        with self.lock:
+            self.latest = {
+                "frame_id": -1,
+                "timestamp": 0.0,
+                "target": None,
+                "conf": 0.0,
+                "detections": 0,
+                "locked_id": None,
+                "error": "",
+            }
+            self.previous = None
+            self.predicted = None
+            self.locked_id = None
+
     def _loop(self) -> None:
         last_frame_id = -1
         while True:
+            if not self.controller.wait(0.1):
+                continue
             ok, frame, frame_id, captured_at, stream_error = self.grabber.read_latest()
             if not ok or frame is None or frame_id == last_frame_id:
                 time.sleep(0.008)
@@ -723,6 +873,9 @@ def run(args: argparse.Namespace) -> None:
         if requested_detector in {"haar", "haar_face", "opencv_haar"}:
             detector_name = "haar_face"
             detector = HaarFaceDetector(args.conf)
+        elif requested_detector in {"rknn", "rknn_face", "npu", "npu_face"} or model_path.suffix.lower() == ".rknn":
+            detector_name = "rknn_face"
+            detector = RknnFaceDetector(model_path, args.conf, args.iou, args.imgsz)
         elif requested_detector in {"yolo", "yolo_face", "yolov8", "yolov8_face"} or model_path.suffix.lower() == ".pt":
             detector_name = "yolo_face"
             tracker_path = resolve_path(args.tracker) if args.tracker else None
@@ -731,22 +884,44 @@ def run(args: argparse.Namespace) -> None:
             detector = UltraFaceDetector(model_path, args.input_width, args.input_height, args.conf, args.iou)
     except Exception as exc:
         fallback_error = str(exc)
-        if detector_name == "yolo_face":
+        if detector_name in {"rknn_face", "yolo_face"}:
             try:
-                detector_name = "ultra_face"
-                detector = UltraFaceDetector(DEFAULT_MODEL, args.input_width, args.input_height, args.conf, args.iou)
-            except Exception as ultra_exc:
-                detector_name = "haar_face"
-                print(json.dumps({"event": "detector_fallback", "error": fallback_error, "ultra_error": str(ultra_exc), "fallback": detector_name}), flush=True)
-                detector = HaarFaceDetector(args.conf)
+                if detector_name == "rknn_face":
+                    detector_name = "yolo_face"
+                    tracker_path = resolve_path(args.tracker) if args.tracker else None
+                    detector = YoloFaceDetector(resolve_path(args.fallback_model), args.conf, args.iou, tracker_path, args.imgsz, args.detector_threads)
+                    print(json.dumps({"event": "detector_fallback", "error": fallback_error, "fallback": detector_name}), flush=True)
+                else:
+                    raise RuntimeError(fallback_error)
+            except Exception as yolo_exc:
+                try:
+                    detector_name = "ultra_face"
+                    detector = UltraFaceDetector(DEFAULT_MODEL, args.input_width, args.input_height, args.conf, args.iou)
+                    print(json.dumps({"event": "detector_fallback", "error": str(yolo_exc), "fallback": detector_name}), flush=True)
+                except Exception as ultra_exc:
+                    detector_name = "haar_face"
+                    print(json.dumps({"event": "detector_fallback", "error": str(yolo_exc), "ultra_error": str(ultra_exc), "fallback": detector_name}), flush=True)
+                    detector = HaarFaceDetector(args.conf)
         else:
             detector_name = "haar_face"
             print(json.dumps({"event": "detector_fallback", "error": fallback_error, "fallback": detector_name}), flush=True)
             detector = HaarFaceDetector(args.conf)
 
+    warmup_ms = 0
+    if args.prewarm:
+        warmup_started = time.monotonic()
+        warmup = getattr(detector, "warmup", None)
+        if callable(warmup):
+            warmup()
+        else:
+            detector.detect(np.zeros((min(360, max(240, args.input_height)), min(640, max(320, args.input_width)), 3), dtype=np.uint8))
+        warmup_ms = round((time.monotonic() - warmup_started) * 1000.0)
+
+    controller = ActivationController(active=not args.start_paused)
+    start_control_reader(controller)
     grabber = LatestFrameGrabber(str(args.source))
     grabber.start()
-    detector_worker = DetectionWorker(detector, grabber)
+    detector_worker = DetectionWorker(detector, grabber, controller)
     detector_worker.start()
     bridge = OpticalFlowBridge(args.flow_scale, args.max_coast_seconds)
     smoother = AdaptiveTargetFilter(
@@ -772,9 +947,33 @@ def run(args: argparse.Namespace) -> None:
         "source": str(args.source),
         "model": str(model_path),
         "conf": args.conf,
+        "active": controller.is_active(),
+        "warmup_ms": warmup_ms,
+        "imgsz": args.imgsz,
     }, separators=(",", ":")), flush=True)
 
+    was_active = controller.is_active()
     while True:
+        active = controller.is_active()
+        if not active:
+            if was_active:
+                detector_worker.reset_session()
+                bridge.reset()
+                smoother.reset()
+            was_active = False
+            time.sleep(0.05)
+            continue
+        if not was_active:
+            detector_worker.reset_session()
+            bridge.reset()
+            smoother.reset()
+            last_frame_id = -1
+            last_detection_frame_id = -1
+            locked_id = None
+            last_conf = 0.0
+            last_detection_count = 0
+            was_active = True
+
         started = time.monotonic()
         ok, frame, frame_id, captured_at, stream_error = grabber.read_latest()
         if not ok or frame is None:
@@ -868,6 +1067,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Face target worker for gimbal tracking")
     parser.add_argument("--source", default=DEFAULT_SOURCE)
     parser.add_argument("--model", default=str(DEFAULT_MODEL))
+    parser.add_argument("--fallback-model", default="scripts/models/yolov8n-face-lindevs.pt")
     parser.add_argument("--detector", default="auto")
     parser.add_argument("--tracker", default="")
     parser.add_argument("--conf", type=float, default=0.65)
@@ -885,6 +1085,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--flow-threads", type=int, default=2)
     parser.add_argument("--detector-threads", type=int, default=3)
     parser.add_argument("--max-coast-seconds", type=float, default=2.0)
+    parser.add_argument("--start-paused", action="store_true")
+    parser.add_argument("--no-prewarm", dest="prewarm", action="store_false")
+    parser.set_defaults(prewarm=True)
     return parser.parse_args()
 
 

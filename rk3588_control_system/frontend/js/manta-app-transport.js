@@ -30,7 +30,9 @@
         }).then(function (response) {
             return response.json().catch(function () { return {}; }).then(function (payload) {
                 if (!response.ok || payload.success === false || payload.ok === false) {
-                    throw new Error(payload.message || ("HTTP " + response.status));
+                    var error = new Error(payload.message || ("HTTP " + response.status));
+                    error.payload = payload;
+                    throw error;
                 }
                 return payload;
             });
@@ -43,6 +45,7 @@
         this.device = DEFAULT_DEVICE;
         this.mode = "base";
         this.motionLocked = false;
+        this.driveEnabled = true;
         this.alertLogKeys = {};
     }
 
@@ -84,6 +87,11 @@
         return this.motionLocked;
     };
 
+    TransportBase.prototype.setDriveEnabled = function (enabled) {
+        this.driveEnabled = Boolean(enabled);
+        return this.driveEnabled;
+    };
+
     function MockTransport() {
         TransportBase.call(this);
         this.mode = "mock";
@@ -113,7 +121,7 @@
 
     MockTransport.prototype.connect = function () {
         this.connected = true;
-        this.emit("hardwareStatus", { boardOnline: true, pixhawkOnline: true, imuOnline: true, motorsOnline: true, gimbalOnline: true });
+        this.emit("hardwareStatus", { boardOnline: true, pixhawkOnline: true, imuOnline: true, motorsOnline: true, gimbalOnline: true, gimbalOutputAvailable: true });
         this.startedAt = Date.now();
         this.log("INFO", "LINK", "BLE 控制链路已建立", "hardware", "BLE control link established");
         this.log("INFO", "WIFI", "5 GHz 影像链路已建立，互联网保持在线", "hardware", "5 GHz video link established; internet remains online");
@@ -146,15 +154,15 @@
 
     MockTransport.prototype.drive = function (vector) {
         var nextVector = { x: clamp(vector.x, -1, 1), y: clamp(vector.y, -1, 1) };
-        if (this.motionLocked && Math.hypot(nextVector.x, nextVector.y) > 0.001) return;
+        if ((!this.driveEnabled || this.motionLocked) && Math.hypot(nextVector.x, nextVector.y) > 0.001) return;
         this.vector = nextVector;
         var throttle = Math.round(-this.vector.y * 100);
         var steering = Math.round(this.vector.x * 45);
         this.emit("driveAck", {
             throttle: throttle,
             steering: steering,
-            leftPwm: clamp(1500 + throttle * 4 - steering * 5, 1000, 2000),
-            rightPwm: clamp(1500 + throttle * 4 + steering * 5, 1000, 2000)
+            leftPwm: clamp(1500 + throttle * 4 + steering * 5, 1000, 2000),
+            rightPwm: clamp(1500 + throttle * 4 - steering * 5, 1000, 2000)
         });
     };
 
@@ -165,6 +173,18 @@
         return Promise.resolve({ success: true });
     };
 
+    MockTransport.prototype.startUwbFollow = function () {
+        var state = { active: true, status: "tracking", reason: "tracking", desiredSpeedMps: 0.6, speedLimitMps: 0.8 };
+        this.emit("uwbFollow", state);
+        return Promise.resolve({ success: true, state: state });
+    };
+
+    MockTransport.prototype.stopUwbFollow = function () {
+        var state = { active: false, status: "stopped", reason: "manual_stop", desiredSpeedMps: 0 };
+        this.emit("uwbFollow", state);
+        return Promise.resolve({ success: true, state: state });
+    };
+
     MockTransport.prototype.arm = function () {
         this.log("COMMAND", "SAFETY", "推进武装已确认", "command", "Propulsion arm confirmed");
         this.emit("armed", { armed: true });
@@ -172,10 +192,10 @@
     };
 
     MockTransport.prototype.gimbal = function (action, payload) {
-        var labels = { home: "云台回中", stop: "停止云台", recordStart: "开始录像", recordStop: "停止录像", click: "点击居中", face: "人脸跟踪", swimmer: "泳者跟踪" };
-        var labelsEn = { home: "Center gimbal", stop: "Stop gimbal", recordStart: "Start recording", recordStop: "Stop recording", click: "Click to center", face: "Face tracking", swimmer: "Swimmer tracking" };
+        var labels = { home: "云台回中", stop: "停止云台", recordStart: "开始录像", recordStop: "停止录像", click: "点击居中", face: "人脸跟踪", swimmer: "泳者跟踪", beacon: "UWB 信标" };
+        var labelsEn = { home: "Center gimbal", stop: "Stop gimbal", recordStart: "Start recording", recordStop: "Stop recording", click: "Click to center", face: "Face tracking", swimmer: "Swimmer tracking", beacon: "UWB Beacon" };
         this.log("COMMAND", "GIMBAL", labels[action] || action, "command", labelsEn[action] || action);
-        var state = Object.assign({ connected: true, action: action, ok: true, trackingActive: action === "face" || action === "swimmer", trackMode: action === "swimmer" ? "swimmer" : "face" }, payload || {});
+        var state = Object.assign({ connected: true, action: action, ok: true, trackingActive: action === "face" || action === "swimmer" || action === "beacon", trackMode: action === "beacon" ? "beacon" : action === "swimmer" ? "swimmer" : "face" }, payload || {});
         if (state.trackingActive) {
             state.trackStatus = { locked: true, status: "locked", frame_w: 1920, frame_h: 1080, x: 720, y: 220, w: 330, h: 520 };
             state.lastTarget = state.trackStatus;
@@ -225,11 +245,14 @@
         this.lastDriveAt = 0;
         this.pendingDrive = null;
         this.driveTimer = null;
+        this.driveKeepaliveTimer = null;
+        this.driveVector = { x: 0, y: 0 };
         this.lastLatency = 0;
         this.pollFailures = 0;
         this.gimbalTrackingActive = false;
         this.gimbalTrackMode = null;
         this.gimbalModePromise = Promise.resolve();
+        this.driveLimits = { throttle: 100, steering: 45 };
     }
 
     LiveTransport.prototype = Object.create(TransportBase.prototype);
@@ -260,6 +283,7 @@
             this.connectSocket();
             this.applyStatus(payload);
             this.startPolling();
+            this.startDriveKeepalive();
             this.log("INFO", "LINK", "已连接 Manta 真实控制服务", "hardware");
             return this.openGimbalLink().then(function () { return { device: DEFAULT_DEVICE }; });
         }.bind(this));
@@ -271,10 +295,21 @@
         this.socket.on("connect", function () { this.emit("connection", { connected: true, degraded: false }); }.bind(this));
         this.socket.on("telemetry_update", function (telemetry) { this.applyTelemetry(telemetry); }.bind(this));
         this.socket.on("system_state", function (state) { if (state) this.applyStatus({ data: state }); }.bind(this));
+        this.socket.on("motor_output_update", function (motors) {
+            motors = motors || {};
+            var leftMotor = motors.left || { online: false, outputOnline: false, status: "offline" };
+            var rightMotor = motors.right || { online: false, outputOnline: false, status: "offline" };
+            this.emit("hardwareStatus", {
+                motorsOnline: Boolean((leftMotor.online || leftMotor.outputOnline) && (rightMotor.online || rightMotor.outputOnline)),
+                leftMotor: leftMotor,
+                rightMotor: rightMotor
+            });
+        }.bind(this));
         this.socket.on("rover_drive_ack", function (payload) { this.emit("driveAck", payload || {}); }.bind(this));
         this.socket.on("gimbal_state", function (state) { this.applyGimbalTrackingState(state); this.emit("gimbalState", state || {}); }.bind(this));
         this.socket.on("gimbal_target", function (target) { this.emit("gimbalTarget", target || {}); }.bind(this));
         this.socket.on("gimbal_track_status", function (status) { this.emit("gimbalTrackStatus", status || {}); }.bind(this));
+        this.socket.on("uwb_follow_update", function (state) { this.emit("uwbFollow", state || {}); }.bind(this));
         this.socket.on("aircraft_armed", function () { this.emit("armed", { armed: true }); }.bind(this));
         this.socket.on("aircraft_disarmed", function () { this.emit("armed", { armed: false }); }.bind(this));
         this.socket.on("log_entry", function (entry) {
@@ -310,18 +345,27 @@
         var leftMotor = motors.left || { online: false, outputOnline: false, status: "offline" };
         var rightMotor = motors.right || { online: false, outputOnline: false, status: "offline" };
         var gimbal = hardware.gimbal || {};
+        var limits = payload && payload.limits ? payload.limits : {};
+        var throttleLimits = limits.throttle || {};
+        var steeringLimits = limits.steering || {};
+        var throttleLimit = Math.max(Math.abs(Number(throttleLimits.min) || 0), Math.abs(Number(throttleLimits.max) || 0));
+        var steeringLimit = Math.max(Math.abs(Number(steeringLimits.min) || 0), Math.abs(Number(steeringLimits.max) || 0));
+        if (throttleLimit > 0) this.driveLimits.throttle = throttleLimit;
+        if (steeringLimit > 0) this.driveLimits.steering = steeringLimit;
         this.pixhawkOnline = Boolean(pixhawk.online) && Boolean(data.isConnected) && String(data.pixhawkStatus || "").toLowerCase() !== "disconnected";
         this.emit("hardwareStatus", {
             boardOnline: true,
             pixhawkOnline: this.pixhawkOnline,
             imuOnline: this.pixhawkOnline,
-            motorsOnline: Boolean(leftMotor.online && rightMotor.online),
+            motorsOnline: Boolean((leftMotor.online || leftMotor.outputOnline) && (rightMotor.online || rightMotor.outputOnline)),
             leftMotor: leftMotor,
             rightMotor: rightMotor,
-            gimbalOnline: Boolean(gimbal.online)
+            gimbalOnline: Boolean(gimbal.online),
+            gimbalOutputAvailable: Boolean(gimbal.online || gimbal.portOpen)
         });
         if (data.telemetry) this.applyTelemetry(data.telemetry);
         if (data.gimbal) { this.applyGimbalTrackingState(data.gimbal); this.emit("gimbalState", data.gimbal); }
+        if (data.uwbFollow) this.emit("uwbFollow", data.uwbFollow);
     };
 
     LiveTransport.prototype.refreshGimbalState = function () {
@@ -329,10 +373,10 @@
             var state = payload && payload.state ? payload.state : {};
             this.applyGimbalTrackingState(state);
             this.emit("gimbalState", state);
-            this.emit("hardwareStatus", { gimbalOnline: Boolean(state.connected) });
+            this.emit("hardwareStatus", { gimbalOnline: Boolean(state.connected), gimbalOutputAvailable: Boolean(state.connected || state.portOpen) });
             return state;
         }.bind(this)).catch(function () {
-            this.emit("hardwareStatus", { gimbalOnline: false });
+            this.emit("hardwareStatus", { gimbalOnline: false, gimbalOutputAvailable: false });
             return {};
         }.bind(this));
     };
@@ -340,7 +384,7 @@
     LiveTransport.prototype.applyGimbalTrackingState = function (state) {
         state = state || {};
         this.gimbalTrackingActive = Boolean(state.trackingActive);
-        if (state.trackMode === "face" || state.trackMode === "swimmer") this.gimbalTrackMode = state.trackMode;
+        if (state.trackMode === "face" || state.trackMode === "swimmer" || state.trackMode === "beacon") this.gimbalTrackMode = state.trackMode;
         if (!this.gimbalTrackingActive) this.gimbalTrackMode = null;
     };
 
@@ -350,7 +394,7 @@
         }).then(function () {
             return this.refreshGimbalState();
         }.bind(this)).catch(function (error) {
-            this.emit("hardwareStatus", { gimbalOnline: false });
+            this.emit("hardwareStatus", { gimbalOnline: false, gimbalOutputAvailable: false });
             this.log("WARNING", "GIMBAL", "云台串口连接失败：" + error.message, "hardware", "Gimbal serial connection failed: " + error.message);
             return {};
         }.bind(this));
@@ -378,13 +422,31 @@
             battery: telemetry.battery || {},
             imuCalibration: telemetry.imuCalibration || {},
             gps: telemetry.gps || {},
-            uwb: telemetry.uwb || {}
+            uwb: telemetry.uwb || {},
+            ekf: telemetry.ekf || {},
+            armed: Boolean(telemetry.armed),
+            flightMode: telemetry.flightMode || "MANUAL"
         });
     };
 
+    LiveTransport.prototype.startDriveKeepalive = function () {
+        clearInterval(this.driveKeepaliveTimer);
+        this.driveKeepaliveTimer = setInterval(function () {
+            if (!this.connected || !this.driveEnabled || this.motionLocked) return;
+            var vector = this.driveVector || { x: 0, y: 0 };
+            if (Math.hypot(vector.x, vector.y) <= 0.001) return;
+            this.drive(vector);
+        }.bind(this), 100);
+    };
+
     LiveTransport.prototype.drive = function (vector) {
-        var payload = { throttle: Math.round(clamp(-vector.y, -1, 1) * 100), steering: Math.round(clamp(vector.x, -1, 1) * 45) };
-        if (this.motionLocked && (payload.throttle !== 0 || payload.steering !== 0)) return;
+        var nextVector = { x: clamp(vector.x, -1, 1), y: clamp(vector.y, -1, 1) };
+        var payload = {
+            throttle: Math.round(-nextVector.y * this.driveLimits.throttle * 10) / 10,
+            steering: Math.round(nextVector.x * this.driveLimits.steering * 10) / 10
+        };
+        if ((!this.driveEnabled || this.motionLocked) && (payload.throttle !== 0 || payload.steering !== 0)) return;
+        this.driveVector = nextVector;
         var send = function () {
             this.lastDriveAt = Date.now();
             this.pendingDrive = null;
@@ -411,6 +473,20 @@
         }.bind(this));
     };
 
+    LiveTransport.prototype.startUwbFollow = function () {
+        return postJson("/api/uwb-follow/start", {}).then(function (result) {
+            if (result && result.state) this.emit("uwbFollow", result.state);
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.stopUwbFollow = function () {
+        return postJson("/api/uwb-follow/stop", {}).then(function (result) {
+            if (result && result.state) this.emit("uwbFollow", result.state);
+            return result;
+        }.bind(this));
+    };
+
     LiveTransport.prototype.arm = function () {
         if (!this.socket || !this.socket.connected) return Promise.reject(new Error("实时控制链路未连接，拒绝武装"));
         return new Promise(function (resolve, reject) {
@@ -430,7 +506,7 @@
     };
 
     LiveTransport.prototype.gimbal = function (action, payload) {
-        if (action === "face" || action === "swimmer" || action === "click") {
+        if (action === "face" || action === "swimmer" || action === "beacon" || action === "click") {
             var requestedMode = action;
             var switchMode = function () {
                 if (requestedMode === "click") {
@@ -485,6 +561,24 @@
         }.bind(this));
     };
 
+    LiveTransport.prototype.startBeaconCalibration = function () {
+        return postJson("/api/gimbal/beacon/calibration/start", {});
+    };
+
+    LiveTransport.prototype.captureBeaconCalibration = function () {
+        return postJson("/api/gimbal/beacon/calibration/capture", {});
+    };
+
+    LiveTransport.prototype.cancelBeaconCalibration = function () {
+        return postJson("/api/gimbal/beacon/calibration/cancel", {});
+    };
+
+    LiveTransport.prototype.getBeaconCalibration = function () {
+        return fetch("/api/gimbal/beacon/calibration", { cache: "no-store" }).then(function (response) {
+            return response.json();
+        });
+    };
+
     LiveTransport.prototype.startImuCalibration = function (type) {
         return postJson("/api/calibration/imu/start", { type: String(type || "ACCEL").toUpperCase() });
     };
@@ -504,6 +598,8 @@
         this.drive({ x: 0, y: 0 });
         this.connected = false;
         clearInterval(this.pollTimer);
+        clearInterval(this.driveKeepaliveTimer);
+        this.driveKeepaliveTimer = null;
         clearTimeout(this.driveTimer);
         if (this.socket) this.socket.disconnect();
         this.socket = null;

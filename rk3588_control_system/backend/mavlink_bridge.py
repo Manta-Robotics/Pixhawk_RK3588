@@ -66,12 +66,10 @@ ACCELCAL_POSITION_SUCCESS = 16777215
 ACCELCAL_POSITION_FAILED = 16777216
 MAV_CMD_PREFLIGHT_CALIBRATION = getattr(mavutil.mavlink, 'MAV_CMD_PREFLIGHT_CALIBRATION', 241)
 MAV_CMD_ACCELCAL_VEHICLE_POS = getattr(mavutil.mavlink, 'MAV_CMD_ACCELCAL_VEHICLE_POS', 42429)
-MAV_CMD_DO_SET_SERVO = getattr(mavutil.mavlink, 'MAV_CMD_DO_SET_SERVO', 183)
 MAV_CMD_SET_MESSAGE_INTERVAL = getattr(mavutil.mavlink, 'MAV_CMD_SET_MESSAGE_INTERVAL', 511)
 MAV_RESULT_ACCEPTED = getattr(mavutil.mavlink, 'MAV_RESULT_ACCEPTED', 0)
 MAV_RESULT_IN_PROGRESS = getattr(mavutil.mavlink, 'MAV_RESULT_IN_PROGRESS', 5)
 MAV_RESULT_CANCELLED = getattr(mavutil.mavlink, 'MAV_RESULT_CANCELLED', 6)
-MAV_PARAM_TYPE_REAL32 = getattr(mavutil.mavlink, 'MAV_PARAM_TYPE_REAL32', 9)
 
 
 def load_config() -> Dict[str, Any]:
@@ -84,6 +82,46 @@ def load_config() -> Dict[str, Any]:
     except Exception as exc:
         logger.error('Failed to read config: %s', exc)
         return {}
+
+
+def rover_manual_control_axes(
+    throttle: float,
+    steering: float,
+    throttle_min: float = -100.0,
+    throttle_max: float = 100.0,
+    steering_min: float = -45.0,
+    steering_max: float = 45.0,
+) -> tuple[int, int]:
+    """Convert Manta commands to ArduRover's centered y/z axes (neutral=0)."""
+    if throttle_max <= throttle_min or steering_max <= steering_min:
+        raise ValueError('Rover control ranges must have a positive span')
+
+    clamped_throttle = max(throttle_min, min(throttle_max, float(throttle)))
+    clamped_steering = max(steering_min, min(steering_max, float(steering)))
+    throttle_axis = round(-1000.0 + (clamped_throttle - throttle_min) * 2000.0 / (throttle_max - throttle_min))
+    steering_axis = round(-1000.0 + (clamped_steering - steering_min) * 2000.0 / (steering_max - steering_min))
+    return int(max(-1000, min(1000, steering_axis))), int(max(-1000, min(1000, throttle_axis)))
+
+
+def is_vehicle_heartbeat(msg: Any) -> bool:
+    """Reject GCS heartbeats that may be routed through the flight controller."""
+    if msg is None or msg.get_type() != 'HEARTBEAT':
+        return False
+    vehicle_type = int(getattr(msg, 'type', mavutil.mavlink.MAV_TYPE_GCS))
+    autopilot_type = int(getattr(msg, 'autopilot', mavutil.mavlink.MAV_AUTOPILOT_INVALID))
+    return (
+        vehicle_type != mavutil.mavlink.MAV_TYPE_GCS
+        and autopilot_type != mavutil.mavlink.MAV_AUTOPILOT_INVALID
+    )
+
+
+def is_target_fcu_heartbeat(msg: Any, target_system: int, target_component: int) -> bool:
+    if not is_vehicle_heartbeat(msg):
+        return False
+    return (
+        int(msg.get_srcSystem()) == int(target_system)
+        and int(msg.get_srcComponent()) == int(target_component)
+    )
 
 
 @dataclass
@@ -125,6 +163,12 @@ class FlightData:
     gps_updated_at: Optional[int] = None
     position_source: str = ''
     position_updated_at: Optional[int] = None
+    ekf_flags: int = 0
+    ekf_healthy: bool = False
+    ekf_velocity_variance: Optional[float] = None
+    ekf_pos_horiz_variance: Optional[float] = None
+    ekf_compass_variance: Optional[float] = None
+    ekf_updated_at: Optional[int] = None
     flight_mode: str = 'STABILIZE'
     system_status: str = 'STANDBY'
     armed: bool = False
@@ -201,8 +245,10 @@ class MAVLinkBridge:
         heartbeat_interval: float,
         rover_left_output_channel: int,
         rover_right_output_channel: int,
-        rover_steering_input_channel: int,
-        rover_throttle_input_channel: int,
+        rover_throttle_min: float,
+        rover_throttle_max: float,
+        rover_steering_min: float,
+        rover_steering_max: float,
     ) -> None:
         self.serial_port = serial_port
         self.baudrate = baudrate
@@ -213,8 +259,10 @@ class MAVLinkBridge:
         self.heartbeat_interval = max(0.2, heartbeat_interval)
         self.rover_left_output_channel = max(1, min(32, int(rover_left_output_channel)))
         self.rover_right_output_channel = max(1, min(32, int(rover_right_output_channel)))
-        self.rover_steering_input_channel = max(1, min(8, int(rover_steering_input_channel)))
-        self.rover_throttle_input_channel = max(1, min(8, int(rover_throttle_input_channel)))
+        self.rover_throttle_min = float(rover_throttle_min)
+        self.rover_throttle_max = float(rover_throttle_max)
+        self.rover_steering_min = float(rover_steering_min)
+        self.rover_steering_max = float(rover_steering_max)
 
         self.master: Optional[mavutil.mavfile] = None
         self.connected = False
@@ -276,100 +324,6 @@ class MAVLinkBridge:
 
         self.uwb_data.updated_at = int(time.time() * 1000)
 
-    def _fetch_param(self, name: str, timeout: float = 2.0) -> Optional[float]:
-        if self.master is None:
-            return None
-
-        try:
-            self.master.param_fetch_one(name)
-        except Exception as exc:
-            logger.debug('Failed to request param %s: %s', name, exc)
-            return None
-
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                msg = self.master.recv_match(type='PARAM_VALUE', blocking=True, timeout=0.4)
-            except Exception as exc:
-                logger.debug('Failed while fetching param %s: %s', name, exc)
-                return None
-
-            if not msg:
-                continue
-
-            if self._param_name(getattr(msg, 'param_id', '')) == name:
-                return float(getattr(msg, 'param_value', 0.0) or 0.0)
-
-        return None
-
-    def _set_param(self, name: str, value: float, timeout: float = 3.0) -> Optional[float]:
-        if self.master is None:
-            return None
-
-        try:
-            self.master.mav.param_set_send(
-                self.target_system,
-                self.target_component,
-                name.encode('utf-8'),
-                float(value),
-                MAV_PARAM_TYPE_REAL32,
-            )
-        except Exception as exc:
-            logger.debug('Failed to send param_set for %s: %s', name, exc)
-            return None
-
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                msg = self.master.recv_match(type='PARAM_VALUE', blocking=True, timeout=0.5)
-            except Exception as exc:
-                logger.debug('Failed while waiting param ack for %s: %s', name, exc)
-                return None
-
-            if not msg:
-                continue
-
-            if self._param_name(getattr(msg, 'param_id', '')) == name:
-                return float(getattr(msg, 'param_value', 0.0) or 0.0)
-
-        return None
-
-    def _ensure_rover_motor_outputs(self) -> None:
-        if self.master is None:
-            return
-
-        target_params = {
-            'PILOT_STEER_TYPE': 0,
-            f'RC{self.rover_steering_input_channel}_REVERSED': 0,
-            f'RC{self.rover_throttle_input_channel}_REVERSED': 0,
-            f'SERVO{self.rover_left_output_channel}_FUNCTION': 73,
-            f'SERVO{self.rover_right_output_channel}_FUNCTION': 74,
-            f'SERVO{self.rover_left_output_channel}_REVERSED': 1,
-            f'SERVO{self.rover_right_output_channel}_REVERSED': 1,
-        }
-
-        for name, target_value in target_params.items():
-            current_value = self._fetch_param(name)
-            if current_value is None:
-                logger.warning('Unable to read %s while preparing Pixhawk rover output control', name)
-                continue
-
-            if int(round(current_value)) == target_value:
-                continue
-
-            applied_value = self._set_param(name, float(target_value))
-            if applied_value is None:
-                logger.warning('Unable to set %s=%s for Pixhawk rover output control', name, target_value)
-                continue
-
-            logger.warning('Updated %s from %s to %s for Pixhawk rover output control', name, int(round(current_value)), int(round(applied_value)))
-            self._send_node_log(
-                'WARNING',
-                f'{name} changed from {int(round(current_value))} to {int(round(applied_value))} for Pixhawk rover output control',
-                key=f'rover-output:{name}',
-                min_interval=1.0,
-            )
-
     def _set_message_interval(self, message_id: int, rate_hz: float) -> None:
         if self.master is None or rate_hz <= 0:
             return
@@ -401,6 +355,7 @@ class MAVLinkBridge:
             getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_GLOBAL_POSITION_INT', 33): 20.0,
             getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_GPS_RAW_INT', 24): 10.0,
             getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_SYS_STATUS', 1): 10.0,
+            getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_EKF_STATUS_REPORT', 193): 5.0,
         }
 
         esc_groups = {
@@ -428,7 +383,17 @@ class MAVLinkBridge:
                 source_system=255,
             )
 
-            hb = self.master.wait_heartbeat(timeout=timeout)
+            deadline = time.monotonic() + timeout
+            hb = None
+            while time.monotonic() < deadline:
+                candidate = self.master.recv_match(
+                    type='HEARTBEAT',
+                    blocking=True,
+                    timeout=max(0.1, deadline - time.monotonic()),
+                )
+                if is_vehicle_heartbeat(candidate):
+                    hb = candidate
+                    break
             if hb is None:
                 logger.error('Heartbeat timeout during connect')
                 self._send_node_log(
@@ -456,10 +421,12 @@ class MAVLinkBridge:
                 key='connect-success',
                 min_interval=1.0,
             )
-            self._ensure_rover_motor_outputs()
+            logger.info(
+                'Rover MANUAL_CONTROL ready; expected Pixhawk mixer outputs: SERVO%d_FUNCTION=73, SERVO%d_FUNCTION=74',
+                self.rover_left_output_channel,
+                self.rover_right_output_channel,
+            )
             self._configure_message_intervals()
-            # Parameter reads during initialization may consume queued
-            # heartbeats. Start runtime freshness from the completed setup.
             self._last_fcu_heartbeat_at = time.time()
             self._send_node_packet('connection', {'connected': True})
             return True
@@ -553,84 +520,69 @@ class MAVLinkBridge:
         except Exception as exc:
             logger.debug('Heartbeat send failed: %s', exc)
 
-    def _send_motor_command(self, channel: int, pwm: int) -> bool:
+    def _send_rover_drive(self, throttle: float, steering: float) -> bool:
         if self.master is None:
             return False
 
-        if channel < 1 or channel > 32:
-            logger.error('Invalid channel %s for motor command', channel)
-            return False
-
-        pwm_value = int(max(1000, min(2000, pwm)))
-
+        steering_axis, throttle_axis = rover_manual_control_axes(
+            throttle,
+            steering,
+            self.rover_throttle_min,
+            self.rover_throttle_max,
+            self.rover_steering_min,
+            self.rover_steering_max,
+        )
         try:
-            self.master.mav.command_long_send(
+            self.master.mav.manual_control_send(
                 self.target_system,
-                self.target_component,
-                MAV_CMD_DO_SET_SERVO,
-                0,
-                float(channel),
-                float(pwm_value),
-                0,
-                0,
-                0,
-                0,
+                32767,
+                steering_axis,
+                throttle_axis,
+                32767,
                 0,
             )
-            logger.info('Motor command sent: channel=%d pwm=%d', channel, pwm_value)
-            return True
         except Exception as exc:
-            logger.error('Failed to send motor command: %s', exc)
-            return False
-
-    def _send_rc_override(self, overrides: Dict[int, int]) -> bool:
-        if self.master is None:
-            return False
-
-        channels = [65535] * 8
-        for channel, pwm in overrides.items():
-            if channel < 1 or channel > 8:
-                logger.error('Invalid RC input channel %s for override', channel)
-                return False
-            channels[channel - 1] = int(max(1000, min(2000, pwm)))
-
-        try:
-            self.master.mav.rc_channels_override_send(
-                self.target_system,
-                self.target_component,
-                channels[0],
-                channels[1],
-                channels[2],
-                channels[3],
-                channels[4],
-                channels[5],
-                channels[6],
-                channels[7],
-            )
-            return True
-        except Exception as exc:
-            logger.error('Failed to send RC override: %s', exc)
-            return False
-
-    def _send_rover_drive(self, throttle_channel: int, throttle_pwm: int, steering_channel: int, steering_pwm: int) -> bool:
-        if throttle_channel == steering_channel:
-            logger.error('Rover throttle/steering channels must be different')
-            return False
-
-        if not self._send_rc_override({
-            int(throttle_channel): int(throttle_pwm),
-            int(steering_channel): int(steering_pwm),
-        }):
+            logger.error('Failed to send rover MANUAL_CONTROL: %s', exc)
             return False
 
         logger.info(
-            'Rover drive input sent: throttle ch%d=%d, steering ch%d=%d',
-            int(throttle_channel),
-            int(throttle_pwm),
-            int(steering_channel),
-            int(steering_pwm),
+            'Rover MANUAL_CONTROL sent: throttle=%.1f%% (z=%d), steering=%.1fdeg (y=%d)',
+            float(throttle),
+            throttle_axis,
+            float(steering),
+            steering_axis,
         )
         return True
+
+    def _send_rover_velocity_ned(self, vx: float, vy: float) -> bool:
+        if self.master is None or not math.isfinite(vx) or not math.isfinite(vy):
+            return False
+
+        vx = max(-5.0, min(5.0, float(vx)))
+        vy = max(-5.0, min(5.0, float(vy)))
+        try:
+            self.master.mav.set_position_target_local_ned_send(
+                int(time.monotonic() * 1000) & 0xffffffff,
+                self.target_system,
+                self.target_component,
+                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                3559,  # vx/vy only; ignore position, vz, acceleration, yaw and yaw-rate
+                0.0,
+                0.0,
+                0.0,
+                vx,
+                vy,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            )
+            return True
+        except Exception as exc:
+            logger.error('Failed to send rover NED velocity: %s', exc)
+            return False
 
     def _arm_disarm(self, arm: bool) -> bool:
         if self.master is None:
@@ -653,6 +605,23 @@ class MAVLinkBridge:
             return True
         except Exception as exc:
             logger.error('Failed to send arm/disarm: %s', exc)
+            return False
+
+    def _set_flight_mode(self, mode_name: str) -> bool:
+        if self.master is None:
+            return False
+        normalized_mode = str(mode_name).upper().strip()
+        try:
+            mode_mapping = self.master.mode_mapping() or {}
+            mode_id = mode_mapping.get(normalized_mode)
+            if mode_id is None:
+                logger.error('Unsupported flight mode: %s', normalized_mode)
+                return False
+            self.master.set_mode(int(mode_id))
+            logger.info('SET_MODE %s command sent (custom mode %s)', normalized_mode, mode_id)
+            return True
+        except Exception as exc:
+            logger.error('Failed to set flight mode %s: %s', normalized_mode, exc)
             return False
 
     def _update_imu_calibration(self, **changes: Any) -> None:
@@ -1004,11 +973,31 @@ class MAVLinkBridge:
             return
 
         if command == 'ROVER_DRIVE':
-            throttle_channel = int(params.get('throttleChannel', 3))
-            throttle_pwm = int(params.get('throttlePwm', 1500))
-            steering_channel = int(params.get('steeringChannel', 1))
-            steering_pwm = int(params.get('steeringPwm', 1500))
-            self._send_rover_drive(throttle_channel, throttle_pwm, steering_channel, steering_pwm)
+            if 'throttle' in params or 'steering' in params:
+                throttle = float(params.get('throttle', 0.0))
+                steering = float(params.get('steering', 0.0))
+            else:
+                # Transitional compatibility for a Node process from the prior PWM-shaped protocol.
+                throttle_pwm = int(params.get('throttlePwm', 1500))
+                steering_pwm = int(params.get('steeringPwm', 1500))
+                throttle = self.rover_throttle_min + (throttle_pwm - 1000) * (
+                    self.rover_throttle_max - self.rover_throttle_min
+                ) / 1000.0
+                steering = self.rover_steering_min + (steering_pwm - 1000) * (
+                    self.rover_steering_max - self.rover_steering_min
+                ) / 1000.0
+            self._send_rover_drive(throttle, steering)
+            return
+
+        if command == 'ROVER_VELOCITY_NED':
+            self._send_rover_velocity_ned(
+                float(params.get('vx', 0.0)),
+                float(params.get('vy', 0.0)),
+            )
+            return
+
+        if command == 'SET_MODE':
+            self._set_flight_mode(str(params.get('mode', '')))
             return
 
         if command == 'ARM':
@@ -1030,15 +1019,7 @@ class MAVLinkBridge:
             return
 
         if command == 'EMERGENCY_STOP':
-            throttle_channel = int(params.get('throttleChannel', self.rover_throttle_input_channel))
-            steering_channel = int(params.get('steeringChannel', self.rover_steering_input_channel))
-            throttle_pwm = int(params.get('throttlePwm', 1500))
-            steering_pwm = int(params.get('steeringPwm', 1500))
-
-            self._send_rc_override({
-                throttle_channel: throttle_pwm,
-                steering_channel: steering_pwm,
-            })
+            self._send_rover_drive(0.0, 0.0)
             self._arm_disarm(False)
             return
 
@@ -1060,6 +1041,8 @@ class MAVLinkBridge:
         msg_type = msg.get_type()
 
         if msg_type == 'HEARTBEAT':
+            if not is_target_fcu_heartbeat(msg, self.target_system, self.target_component):
+                return
             self._last_fcu_heartbeat_at = time.time()
             self.flight_data.armed = bool(getattr(msg, 'base_mode', 0) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
             self.flight_data.flight_mode = mavutil.mode_string_v10(msg)
@@ -1153,6 +1136,24 @@ class MAVLinkBridge:
             self.flight_data.position_source = 'GLOBAL_POSITION_INT'
             self.flight_data.position_updated_at = int(time.time() * 1000)
 
+        elif msg_type == 'EKF_STATUS_REPORT':
+            flags = int(getattr(msg, 'flags', 0) or 0)
+            velocity_horiz = int(getattr(mavutil.mavlink, 'ESTIMATOR_VELOCITY_HORIZ', 2))
+            pos_horiz_abs = int(getattr(mavutil.mavlink, 'ESTIMATOR_POS_HORIZ_ABS', 16))
+            const_pos_mode = int(getattr(mavutil.mavlink, 'ESTIMATOR_CONST_POS_MODE', 128))
+            gps_glitch = int(getattr(mavutil.mavlink, 'ESTIMATOR_GPS_GLITCH', 32768))
+            required = velocity_horiz | pos_horiz_abs
+            self.flight_data.ekf_flags = flags
+            self.flight_data.ekf_healthy = (
+                flags & required == required
+                and flags & const_pos_mode == 0
+                and flags & gps_glitch == 0
+            )
+            self.flight_data.ekf_velocity_variance = float(getattr(msg, 'velocity_variance', 0.0))
+            self.flight_data.ekf_pos_horiz_variance = float(getattr(msg, 'pos_horiz_variance', 0.0))
+            self.flight_data.ekf_compass_variance = float(getattr(msg, 'compass_variance', 0.0))
+            self.flight_data.ekf_updated_at = int(time.time() * 1000)
+
         elif msg_type == 'ATTITUDE':
             self.flight_data.roll = math.degrees(float(getattr(msg, 'roll', 0.0)))
             self.flight_data.pitch = math.degrees(float(getattr(msg, 'pitch', 0.0)))
@@ -1191,6 +1192,15 @@ class MAVLinkBridge:
         elif msg_type == 'COMMAND_ACK':
             command = int(getattr(msg, 'command', 0) or 0)
             result = int(getattr(msg, 'result', 0) or 0)
+            if command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
+                result_name = self._mav_result_name(result)
+                logger.info('ARM/DISARM ACK: %s (%d)', result_name, result)
+                self._send_node_log(
+                    'INFO' if result == MAV_RESULT_ACCEPTED else 'WARNING',
+                    f'FCU ARM/DISARM ACK: {result_name} ({result})',
+                    key=f'arm-ack:{result}',
+                    min_interval=0.2,
+                )
             progress_raw = getattr(msg, 'progress', None)
             progress = None
             if progress_raw is not None:
@@ -1340,6 +1350,15 @@ class MAVLinkBridge:
                 'vy': self.flight_data.vy,
                 'vz': self.flight_data.vz,
             },
+            'ekf': {
+                'healthy': self.flight_data.ekf_healthy,
+                'flags': self.flight_data.ekf_flags,
+                'velocityVariance': self.flight_data.ekf_velocity_variance,
+                'positionHorizontalVariance': self.flight_data.ekf_pos_horiz_variance,
+                'compassVariance': self.flight_data.ekf_compass_variance,
+                'updatedAt': self.flight_data.ekf_updated_at,
+                'source': 'EKF_STATUS_REPORT',
+            },
             'battery': {
                 'voltage': self.flight_data.battery_voltage,
                 'current': self.flight_data.battery_current,
@@ -1461,8 +1480,10 @@ def main() -> None:
     heartbeat_interval = float(config.get('heartbeat_interval', 1.0))
     rover_left_output_channel = int(config.get('rover_left_channel', 1))
     rover_right_output_channel = int(config.get('rover_right_channel', 3))
-    rover_steering_input_channel = int(config.get('rover_steering_input_channel', 1))
-    rover_throttle_input_channel = int(config.get('rover_throttle_input_channel', 3))
+    rover_throttle_min = float(config.get('rover_throttle_min', -100))
+    rover_throttle_max = float(config.get('rover_throttle_max', 100))
+    rover_steering_min = float(config.get('rover_steering_min', -45))
+    rover_steering_max = float(config.get('rover_steering_max', 45))
 
     logger.info('Bridge will keep retrying until Pixhawk heartbeat is received')
 
@@ -1477,8 +1498,10 @@ def main() -> None:
             heartbeat_interval=heartbeat_interval,
             rover_left_output_channel=rover_left_output_channel,
             rover_right_output_channel=rover_right_output_channel,
-            rover_steering_input_channel=rover_steering_input_channel,
-            rover_throttle_input_channel=rover_throttle_input_channel,
+            rover_throttle_min=rover_throttle_min,
+            rover_throttle_max=rover_throttle_max,
+            rover_steering_min=rover_steering_min,
+            rover_steering_max=rover_steering_max,
         )
 
         if bridge.connect(timeout=8.0):

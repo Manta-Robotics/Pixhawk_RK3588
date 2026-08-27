@@ -681,8 +681,8 @@
         var steeringScale = (pwmLimits.max - pwmLimits.center) / Math.max(1, driveLimits.steering);
         var x = steering / Math.max(1, driveLimits.steering);
         var y = throttle / Math.max(1, driveLimits.throttle);
-        var leftPwm = clamp(pwmLimits.center + throttle * throttleScale - steering * steeringScale, pwmLimits.min, pwmLimits.max);
-        var rightPwm = clamp(pwmLimits.center + throttle * throttleScale + steering * steeringScale, pwmLimits.min, pwmLimits.max);
+        var leftPwm = clamp(pwmLimits.center + throttle * throttleScale + steering * steeringScale, pwmLimits.min, pwmLimits.max);
+        var rightPwm = clamp(pwmLimits.center + throttle * throttleScale - steering * steeringScale, pwmLimits.min, pwmLimits.max);
 
         if (pad) {
             pad.style.setProperty("--joystick-x", (50 + x * 38).toFixed(2) + "%");

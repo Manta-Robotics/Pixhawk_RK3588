@@ -94,8 +94,9 @@ body[data-theme="light"] select{color-scheme:light}
 .control-identity i{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green-dim)}
 .control-identity i.offline{background:var(--red);box-shadow:0 0 0 4px rgba(255,73,90,.1)}
 .control-identity b{font-size:14px;font-weight:600}.control-identity small{font-size:11px;color:var(--t3);margin-left:4px}
-.control-mode{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t2)}
-.control-mode span{font-weight:500}.control-mode button{font-size:11px;color:var(--t3);background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:4px 10px;cursor:pointer}
+.control-mode{display:flex;align-items:center;gap:4px;padding:3px;background:var(--bg2);border:1px solid var(--border);border-radius:10px}
+.control-mode button{font-size:11px;color:var(--t3);background:transparent;border:1px solid transparent;border-radius:7px;padding:4px 10px;cursor:pointer;transition:all var(--fast)}
+.control-mode button.active{color:var(--ice);background:var(--ice-dim);border-color:rgba(126,200,227,.24)}
 .disconnect-btn{font-size:12px;font-weight:500;color:var(--red);background:var(--red-dim);border:none;border-radius:8px;padding:5px 12px;cursor:pointer;transition:all var(--fast)}
 .disconnect-btn:hover{background:var(--red-glow)}
 .quadrant-grid{flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:12px;min-height:0}
@@ -147,6 +148,13 @@ body[data-theme="light"] select{color-scheme:light}
 .joystick-label{position:absolute;font-size:9px;color:var(--t4);letter-spacing:.5px;text-transform:uppercase}
 .joystick-label.fwd{top:4px;left:50%;transform:translateX(-50%)}.joystick-label.rev{bottom:4px;left:50%;transform:translateX(-50%)}
 .joystick-label.left{left:4px;top:50%;transform:translateY(-50%)}.joystick-label.right{right:4px;top:50%;transform:translateY(-50%)}
+.drive-follow-control{width:160px;height:160px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.drive-follow-control[hidden]{display:none!important}
+.drive-follow-switch{width:136px;height:136px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;color:var(--ice);background:radial-gradient(circle,rgba(126,200,227,.15),rgba(126,200,227,.04) 68%);border:1px solid rgba(126,200,227,.5);box-shadow:inset 0 0 24px rgba(126,200,227,.08),0 0 18px rgba(126,200,227,.08);cursor:pointer;transition:all var(--fast)}
+.drive-follow-switch strong{font-size:16px;font-weight:650}.drive-follow-switch small{max-width:104px;font-size:9px;line-height:1.35;color:var(--t3);text-align:center}
+.drive-follow-switch.busy{border-color:rgba(251,191,36,.6);color:var(--orange);box-shadow:0 0 20px rgba(251,191,36,.12)}
+.drive-follow-switch.active{border-color:rgba(45,212,191,.72);color:#76f7df;background:radial-gradient(circle,rgba(45,212,191,.2),rgba(45,212,191,.05) 68%);box-shadow:0 0 24px rgba(45,212,191,.14)}
+.drive-follow-switch:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
 .drive-side{display:flex;flex-direction:column;gap:9px;min-width:210px}
 .drive-speed-readout{display:flex;align-items:flex-end;justify-content:space-between;padding:0 2px 7px;border-bottom:1px solid var(--border)}
 .drive-speed-readout span{font-size:9px;color:var(--t3);letter-spacing:.4px}.drive-speed-readout strong{font:650 22px/1 var(--fm);color:var(--t1)}
@@ -175,6 +183,8 @@ body[data-theme="light"] select{color-scheme:light}
 .quad-video{position:relative}.video-feed{flex:1;position:relative;overflow:hidden;background:#000;border-radius:0 0 var(--rx) var(--rx)}
 .video-feed video,.video-feed img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .video-feed.click-target-mode{cursor:crosshair}
+.video-feed.video-interrupted{cursor:pointer}
+.video-feed.video-interrupted .video-alert{cursor:pointer}
 .gimbal-vision-overlay{position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none}
 .video-overlay{position:absolute;inset:0;z-index:3;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:12px}
 .video-topline{display:flex;align-items:center;justify-content:space-between}
@@ -219,6 +229,13 @@ body[data-theme="light"] select{color-scheme:light}
 .gimbal-actions .refresh-stream-btn[disabled]{opacity:.65;cursor:wait}
 .gimbal-actions .refresh-stream-btn svg{width:14px;height:14px}
 .gimbal-actions .refresh-stream-btn[aria-busy="true"] svg{animation:refresh-spin .8s linear infinite}
+.gimbal-actions .beacon-calibration-btn{width:auto;padding:0 10px;color:#07120d;background:var(--green);font-size:10px;font-weight:700;white-space:nowrap}
+.gimbal-actions .beacon-calibration-btn:hover{background:#70efa7;color:#06100b}
+.beacon-calibration-preview{position:relative;width:100%;aspect-ratio:16/9;margin:12px 0;border-radius:12px;overflow:hidden;background:#03070a;border:1px solid var(--border2)}
+.beacon-calibration-preview canvas{display:block;width:100%;height:100%}
+.beacon-calibration-reticle{position:absolute;left:50%;top:50%;width:42px;height:42px;transform:translate(-50%,-50%);border:2px solid var(--green);border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.7),0 0 16px rgba(74,222,128,.35)}
+.beacon-calibration-reticle::before,.beacon-calibration-reticle::after{content:"";position:absolute;background:var(--green)}
+.beacon-calibration-reticle::before{left:50%;top:-12px;width:1px;height:66px}.beacon-calibration-reticle::after{top:50%;left:-12px;width:66px;height:1px}
 @keyframes refresh-spin{to{transform:rotate(360deg)}}
 .tracking-reticle{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:60px;height:60px;border:1px solid var(--ice);border-radius:50%;pointer-events:none;display:flex;align-items:center;justify-content:center}
 .tracking-reticle::before,.tracking-reticle::after{content:'';position:absolute;border:1px solid var(--ice);border-radius:50%;opacity:.3}
@@ -380,6 +397,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 @media(max-width:1024px){.landing-view{padding:10px;gap:10px}.landing-panel{max-width:360px;justify-content:center}.device-card{padding:14px;gap:10px}.device-meta{padding:8px 0;gap:6px}.connect-btn{padding:11px 14px}.hero-tagline h1{font-size:24px}.quadrant-grid{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:8px}.quadrant-grid .quad{min-height:0}.quadrant-grid.swapped .quad-video{grid-column:1;grid-row:1}.quadrant-grid.swapped .quad-imu{grid-column:2;grid-row:1}.quadrant-grid.swapped .quad-logs{grid-column:1;grid-row:2}.quadrant-grid.swapped .quad-drive{grid-column:2;grid-row:2}.control-view{padding:8px;gap:8px}.media-card.featured{grid-column:span 1}}
 @media(max-width:900px) and (orientation:landscape){.app-header{padding:0 7px}.brand span,.brand small,.status-item span{display:none}.brand{padding:5px 4px}.nav-tabs{flex-shrink:0}.nav-tab{padding:5px 8px;font-size:11px;white-space:nowrap}.status-bar{gap:6px}.status-item{gap:3px}.status-item strong{font-size:10px;white-space:nowrap}.header-actions{gap:1px}.icon-btn{width:28px;height:28px}}
 @media(max-height:600px) and (orientation:landscape){.app-header{height:44px;min-height:44px}.landing-view{padding:7px;gap:7px}.landing-panel{max-width:330px}.landing-hero,.device-card{border-radius:12px}.device-card{padding:10px;gap:6px}.device-desc{display:none}.device-meta{padding:6px 0}.device-meta-item span,.device-meta-item small{font-size:8px}.connect-btn{padding:9px 12px;font-size:13px}.pairing-hint{font-size:9px}.control-toolbar{padding:4px 8px}.control-mode{display:none}.quad-header{min-height:30px;padding:5px 9px}.quad-header-left b{font-size:11px}.quad-header-left small,.quad-header-right{font-size:8px}.attitude-orb{width:min(30vh,118px)}.imu-body{grid-template-columns:minmax(112px,1.35fr) minmax(78px,.65fr);gap:6px;padding:3px 7px}.imu-readouts{gap:3px}.imu-readout strong{font-size:11px}.drive-body{padding:3px 7px;gap:8px}.joystick-wrap{width:86px;height:86px}.joystick-stick{width:34px;height:34px}.drive-side{gap:4px;min-width:155px}.drive-speed-readout{padding-bottom:3px}.drive-speed-readout strong{font-size:14px}.motor-status-row{gap:3px}.motor-status-card{padding:4px}.motor-status-card header{font-size:7px}.motor-status-card strong{margin-top:3px;font-size:9px}.motor-status-card small{margin-top:2px;font-size:6px}.arm-control{margin-top:0;gap:3px}.arm-slider,.disarm-button{width:100%;height:27px;min-height:27px}.arm-slider-thumb{width:19px;height:19px}.arm-slider-label{font-size:8px;inset:0 3px 0 26px}.log-body{padding:5px 8px;font-size:8px}.log-entry{grid-template-columns:42px 48px 1fr;gap:5px}.video-overlay{padding:7px}.gimbal-mode-btn{padding:3px 6px}.gimbal-action-btn{width:26px;height:26px}.modal{max-height:calc(100vh - 12px);overflow:auto;padding:14px;max-width:460px}.modal-close{top:7px;right:7px}.modal-kicker{margin-bottom:4px}.modal h2{font-size:18px;margin-bottom:3px}.modal>p{font-size:11px;line-height:1.3;margin-bottom:8px}.cal-progress{margin-bottom:6px}.cal-progress-bar{margin-bottom:8px}.cal-pose-stage{width:78px;height:72px;margin-bottom:4px}.cal-pose-device{width:64px;height:38px}.cal-pose-title{font-size:13px;margin-bottom:3px}.cal-pose-instruction{font-size:10px;line-height:1.3;margin-bottom:8px}.cal-actions button{padding:7px}.pin-input{height:44px}.pin-inputs{margin-bottom:8px}}
+@media(max-height:600px) and (orientation:landscape){.control-mode{display:flex;padding:2px}.control-mode button{font-size:8px;padding:3px 6px}.drive-follow-control{width:86px;height:86px}.drive-follow-switch{width:76px;height:76px;gap:3px}.drive-follow-switch strong{font-size:11px}.drive-follow-switch small{max-width:66px;font-size:6px}}
 @media(max-width:768px){.app-header{padding:0 10px}.brand span{display:none}.nav-tab{padding:5px 10px;font-size:12px}.nav-tab svg{display:none}.status-bar{gap:10px}.status-item span{display:none}.drawer{width:100%;border-left:none;border-top:1px solid var(--border)}}
 </style>
 </head>
@@ -446,7 +464,10 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
     <div class="control-view" id="controlScreen" hidden>
       <div class="control-toolbar">
         <div class="control-identity"><i></i><span><b id="controlDeviceName">MANTA ROBOTIC</b><small id="controlDeviceSerial">MANTA · 2407</small></span></div>
-        <div class="control-mode"><span>手动跟随</span><button type="button" id="futureAutoButton" title="自动跟随将在后续版本开放">自动跟随 <small>即将推出</small></button></div>
+        <div class="control-mode" role="group" aria-label="船体跟随模式">
+          <button type="button" id="manualFollowButton" class="active">手动跟随</button>
+          <button type="button" id="autoFollowButton">自动跟随</button>
+        </div>
         <button class="disconnect-btn" id="disconnectButton" type="button">断开</button>
       </div>
       <div class="quadrant-grid" id="quadrantGrid">
@@ -488,10 +509,10 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
               </div>
               <div class="tracking-reticle" id="trackingReticle" hidden><span id="trackingLabel" data-i18n-dynamic>SWIMMER</span></div>
             </div>
-            <div class="video-alert" id="videoAlert" hidden>
+            <div class="video-alert" id="videoAlert" role="button" tabindex="0" aria-label="影像信号中断，点击刷新" hidden>
               <svg viewBox="0 0 24 24"><path d="M4 4l16 16M8 5h7v5m1 4v3H5V7"/></svg>
               <strong id="videoAlertTitle">影像信号中断</strong>
-              <span id="videoAlertMessage">控制链路仍然在线，请谨慎移动</span>
+              <span id="videoAlertMessage">点击画面任意位置刷新，控制链路保持在线</span>
             </div>
             <div class="gimbal-fault-overlay" id="gimbalFault" hidden>
               <strong>云台保护已触发</strong>
@@ -503,6 +524,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
                 <button class="gimbal-mode-btn active" type="button" data-gimbal-mode="click">点击居中</button>
                 <button class="gimbal-mode-btn" type="button" data-gimbal-mode="face">人脸跟踪</button>
                 <button class="gimbal-mode-btn" type="button" data-gimbal-mode="swimmer">泳者跟踪</button>
+                <button class="gimbal-mode-btn" type="button" data-gimbal-mode="beacon">UWB 信标</button>
               </div>
               <div class="gimbal-actions">
                 <button class="gimbal-action-btn" type="button" data-gimbal-action="home" title="云台回中"><svg viewBox="0 0 24 24"><path d="m4 11 8-7 8 7v9h-6v-6h-4v6H4z"/></svg></button>
@@ -510,13 +532,14 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
                 <button class="gimbal-action-btn record-btn" id="recordButton" type="button" data-gimbal-action="record" title="录像"><i></i></button>
                 <button class="gimbal-action-btn osd-btn active" id="gimbalOsd" type="button" aria-pressed="true" title="OSD">OSD</button>
                 <button class="gimbal-action-btn refresh-stream-btn" type="button" id="refreshGimbalVideo" title="只刷新云台画面" aria-label="只刷新云台画面"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M18.5 9a7 7 0 0 0-11.8-2.4L4 9"/><path d="M5.5 15a7 7 0 0 0 11.8 2.4L20 15"/></svg><span>刷新</span></button>
+                <button class="gimbal-action-btn beacon-calibration-btn" type="button" id="gimbalBeaconCalibration" title="UWB与云台九点校准" hidden>九点校准</button>
               </div>
             </div>
           </div>
         </div>
         <div class="quad quad-drive" data-area="drive">
           <div class="quad-header">
-            <div class="quad-header-left"><b>移动控制</b><small>360° VECTOR</small></div>
+            <div class="quad-header-left"><b>移动控制</b><small id="driveModeLabel">360° VECTOR</small></div>
             <span class="quad-header-right" id="driveOutput">X 0.00 · Y 0.00</span>
           </div>
           <div class="drive-body">
@@ -525,6 +548,12 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
               <div class="joystick-stick" id="joyStick"></div>
               <span class="joystick-label fwd">前进</span><span class="joystick-label rev">后退</span>
               <span class="joystick-label left">左</span><span class="joystick-label right">右</span>
+            </div>
+            <div class="drive-follow-control" id="driveFollowControl" hidden>
+              <button class="drive-follow-switch" type="button" id="driveFollowSwitch">
+                <strong id="driveFollowSwitchLabel">启动跟随</strong>
+                <small id="driveFollowSwitchStatus">自动切换GUIDED并武装</small>
+              </button>
             </div>
             <div class="drive-side">
               <div class="drive-speed-readout"><span>当前速度</span><strong id="driveSpeedValue">0.0<small>m/s</small></strong></div>
@@ -728,6 +757,30 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
     <button class="cal-emergency" id="imuCalibrationEmergency" type="button" hidden>紧急停止推进</button>
   </div>
 </div>
+<!-- UWB Beacon + Gimbal Calibration Modal -->
+<div class="modal-backdrop" id="beaconCalibrationModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="beaconCalibrationTitle">
+    <button class="modal-close" id="beaconCalibrationClose" type="button" aria-label="关闭">×</button>
+    <span class="modal-kicker">UWB BEACON · 9-POINT</span>
+    <h2 id="beaconCalibrationTitle">UWB + 云台九点校准</h2>
+    <p id="beaconCalibrationLead">云台会以随机顺序移动到左/中/右 × 上/中/下九个点位。保持信标天线朝向不变，并在正常使用距离将它放到画面正中心；系统会同时记录距离和角度，拟合三维相对位置。</p>
+    <div class="cal-progress">
+      <span id="beaconCalibrationProgressText">准备开始</span>
+      <strong id="beaconCalibrationCounter">0 / 9</strong>
+    </div>
+    <div class="cal-progress-bar"><b id="beaconCalibrationBar"></b></div>
+    <div class="beacon-calibration-preview" id="beaconCalibrationPreview">
+      <canvas id="beaconCalibrationCanvas" aria-label="云台实时校准画面"></canvas>
+      <i class="beacon-calibration-reticle" aria-hidden="true"></i>
+    </div>
+    <strong class="cal-pose-title" id="beaconCalibrationPoseTitle">准备九个 3×3 点位</strong>
+    <p class="cal-pose-instruction" id="beaconCalibrationInstruction">开始后，Beacon跟随会暂停；请逐点将信标放到画面中心再记录。</p>
+    <div class="cal-actions">
+      <button class="secondary" id="beaconCalibrationCancel" type="button">取消</button>
+      <button class="primary" id="beaconCalibrationNext" type="button">开始九点校准</button>
+    </div>
+  </div>
+</div>
 <!-- Download Modal -->
 <div class="modal-backdrop" id="downloadModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="downloadTitle">
@@ -768,7 +821,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <script src="/socket.io/socket.io.js"></script>
 <script src="js/mediamtx-webrtc-reader.js?v=1.19.2"></script>
 <script src="js/offline-satellite-map.js?v=20260825v3"></script>
-<script src="js/manta-app-transport.js?v=20260720v11"></script>
+<script src="js/manta-app-transport.js?v=20260826drivefollow3"></script>
 <script>
 document.addEventListener("click",function(event){
   if(!event.target||!event.target.closest||!event.target.closest("#imuCalibrate"))return;
@@ -783,11 +836,11 @@ var $=function(s,r){return(r||document).querySelector(s)};
 var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
 var shell=$("#appShell");
 var isLocalPreview=location.protocol==="file:"||/^(4173|4175)$/.test(location.port);
-var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,motorLinks:{left:{online:false,outputOnline:false,status:"offline"},right:{online:false,outputOnline:false,status:"offline"}},gimbalOnline:false,controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",armed:false,latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},uwb:{online:false,fresh:false,distanceM:null,azimuthDeg:null,elevationDeg:null},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",runningTrackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,fixType:0,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
+var state={view:"device",connected:false,boardOnline:false,pixhawkOnline:false,imuOnline:false,motorsOnline:false,motorLinks:{left:{online:false,outputOnline:false,status:"offline"},right:{online:false,outputOnline:false,status:"offline"}},gimbalOnline:false,gimbalOutputAvailable:false,gimbalLinkStatus:"offline",controlLink:false,connection:"idle",transportMode:isLocalPreview?"mock":"live",layout:"standard",language:"zh",theme:"dark",driveMode:"manual",armed:false,flightMode:"MANUAL",latency:18,speed:0,temperature:46,attitude:{roll:1.2,pitch:-0.6,yaw:184},uwb:{online:false,fresh:false,distanceM:null,azimuthDeg:null,elevationDeg:null},ekf:{healthy:false,updatedAt:null},uwbFollow:{active:false,status:"idle",reason:"not_started",desiredSpeedMps:0},vector:{x:0,y:0},recording:false,recordingSince:0,videoLost:false,gimbalFault:false,emergency:false,downloading:false,logFilter:"all",osdEnabled:true,gimbalMode:"click",trackingActive:false,trackMode:"face",runningTrackMode:"face",trackStatus:{locked:false,status:"idle",message:"idle"},trackTarget:null,clickMarker:null,gps:{satellites:0,hdop:null,fixType:0,estimated:true},discoveredDevices:[],selectedDevice:null,calibrating:false,calibrationStarted:false,calibrationStepCode:null,calibrationStatus:"intro",calibrationConfirmed:0,calibrationProgress:0,calibrationResult:null,calibrationResultMessage:""};
 var logEntries=[];
 var seenAlertLogKeys={};
 var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false,mediaFilter="all";
-var transport=null,liveRecordings=[],gimbalModeBusy=false,gimbalWebrtcReader=null,gimbalWebrtcFallbackTimer=null,gimbalMjpegRetryTimer=null,gimbalWebrtcFallbackLogged=false,gimbalStreamGeneration=0,gimbalVideoStatus="offline",gimbalVideoTransport="";
+var transport=null,liveRecordings=[],gimbalModeBusy=false,beaconCalibration=null,beaconCalibrationBusy=false,gimbalWebrtcReader=null,gimbalWebrtcFallbackTimer=null,gimbalMjpegRetryTimer=null,gimbalWebrtcFallbackLogged=false,gimbalStreamGeneration=0,gimbalVideoStatus="offline",gimbalVideoTransport="";
 var offlineMap=null,mapInitStarted=false,mapProvider="offline-satellite",mapSourceLabel="板载深圳离线卫星图 · GPS：Pixhawk",mapSourceLabelEn="Offline Shenzhen satellite · GPS: Pixhawk",lastGpsSourceTimestamp=0,lastGpsReceivedAt=0;
 
 function ensureTransport(){
@@ -803,6 +856,9 @@ function ensureTransport(){
     if(payload.attitude)state.attitude=payload.attitude;
     if(payload.gps)state.gps=payload.gps;
     if(payload.uwb)state.uwb=payload.uwb;
+    if(payload.ekf)state.ekf=payload.ekf;
+    if(Object.prototype.hasOwnProperty.call(payload,"armed"))state.armed=Boolean(payload.armed);
+    if(payload.flightMode)state.flightMode=String(payload.flightMode);
     renderTelemetry();renderGpsStatus();
   });
   transport.on("connection",function(payload){
@@ -818,7 +874,7 @@ function ensureTransport(){
     state.armed=Boolean(payload&&payload.armed);if(!state.armed)state.speed=0;renderConnection();renderTelemetry();
   });
   transport.on("hardwareStatus",function(payload){
-    payload=payload||{};["boardOnline","pixhawkOnline","imuOnline","motorsOnline","gimbalOnline"].forEach(function(key){if(Object.prototype.hasOwnProperty.call(payload,key))state[key]=Boolean(payload[key])});
+    payload=payload||{};["boardOnline","pixhawkOnline","imuOnline","motorsOnline","gimbalOnline","gimbalOutputAvailable"].forEach(function(key){if(Object.prototype.hasOwnProperty.call(payload,key))state[key]=Boolean(payload[key])});
     if(payload.leftMotor)state.motorLinks.left=payload.leftMotor;
     if(payload.rightMotor)state.motorLinks.right=payload.rightMotor;
     if(state.connected){state.connection=state.boardOnline?(state.pixhawkOnline?"connected":"offline"):"degraded";state.controlLink=state.boardOnline&&state.pixhawkOnline;}
@@ -827,13 +883,14 @@ function ensureTransport(){
   transport.on("gimbalState",function(payload){applyGimbalState(payload||{});renderHardwareStatus()});
   transport.on("gimbalTarget",function(payload){
     if(!payload||state.gimbalMode==="click")return;
-    var targetMode=payload.mode==="swimmer"?"swimmer":payload.mode==="face"?"face":state.trackMode;
+    var targetMode=payload.mode==="beacon"?"beacon":payload.mode==="swimmer"?"swimmer":payload.mode==="face"?"face":state.trackMode;
     state.clickMarker=null;state.trackTarget=payload;state.runningTrackMode=targetMode;state.trackMode=targetMode;state.gimbalMode=targetMode;state.trackStatus={locked:true,status:payload.status||"track",message:payload.message||"LOCKED",mode:targetMode};renderTrackingMode();
   });
   transport.on("gimbalTrackStatus",function(payload){
     if(!payload||state.gimbalMode==="click")return;
-    state.trackStatus=payload;if(payload.mode){state.runningTrackMode=payload.mode==="swimmer"?"swimmer":"face";if(state.trackingActive){state.trackMode=state.runningTrackMode;state.gimbalMode=state.runningTrackMode}}if(!payload.locked)state.trackTarget=null;renderTrackingMode();
+    state.trackStatus=payload;if(payload.mode){state.runningTrackMode=payload.mode==="beacon"?"beacon":payload.mode==="swimmer"?"swimmer":"face";if(state.trackingActive){state.trackMode=state.runningTrackMode;state.gimbalMode=state.runningTrackMode}}if(!payload.locked)state.trackTarget=null;renderTrackingMode();
   });
+  transport.on("uwbFollow",function(payload){state.uwbFollow=payload||state.uwbFollow;renderUwbFollow()});
   return transport;
 }
 
@@ -1122,13 +1179,136 @@ function renderTrackingMode(){
   $$("[data-gimbal-mode]").forEach(function(button){button.classList.toggle("active",button.dataset.gimbalMode===mode)});
   $("#trackingReticle").hidden=true;
   $(".video-feed").classList.toggle("click-target-mode",mode==="click");
+  $("#gimbalBeaconCalibration").hidden=mode!=="beacon";
   drawGimbalOverlay();
-  if(mode!=="click")$("#trackingLabel").textContent=mode==="face"?localize("人脸","FACE"):localize("泳者","SWIMMER");
+  if(mode!=="click")$("#trackingLabel").textContent=mode==="beacon"?localize("UWB 信标","UWB BEACON"):mode==="face"?localize("人脸","FACE"):localize("泳者","SWIMMER");
+}
+
+function uwbFollowIsStarting(){
+  var status=String(state.uwbFollow&&state.uwbFollow.status||"");
+  return status==="disarming"||status==="switching_mode"||status==="arming";
+}
+
+function renderDriveMode(){
+  var automatic=state.driveMode==="auto",joystick=$("#joystick"),followControl=$("#driveFollowControl");
+  $("#manualFollowButton").classList.toggle("active",!automatic);
+  $("#autoFollowButton").classList.toggle("active",automatic);
+  joystick.hidden=automatic;
+  followControl.hidden=!automatic;
+  $("#driveModeLabel").textContent=automatic?"UWB AUTO FOLLOW":"360° VECTOR";
+  joystick.setAttribute("aria-disabled",String(automatic||!state.connected||!state.controlLink||!state.armed||state.calibrating));
+}
+
+function setDriveMode(mode){
+  var nextMode=mode==="auto"?"auto":"manual";
+  if(state.driveMode===nextMode)return;
+  var activeTransport=ensureTransport();
+  if(nextMode==="auto"){
+    if(window.resetMantaJoystick)window.resetMantaJoystick();
+    if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(false);
+  }else{
+    var enableManual=function(){if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(true);renderDriveMode()};
+    if(activeTransport&&((state.uwbFollow&&state.uwbFollow.active)||uwbFollowIsStarting())){
+      activeTransport.stopUwbFollow().catch(function(error){showToast(error.message||"停止自动跟随失败")}).finally(enableManual);
+    }else enableManual();
+  }
+  state.driveMode=nextMode;
+  renderDriveMode();renderUwbFollow();renderArmControl();
+}
+
+function renderUwbFollow(){
+  var follow=state.uwbFollow||{},button=$("#driveFollowSwitch"),label=$("#driveFollowSwitchLabel"),status=$("#driveFollowSwitchStatus");
+  if(!button||!label||!status)return;
+  var busy=uwbFollowIsStarting();
+  button.classList.toggle("active",Boolean(follow.active));
+  button.classList.toggle("busy",busy);
+  button.disabled=state.driveMode!=="auto"||(!follow.active&&!busy&&(!state.connected||!state.controlLink));
+  label.textContent=follow.active?localize("停止跟随","Stop follow"):busy?localize("取消启动","Cancel start"):localize("启动跟随","Start follow");
+  var labels={tracking:localize("跟随中","Tracking"),disarming:localize("正在解除武装","Disarming"),switching_mode:localize("正在切换GUIDED","Switching to GUIDED"),arming:localize("正在自动武装","Auto arming"),safety_distance:localize("安全停车","Safety stop"),safety_clearance_required:localize("距离需达到1.2米","Need 1.2 m clearance"),gps_fix_invalid:localize("GPS无效","GPS invalid"),ekf_unhealthy:localize("EKF无效","EKF invalid"),uwb_stale:localize("UWB失效","UWB stale"),guided_mode_timeout:localize("GUIDED切换超时","GUIDED timeout"),arming_timeout:localize("武装超时","Arming timeout"),manual_stop:localize("已停止","Stopped"),not_started:localize("未启动","Not started")};
+  status.textContent=labels[follow.reason]||labels[follow.status]||String(follow.reason||follow.status||localize("未启动","Not started"));
+  if(state.driveMode==="auto")$("#driveOutput").textContent=follow.active?Number(follow.desiredSpeedMps||0).toFixed(2)+" m/s · AUTO":busy?String(follow.status||"STARTING").toUpperCase():"AUTO READY";
+}
+
+function renderBeaconCalibration(){
+  var cal=beaconCalibration,next=$("#beaconCalibrationNext"),cancel=$("#beaconCalibrationCancel");
+  if(!cal){
+    $("#beaconCalibrationProgressText").textContent=localize("准备开始","Ready");
+    $("#beaconCalibrationCounter").textContent="0 / 9";$("#beaconCalibrationBar").style.width="0%";
+    $("#beaconCalibrationPoseTitle").textContent=localize("准备九个 3×3 点位","Prepare nine 3x3 points");
+    $("#beaconCalibrationInstruction").textContent=localize("开始后，Beacon跟随会暂停；请逐点将信标放到画面中心再记录。","Beacon tracking pauses. Center the beacon at each point, then capture.");
+    next.textContent=localize("开始九点校准","Start 9-point calibration");next.disabled=beaconCalibrationBusy;cancel.hidden=false;return;
+  }
+  var captured=Number(cal.index)||0,total=Number(cal.total)||9,complete=cal.status==="complete";
+  $("#beaconCalibrationCounter").textContent=captured+" / "+total;
+  $("#beaconCalibrationBar").style.width=Math.round(captured/total*100)+"%";
+  $("#beaconCalibrationProgressText").textContent=complete?localize("拟合完成，Beacon跟随已恢复","Calibration complete; tracking resumed"):localize("云台已到第 "+(captured+1)+" 个点","Gimbal at point "+(captured+1));
+  if(complete){
+    var result=cal.result||{},metrics=result.metrics||{};
+    $("#beaconCalibrationPoseTitle").textContent=localize("九点校准完成","9-point calibration complete");
+    $("#beaconCalibrationInstruction").textContent=result.model==="rigid_3d"?"3D RMS "+Number(metrics.angularRmsErrorDeg||0).toFixed(2)+"° · MAX "+Number(metrics.angularMaxErrorDeg||0).toFixed(2)+"°":"Yaw R² "+Number(metrics.yawR2||0).toFixed(3)+" · Pitch R² "+Number(metrics.pitchR2||0).toFixed(3);
+    next.textContent=localize("完成","Done");next.disabled=false;cancel.hidden=true;return;
+  }
+  if(cal.status==="failed"){
+    $("#beaconCalibrationProgressText").textContent=localize("拟合未通过","Fit rejected");
+    $("#beaconCalibrationPoseTitle").textContent=localize("请重新执行九点校准","Repeat the 9-point calibration");
+    $("#beaconCalibrationInstruction").textContent=cal.message||localize("点位跨度或居中精度不足。","Point span or centering accuracy was insufficient.");
+    next.textContent=localize("重新开始","Restart");next.disabled=false;cancel.hidden=false;return;
+  }
+  $("#beaconCalibrationPoseTitle").textContent=localize("将信标放到画面正中心","Place beacon at image center");
+  $("#beaconCalibrationInstruction").textContent=localize("确认画面中心与信标重合后，点击记录。云台随后自动移动到下一点。","When centered, capture. The gimbal then moves automatically.");
+  next.textContent=localize("已居中，记录第 "+(captured+1)+" 点","Centered — capture point "+(captured+1));
+  next.disabled=beaconCalibrationBusy||cal.status!=="awaiting_center";cancel.hidden=false;
+}
+
+var beaconCalibrationPreviewFrame=0;
+function stopBeaconCalibrationPreview(){
+  if(beaconCalibrationPreviewFrame)cancelAnimationFrame(beaconCalibrationPreviewFrame);
+  beaconCalibrationPreviewFrame=0;
+}
+
+function startBeaconCalibrationPreview(){
+  stopBeaconCalibrationPreview();
+  function draw(){
+    var modal=$("#beaconCalibrationModal"),canvas=$("#beaconCalibrationCanvas");
+    if(!modal||modal.hidden||!canvas){beaconCalibrationPreviewFrame=0;return}
+    var source=state.transportMode==="live"&&$("#liveGimbalWebrtc").srcObject?$("#liveGimbalWebrtc"):state.transportMode==="live"?$("#liveGimbalFeed"):$("#gimbalVideo");
+    var width=Math.max(1,canvas.clientWidth),height=Math.max(1,canvas.clientHeight),ratio=window.devicePixelRatio||1;
+    if(canvas.width!==Math.round(width*ratio)||canvas.height!==Math.round(height*ratio)){canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio)}
+    var sourceWidth=Number(source&&source.videoWidth||source&&source.naturalWidth||0),sourceHeight=Number(source&&source.videoHeight||source&&source.naturalHeight||0);
+    var context=canvas.getContext("2d");context.setTransform(ratio,0,0,ratio,0,0);context.fillStyle="#03070a";context.fillRect(0,0,width,height);
+    if(source&&sourceWidth>0&&sourceHeight>0){var scale=Math.max(width/sourceWidth,height/sourceHeight),drawWidth=sourceWidth*scale,drawHeight=sourceHeight*scale;try{context.drawImage(source,(width-drawWidth)/2,(height-drawHeight)/2,drawWidth,drawHeight)}catch(_error){}}
+    beaconCalibrationPreviewFrame=requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+function openBeaconCalibration(){
+  if(state.gimbalMode!=="beacon"||!state.gimbalOutputAvailable){showToast("请先进入UWB信标模式并打开云台控制串口","Enter UWB Beacon mode and open the gimbal control port first.");return}
+  beaconCalibration=null;beaconCalibrationBusy=false;renderBeaconCalibration();setModal("beaconCalibrationModal",true);startBeaconCalibrationPreview();
+}
+
+function advanceBeaconCalibration(){
+  if(beaconCalibration&&beaconCalibration.status==="complete"){stopBeaconCalibrationPreview();setModal("beaconCalibrationModal",false);return}
+  var activeTransport=ensureTransport();
+  if(!activeTransport){showToast("通信模块未加载","Transport unavailable");return}
+  if(beaconCalibration&&beaconCalibration.status==="failed")beaconCalibration=null;
+  beaconCalibrationBusy=true;renderBeaconCalibration();
+  var request=beaconCalibration?activeTransport.captureBeaconCalibration():activeTransport.startBeaconCalibration();
+  request.then(function(payload){beaconCalibration=payload.calibration||null;renderBeaconCalibration()}).catch(function(error){if(error.payload&&error.payload.calibration)beaconCalibration=error.payload.calibration;showToast(error.message||"校准操作失败","Calibration failed")}).finally(function(){beaconCalibrationBusy=false;renderBeaconCalibration()});
+}
+
+function cancelBeaconCalibration(){
+  var activeTransport=ensureTransport();
+  if(beaconCalibration&&beaconCalibration.active&&activeTransport&&activeTransport.cancelBeaconCalibration){activeTransport.cancelBeaconCalibration().catch(function(){})}
+  stopBeaconCalibrationPreview();
+  beaconCalibration=null;beaconCalibrationBusy=false;setModal("beaconCalibrationModal",false);
 }
 
 function applyGimbalState(payload){
-  state.gimbalOnline=Boolean(payload.connected);state.trackingActive=Boolean(payload.trackingActive);
-  if(payload.trackMode==="face"||payload.trackMode==="swimmer"){state.runningTrackMode=payload.trackMode;if(state.trackingActive||state.gimbalMode==="click")state.trackMode=payload.trackMode}
+  var previousLinkStatus=state.gimbalLinkStatus;
+  state.gimbalOnline=Boolean(payload.connected);state.gimbalOutputAvailable=Boolean(payload.portOpen||payload.connected);state.gimbalLinkStatus=String(payload.linkStatus||(!state.gimbalOutputAvailable?"offline":"ready"));state.trackingActive=Boolean(payload.trackingActive);
+  if(state.gimbalLinkStatus==="command_timeout"&&previousLinkStatus!=="command_timeout")showToast(payload.lastError||"云台命令无响应，请检查云台供电和串口接线","The gimbal did not respond to the command. Check power and serial wiring.");
+  if(payload.trackMode==="face"||payload.trackMode==="swimmer"||payload.trackMode==="beacon"){state.runningTrackMode=payload.trackMode;if(state.trackingActive||state.gimbalMode==="click")state.trackMode=payload.trackMode}
   if(state.trackingActive){state.gimbalMode=state.trackMode;state.clickMarker=null}
   if(payload.trackStatus){state.trackStatus=payload.trackStatus;if(!payload.trackStatus.locked)state.trackTarget=null}
   if(payload.lastTarget&&payload.lastTarget.locked&&state.trackingActive)state.trackTarget=payload.lastTarget;
@@ -1147,6 +1327,7 @@ function drawGimbalOverlay(){
   var ctx=canvas.getContext("2d");ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,map.width,map.height);
   ctx.strokeStyle="rgba(186,225,242,.72)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(map.width/2-9,map.height/2);ctx.lineTo(map.width/2+9,map.height/2);ctx.moveTo(map.width/2,map.height/2-9);ctx.lineTo(map.width/2,map.height/2+9);ctx.stroke();
   if(state.gimbalMode==="click"&&state.clickMarker){var mx=state.clickMarker.x*map.width,my=state.clickMarker.y*map.height;ctx.strokeStyle="#88e8ff";ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx,my,14,0,Math.PI*2);ctx.moveTo(mx-20,my);ctx.lineTo(mx+20,my);ctx.moveTo(mx,my-20);ctx.lineTo(mx,my+20);ctx.stroke()}
+  if(state.gimbalMode==="beacon")return;
   if(!state.trackingActive||state.gimbalMode==="click")return;var target=state.trackTarget,status=state.trackStatus||{};
   if(target&&status.locked!==false){var fw=Number(target.frame_w||target.frameW)||1920,fh=Number(target.frame_h||target.frameH)||1080,targetMap=gimbalVideoMapping(fw,fh);
     var sourceX=Number(target.x||0),displayX=fw-sourceX,tx=targetMap.offsetX+(displayX/Math.max(fw,1))*(fw*targetMap.scale),ty=targetMap.offsetY+(Number(target.y||0)/Math.max(fh,1))*(fh*targetMap.scale),bw=Math.max(48,(Number(target.w||120)/Math.max(fw,1))*(fw*targetMap.scale)),bh=Math.max(48,(Number(target.h||120)/Math.max(fh,1))*(fh*targetMap.scale)),sx=Math.max(4,Math.min(targetMap.width-bw-4,tx-bw/2)),sy=Math.max(4,Math.min(targetMap.height-bh-4,ty-bh/2));
@@ -1155,8 +1336,19 @@ function drawGimbalOverlay(){
   ctx.font="600 10px system-ui";var label=String(status.message||(state.trackMode==="swimmer"?"can not find swimmer":"CAN NOT FIND FACE")).toUpperCase(),tw=ctx.measureText(label).width+20;ctx.fillStyle="rgba(6,16,23,.72)";ctx.fillRect((map.width-tw)/2,14,tw,26);ctx.fillStyle="#ffbd66";ctx.fillText(label,(map.width-tw)/2+10,31);
 }
 
+function isGimbalVideoInterrupted(){
+  var alert=$("#videoAlert");
+  return !state.gimbalFault&&(state.videoLost||gimbalVideoStatus==="warning"||Boolean(alert&&!alert.hidden&&alert.dataset.reason==="video"));
+}
+
 function handleGimbalVideoClick(event){
-  if(state.gimbalMode!=="click"||!state.controlLink||!state.gimbalOnline||state.gimbalFault||event.target.closest(".video-toolbar"))return;
+  if(event.target.closest(".video-toolbar"))return;
+  if(isGimbalVideoInterrupted()){
+    event.preventDefault();event.stopPropagation();
+    refreshGimbalVideoStream();
+    return;
+  }
+  if(state.gimbalMode!=="click"||!state.controlLink||!state.gimbalOutputAvailable||state.gimbalFault)return;
   var map=gimbalVideoMapping(),rect=$(".video-feed").getBoundingClientRect(),px=event.clientX-rect.left,py=event.clientY-rect.top,videoX=(px-map.offsetX)/map.scale,videoY=(py-map.offsetY)/map.scale;
   if(videoX<0||videoX>map.sourceWidth||videoY<0||videoY>map.sourceHeight)return;state.clickMarker={x:px/map.width,y:py/map.height};drawGimbalOverlay();
   var dx=Math.round((videoX/map.sourceWidth-0.5)*1920),dy=Math.round((videoY/map.sourceHeight-0.5)*1080),activeTransport=ensureTransport();
@@ -1220,8 +1412,9 @@ function renderConnection(){
   $("#controlScreen").hidden=!state.connected;
   if(!state.connected)setGimbalVideoState("offline");
   $("#primaryNav").hidden=!state.connected;
-  $("#joystick").setAttribute("aria-disabled",String(!state.connected||!state.controlLink||!state.armed||state.calibrating));
   shell.dataset.calibrating=String(state.calibrating);
+  renderDriveMode();
+  renderUwbFollow();
   renderArmControl();
   renderMotorStatus();
   renderHardwareStatus();
@@ -1377,8 +1570,13 @@ function setGimbalVideoState(status,transport){
   };
   gimbalVideoStatus=status;gimbalVideoTransport=transport||"";
   if(chip)chip.className="live-badge is-"+status;
+  $(".video-feed").classList.toggle("video-interrupted",status==="warning");
   setVideoTransportBadge(labels[status]||labels.offline);
   if(button){var busy=status==="refreshing";button.disabled=busy;button.setAttribute("aria-busy",String(busy));}
+  var alert=$("#videoAlert");
+  if(status==="live"&&state.connected&&state.videoLost&&alert&&alert.dataset.reason==="video"){
+    state.videoLost=false;alert.hidden=true;state.connection=state.emergency?"emergency":"connected";renderConnection();
+  }
 }
 
 function startMjpegFallback(reason){
@@ -1507,8 +1705,11 @@ function completePairing(){
 }
 
 function disconnect(){
-  var activeTransport=transport;if(activeTransport)activeTransport.disconnect().catch(function(){});
-  state.connected=false;state.boardOnline=false;state.pixhawkOnline=false;state.imuOnline=false;state.motorsOnline=false;state.gimbalOnline=false;state.controlLink=false;state.connection="idle";state.speed=0;
+  var activeTransport=transport;
+  if(activeTransport&&((state.uwbFollow&&state.uwbFollow.active)||uwbFollowIsStarting())&&activeTransport.stopUwbFollow)activeTransport.stopUwbFollow().catch(function(){});
+  if(activeTransport)activeTransport.disconnect().catch(function(){});
+  state.connected=false;state.boardOnline=false;state.pixhawkOnline=false;state.imuOnline=false;state.motorsOnline=false;state.gimbalOnline=false;state.gimbalOutputAvailable=false;state.gimbalLinkStatus="offline";state.controlLink=false;state.connection="idle";state.speed=0;
+  state.driveMode="manual";if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(true);
   state.videoLost=false;state.gimbalFault=false;state.emergency=false;state.armed=false;state.discoveredDevices=[];state.selectedDevice=null;
   if(state.calibrationStarted||state.calibrating)finishImuCalibration(false,localize("设备已断开，无法确认校准结果。","The device disconnected before calibration could be confirmed."));
   stopRecording(false);renderConnection();renderTelemetry();
@@ -1555,8 +1756,8 @@ function installJoystick(){
     root.setAttribute("aria-valuetext","X "+state.vector.x.toFixed(2)+", Y "+(-state.vector.y).toFixed(2));
     var throttle=Math.round(-state.vector.y*100);
     var steering=Math.round(state.vector.x*45);
-    var leftPwm=Math.round(clamp(1500+throttle*4-steering*5,1000,2000));
-    var rightPwm=Math.round(clamp(1500+throttle*4+steering*5,1000,2000));
+    var leftPwm=Math.round(clamp(1500+throttle*4+steering*5,1000,2000));
+    var rightPwm=Math.round(clamp(1500+throttle*4-steering*5,1000,2000));
     setMotorOutput(leftPwm,rightPwm);
   }
   function reset(){
@@ -1586,7 +1787,7 @@ function renderMotorStatus(){
     var outputOnly=Boolean(state.connected&&!feedback&&link.outputOnline);
     var card=$("#"+side+"MotorCard");
     if(card){card.classList.toggle("connected",feedback);card.classList.toggle("output-only",outputOnly);card.classList.toggle("offline",state.connected&&!feedback&&!outputOnly);}
-    var status=feedback?localize("反馈在线","Feedback online"):outputOnly?localize("仅 PWM 输出","PWM output only"):localize("离线","Offline");
+    var status=feedback?localize("反馈在线","Feedback online"):outputOnly?localize("Pixhawk 输出在线 · 无 ESC 遥测","Pixhawk output online · no ESC telemetry"):localize("离线","Offline");
     $("#"+side+"MotorLabel").textContent=localize(label,side==="left"?"Left motor":"Right motor")+" · "+status;
     var pwm=Number(link.outputPwm)||0;
     $("#"+side+"MotorPwm").textContent=link.outputOnline&&pwm>0?Math.round(pwm)+" μs":"-- μs";
@@ -1598,27 +1799,25 @@ function renderMotorStatus(){
 function renderHardwareStatus(){
   var identityDot=$(".control-identity i");if(identityDot)identityDot.classList.toggle("offline",state.connected&&!state.pixhawkOnline);
   if($("#pixhawkMetric"))$("#pixhawkMetric").textContent=state.pixhawkOnline?"LIVE":"OFF";
-  if($("#gimbalMetric"))$("#gimbalMetric").textContent=state.gimbalOnline?"LIVE":"OFF";
+  if($("#gimbalMetric"))$("#gimbalMetric").textContent=state.gimbalLinkStatus==="command_timeout"?"ERR":state.gimbalLinkStatus==="feedback"?"LIVE":state.gimbalOutputAvailable?"READY":"OFF";
   var imuOffline=$("#imuOffline");if(imuOffline)imuOffline.hidden=!state.connected||state.imuOnline;
-  var showGimbalOffline=state.connected&&!state.gimbalOnline&&!state.videoLost&&!state.gimbalFault;
-  if(showGimbalOffline){$("#videoAlertTitle").textContent=localize("云台未连接","Gimbal offline");$("#videoAlertMessage").textContent=localize("等待云台串口与影像链路恢复","Waiting for the gimbal serial and video links");}
-  if(!state.videoLost&&!state.gimbalFault)$("#videoAlert").hidden=!showGimbalOffline;
-  $$('[data-gimbal-mode],[data-gimbal-action],#gimbalOsd').forEach(function(button){button.disabled=state.connected&&!state.gimbalOnline});
+  if(!state.videoLost&&!state.gimbalFault)$("#videoAlert").hidden=true;
+  $$('[data-gimbal-mode],[data-gimbal-action],#gimbalOsd').forEach(function(button){button.disabled=state.connected&&!state.gimbalOutputAvailable});
   function light(id,status){var item=$(id);if(item)item.dataset.state=status;}
   light("#hostLinkLight",state.connected&&state.boardOnline?"online":"offline");
   light("#pixhawkLinkLight",state.connected&&state.pixhawkOnline?"online":"offline");
   var left=state.motorLinks.left||{},right=state.motorLinks.right||{};
-  var motorState=state.connected&&left.online&&right.online?"online":state.connected&&(left.outputOnline||right.outputOnline)?"degraded":"offline";
+  var motorState=state.connected&&(left.online||left.outputOnline)&&(right.online||right.outputOnline)?"online":"offline";
   light("#motorLinkLight",motorState);
-  light("#gimbalLinkLight",state.connected&&state.gimbalOnline?"online":"offline");
+  light("#gimbalLinkLight",state.connected&&state.gimbalOutputAvailable&&state.gimbalLinkStatus!=="command_timeout"?"online":"offline");
 }
 
 function setMotorOutput(leftPwm,rightPwm){
   leftPwm=Math.round(clamp(leftPwm,1000,2000));rightPwm=Math.round(clamp(rightPwm,1000,2000));
-  $("#leftMotorPwm").textContent=leftPwm+" μs";$("#rightMotorPwm").textContent=rightPwm+" μs";
-  $("#leftMotor").textContent=signedPercent(Math.round((leftPwm-1500)/5));
-  $("#rightMotor").textContent=signedPercent(Math.round((rightPwm-1500)/5));
-  renderMotorStatus();
+  var leftCard=$("#leftMotorCard"),rightCard=$("#rightMotorCard");
+  if(leftCard)leftCard.dataset.targetPwm=String(leftPwm);
+  if(rightCard)rightCard.dataset.targetPwm=String(rightPwm);
+  // Actual motor PWM is rendered only from Pixhawk SERVO_OUTPUT_RAW telemetry.
 }
 
 function setArmSliderProgress(slider,progress,animate){
@@ -1633,7 +1832,7 @@ function setArmSliderProgress(slider,progress,animate){
 function renderArmControl(){
   var slider=$("#armSlider"),button=$("#disarmButton");
   if(!slider||!button)return;
-  slider.hidden=state.armed;
+  slider.hidden=state.armed||state.driveMode==="auto";
   slider.setAttribute("aria-disabled",String(!state.connected||!state.controlLink||state.calibrating));
   if(!slider.classList.contains("dragging"))setArmSliderProgress(slider,0,true);
   button.hidden=!state.armed;
@@ -1869,8 +2068,9 @@ function triggerGimbalFault(report,fromMonitor){
 
 function setVideoLost(active){
   state.videoLost=active;
+  $("#videoAlert").dataset.reason="video";
   $("#videoAlertTitle").textContent=localize("影像信号中断","Video signal lost");
-  $("#videoAlertMessage").textContent=localize("控制链路仍然在线，请谨慎移动","Control link remains online. Move with caution.");
+  $("#videoAlertMessage").textContent=localize("点击画面任意位置刷新，控制链路保持在线","Click anywhere on the video to refresh; the control link stays online.");
   $("#videoAlert").hidden=!active;
   state.connection=active?"degraded":(state.emergency?"emergency":"connected");
   if(active)setGimbalVideoState("warning");
@@ -1913,7 +2113,7 @@ function recoverGimbal(){
   var buttons=[$("#repairGimbal"),$("#repairGimbalFromReport")].filter(Boolean);buttons.forEach(function(button){button.disabled=true;button.textContent=localize("正在检查…","Checking…")});
   var activeTransport=ensureTransport(),request=activeTransport&&activeTransport.recoverGimbal?activeTransport.recoverGimbal():Promise.reject(new Error(localize("通信模块不支持恢复","Recovery is unavailable")));
   request.then(function(payload){
-    state.gimbalFault=false;state.gimbalOnline=Boolean(payload&&payload.connected);state.trackingActive=false;state.gimbalMode="click";state.trackTarget=null;state.trackStatus={locked:false,status:"idle",message:"idle"};
+    state.gimbalFault=false;state.gimbalOnline=Boolean(payload&&payload.connected);state.gimbalOutputAvailable=Boolean(payload&&(payload.portOpen||payload.connected));state.gimbalLinkStatus=String(payload&&payload.linkStatus||"offline");state.trackingActive=false;state.gimbalMode="click";state.trackTarget=null;state.trackStatus={locked:false,status:"idle",message:"idle"};
     $("#gimbalFault").hidden=true;setModal("diagnosticModal",false);renderHardwareStatus();renderTrackingMode();addLog({level:"INFO",source:"GIMBAL",message:"云台保护已解除，等待新的控制指令",messageEn:"Gimbal protection cleared; waiting for a new command",category:"hardware"});showToast("云台已恢复，请重新选择控制模式","Gimbal recovered. Select a control mode again");
   }).catch(function(error){showToast(error.message||"云台反馈仍未恢复","Gimbal feedback has not recovered")}).finally(function(){buttons.forEach(function(button){button.disabled=false;button.textContent=localize("云台修复","Recover gimbal")})});
 }
@@ -2068,7 +2268,7 @@ function startDownload(btn){
 }
 
 function resetDemoFaults(){
-  if(state.connected){state.boardOnline=true;state.pixhawkOnline=true;state.imuOnline=true;state.motorsOnline=true;state.gimbalOnline=true}
+  if(state.connected){state.boardOnline=true;state.pixhawkOnline=true;state.imuOnline=true;state.motorsOnline=true;state.gimbalOnline=true;state.gimbalOutputAvailable=true;state.gimbalLinkStatus="feedback"}
   state.controlLink=state.connected;state.videoLost=false;state.gimbalFault=false;state.emergency=false;state.armed=false;state.temperature=46;state.latency=18;
   state.connection=state.connected?"connected":"idle";
   $("#videoAlert").hidden=true;$("#gimbalFault").hidden=true;
@@ -2078,13 +2278,13 @@ function resetDemoFaults(){
 }
 
 function applyDemoState(name){
-  if(!state.connected){state.connected=true;state.boardOnline=true;state.pixhawkOnline=true;state.imuOnline=true;state.motorsOnline=true;state.gimbalOnline=true;state.connection="connected";state.controlLink=true;startMockTelemetry()}
+  if(!state.connected){state.connected=true;state.boardOnline=true;state.pixhawkOnline=true;state.imuOnline=true;state.motorsOnline=true;state.gimbalOnline=true;state.gimbalOutputAvailable=true;state.gimbalLinkStatus="feedback";state.connection="connected";state.controlLink=true;startMockTelemetry()}
   resetDemoFaults();
   if(name==="videoLost")setVideoLost(true);
   if(name==="gimbalFault")triggerGimbalFault({code:"GMB-MOTION-STALL",message:"连续三个检测窗口内角度与陀螺仪无响应",messageEn:"No angle or gyroscope response across three consecutive detection windows"},false);
   if(name==="hot"){state.temperature=86;addLog({level:"WARNING",source:"PIXHAWK",message:"飞控温度进入警戒区间",messageEn:"Flight-controller temperature entered the warning range",category:"hardware"})}
   if(name==="emergency")setEmergency(true);
-  if(name==="offline"){state.boardOnline=false;state.pixhawkOnline=false;state.imuOnline=false;state.motorsOnline=false;state.gimbalOnline=false;state.controlLink=false;state.connection="offline";state.speed=0;state.videoLost=true;$("#videoAlertTitle").textContent=localize("设备连接已断开","Device connection lost");$("#videoAlertMessage").textContent=localize("控制与遥测已锁定，等待板端看门狗确认停车","Control and telemetry are locked while the board watchdog confirms stop.");$("#videoAlert").hidden=false;if(window.resetMantaJoystick)window.resetMantaJoystick();addLog({level:"ERROR",source:"LINK",message:"控制和遥测链路已断开，本机控制已锁定",messageEn:"Control and telemetry links were lost; local control is locked",category:"hardware"})}
+  if(name==="offline"){state.boardOnline=false;state.pixhawkOnline=false;state.imuOnline=false;state.motorsOnline=false;state.gimbalOnline=false;state.gimbalOutputAvailable=false;state.gimbalLinkStatus="offline";state.controlLink=false;state.connection="offline";state.speed=0;state.videoLost=true;$("#videoAlertTitle").textContent=localize("设备连接已断开","Device connection lost");$("#videoAlertMessage").textContent=localize("控制与遥测已锁定，等待板端看门狗确认停车","Control and telemetry are locked while the board watchdog confirms stop.");$("#videoAlert").hidden=false;if(window.resetMantaJoystick)window.resetMantaJoystick();addLog({level:"ERROR",source:"LINK",message:"控制和遥测链路已断开，本机控制已锁定",messageEn:"Control and telemetry links were lost; local control is locked",category:"hardware"})}
   renderConnection();renderTelemetry();
   if(state.connected)showView("device");
 }
@@ -2108,6 +2308,8 @@ function installEvents(){
   $("#devicePickerList").addEventListener("click",function(event){var option=event.target.closest("[data-device-index]");if(option)selectDiscoveredDevice(Number(option.dataset.deviceIndex))});
   $("#pairButton").addEventListener("click",completePairing);
   $("#disconnectButton").addEventListener("click",disconnect);
+  $("#manualFollowButton").addEventListener("click",function(){setDriveMode("manual")});
+  $("#autoFollowButton").addEventListener("click",function(){setDriveMode("auto")});
   $$("#pinInputs input").forEach(function(input,index,inputs){
     input.addEventListener("input",function(){
       input.value=input.value.replace(/\D/g,"").slice(-1);
@@ -2168,15 +2370,16 @@ if(!state.controlLink||state.gimbalFault){showToast("云台当前不可控制","
     if(state.trackingActive&&state.runningTrackMode===requestedMode){state.gimbalMode=requestedMode;state.trackMode=requestedMode;renderTrackingMode();showToast("当前跟踪模式已在运行","This tracking mode is already active");return}
     if(requestedMode==="click"&&!state.trackingActive){state.clickMarker=null;state.gimbalMode="click";state.trackTarget=null;renderTrackingMode();showToast("点击居中","Click center");return}
     var previousMode=state.gimbalMode,previousTracking=state.trackingActive,previousTrackMode=state.trackMode;
-    state.clickMarker=null;state.gimbalMode=requestedMode;state.trackTarget=null;if(requestedMode!=="click"){state.trackMode=requestedMode;state.trackStatus={locked:false,status:state.trackingActive?"switching":"starting",mode:requestedMode,message:(state.trackingActive?"Switching to ":"Starting ")+(requestedMode==="swimmer"?"Swimmer":"Face")+"..."}}
+    state.clickMarker=null;state.gimbalMode=requestedMode;state.trackTarget=null;if(requestedMode!=="click"){state.trackMode=requestedMode;state.trackStatus={locked:false,status:state.trackingActive?"switching":"starting",mode:requestedMode,message:(state.trackingActive?"Switching to ":"Starting ")+(requestedMode==="beacon"?"UWB Beacon":requestedMode==="swimmer"?"Swimmer":"Face")+"..."}}
     gimbalModeBusy=true;$$("[data-gimbal-mode]").forEach(function(button){button.disabled=true});
-    var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(requestedMode).catch(function(error){state.gimbalMode=previousMode;state.trackingActive=previousTracking;state.trackMode=previousTrackMode;showToast(error.message||"云台模式指令失败","Gimbal mode command failed")}).finally(function(){gimbalModeBusy=false;if(activeTransport&&activeTransport.refreshGimbalState)activeTransport.refreshGimbalState();$$("[data-gimbal-mode]").forEach(function(button){button.disabled=!state.gimbalOnline});renderTrackingMode()});
+    var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(requestedMode).catch(function(error){state.gimbalMode=previousMode;state.trackingActive=previousTracking;state.trackMode=previousTrackMode;showToast(error.message||"云台模式指令失败","Gimbal mode command failed")}).finally(function(){gimbalModeBusy=false;if(activeTransport&&activeTransport.refreshGimbalState)activeTransport.refreshGimbalState();$$("[data-gimbal-mode]").forEach(function(button){button.disabled=!state.gimbalOutputAvailable});renderTrackingMode()});
     renderTrackingMode();
-    showToast(requestedMode==="click"?localize("点击居中","Click center"):requestedMode==="face"?localize("人脸跟踪","Face track"):localize("泳者跟踪","Swimmer track"));
+    showToast(requestedMode==="click"?localize("点击居中","Click center"):requestedMode==="beacon"?localize("UWB信标跟随","UWB Beacon tracking"):requestedMode==="face"?localize("人脸跟踪","Face track"):localize("泳者跟踪","Swimmer track"));
   })});
   $(".video-feed").addEventListener("click",handleGimbalVideoClick);
   $("#gimbalVideo").addEventListener("loadedmetadata",function(){drawGimbalOverlay();if(state.connected&&state.transportMode!=="live")setGimbalVideoState("live","DEMO")});
   $("#liveGimbalWebrtc").addEventListener("loadedmetadata",function(){drawGimbalOverlay();if(state.connected&&state.transportMode==="live")setGimbalVideoState("live","WEBRTC")});
+  $("#liveGimbalWebrtc").addEventListener("timeupdate",function(){var video=$("#liveGimbalWebrtc");if(state.connected&&state.transportMode==="live"&&!video.hidden&&video.readyState>=2&&(state.videoLost||gimbalVideoStatus!=="live"||gimbalVideoTransport!=="WEBRTC"))setGimbalVideoState("live","WEBRTC")});
   $("#liveGimbalFeed").addEventListener("load",function(){clearTimeout(gimbalMjpegRetryTimer);gimbalMjpegRetryTimer=null;setGimbalVideoState("live","MJPEG");drawGimbalOverlay()});
   $("#liveGimbalFeed").addEventListener("error",function(){
     if(!state.connected||state.view!=="device"||state.transportMode!=="live")return;
@@ -2184,6 +2387,27 @@ if(!state.controlLink||state.gimbalFault){showToast("云台当前不可控制","
     gimbalMjpegRetryTimer=setTimeout(function(){var image=$("#liveGimbalFeed");image.removeAttribute("src");startMjpegFallback("mjpeg-error")},900);
   });
   $("#refreshGimbalVideo").addEventListener("click",refreshGimbalVideoStream);
+  $("#videoAlert").addEventListener("click",function(event){if(isGimbalVideoInterrupted()){event.preventDefault();event.stopPropagation();refreshGimbalVideoStream()}});
+  $("#videoAlert").addEventListener("keydown",function(event){if((event.key==="Enter"||event.key===" ")&&isGimbalVideoInterrupted()){event.preventDefault();refreshGimbalVideoStream()}});
+  $("#gimbalBeaconCalibration").addEventListener("click",openBeaconCalibration);
+  $("#driveFollowSwitch").addEventListener("click",function(){
+    if(state.driveMode!=="auto")return;
+    var activeTransport=ensureTransport();if(!activeTransport)return;
+    var followStatus=String(state.uwbFollow&&state.uwbFollow.status||"");
+    var starting=followStatus==="disarming"||followStatus==="switching_mode"||followStatus==="arming";
+    if(state.uwbFollow&&(state.uwbFollow.active||starting)){
+      activeTransport.stopUwbFollow().catch(function(error){showToast(error.message||"停止自动跟随失败")});return;
+    }
+    if(!state.connected||!state.controlLink){showToast("Manta控制链路未连接");return}
+    if(Number(state.gps&&state.gps.fixType||0)<2){showToast("GPS定位无效，自动跟随保持停止");return}
+    if(!state.ekf||state.ekf.healthy!==true){showToast("EKF速度/位置估计无效，自动跟随保持停止");return}
+    if(!state.uwb||!state.uwb.online||!state.uwb.fresh){showToast("UWB数据无效，自动跟随保持停止");return}
+    if(Number(state.uwb.distanceM)<1.2){showToast("目标距离需达到1.2米后才允许启动");return}
+    activeTransport.startUwbFollow().then(function(){showToast("已自动切换GUIDED并武装，UWB跟随已启动")}).catch(function(error){showToast(error.message||"启动自动跟随失败")});
+  });
+  $("#beaconCalibrationNext").addEventListener("click",advanceBeaconCalibration);
+  $("#beaconCalibrationCancel").addEventListener("click",cancelBeaconCalibration);
+  $("#beaconCalibrationClose").addEventListener("click",cancelBeaconCalibration);
   window.addEventListener("resize",drawGimbalOverlay);
 
 

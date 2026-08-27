@@ -13,6 +13,14 @@ wheelhouse*/
 *.tmp
 vendor/*.tar.gz
 
+# Board-only runtime/deployment artifacts.
+rk3588_control_system/node_modules.tar.gz
+*.before-*
+
+# Keep the compact Zoom 9-14 offline package in Git. Higher-resolution
+# operational tiles stay on the MANTA board and are deployed separately.
+rk3588_control_system/frontend/assets/offline-map/1[5-9]/
+
 # Manta iPad app build artifacts (large binaries)
 rk3588_control_system/MantaApp-iPad-*.zip
 rk3588_control_system/MantaApp.swiftpm/

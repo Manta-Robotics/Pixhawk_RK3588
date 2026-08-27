@@ -9,6 +9,8 @@
     var recordTimerHandle = null;
     var downloadTimer = null;
     var logEntries = [];
+    var liveFeedRetryTimer = null;
+    var liveFeedRetryDelayMs = 500;
 
     var state = {
         view: "device",
@@ -431,6 +433,18 @@
             video.hidden = false;
             video.play().catch(function () {});
         }
+    }
+
+    function scheduleLiveFeedReconnect() {
+        if (liveFeedRetryTimer || !state.connected || state.view !== "device" || state.transportMode !== "live") return;
+        liveFeedRetryTimer = window.setTimeout(function () {
+            liveFeedRetryTimer = null;
+            var image = $("#liveGimbalFeed");
+            if (!image || !state.connected || state.view !== "device" || state.transportMode !== "live") return;
+            image.removeAttribute("src");
+            image.src = "/api/gimbal/stream?app=" + Date.now();
+            liveFeedRetryDelayMs = Math.min(liveFeedRetryDelayMs * 2, 4000);
+        }, liveFeedRetryDelayMs);
     }
 
     function installJoystick() {
@@ -1043,6 +1057,27 @@
         $("#themeSelect").addEventListener("change", function (event) { state.theme = event.target.value; document.body.dataset.theme = state.theme; });
         $("#languageSelect").addEventListener("change", function (event) { applyLanguage(event.target.value); });
         $("#transportToggle").addEventListener("click", function () { switchTransport(state.transportMode === "mock" ? "live" : "mock"); });
+        var liveFeed = $("#liveGimbalFeed");
+        if (liveFeed) {
+            liveFeed.addEventListener("load", function () {
+                if (liveFeedRetryTimer) window.clearTimeout(liveFeedRetryTimer);
+                liveFeedRetryTimer = null;
+                liveFeedRetryDelayMs = 500;
+                state.videoLost = false;
+                renderTelemetry();
+            });
+            liveFeed.addEventListener("error", function () {
+                state.videoLost = true;
+                renderTelemetry();
+                scheduleLiveFeedReconnect();
+            });
+        }
+        document.addEventListener("visibilitychange", function () {
+            if (!document.hidden && state.connected && state.view === "device" && state.transportMode === "live") {
+                if (liveFeed) liveFeed.removeAttribute("src");
+                syncVideoSource();
+            }
+        });
         $$("[data-demo-state]").forEach(function (button) { button.addEventListener("click", function () { applyDemoState(button.dataset.demoState); }); });
         ["Latency", "Speed", "Temp"].forEach(function (name) {
             var input = $("#demo" + name), output = $("#demo" + name + "Output");

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manta Gimbal</title>
-    <link rel="stylesheet" href="css/style.css?v=20260701gimbalpro">
+    <link rel="stylesheet" href="css/style.css?v=20260825gimbalstatus2">
 </head>
 <body data-page="gimbal">
     <header class="shell-header shell-header-compact">
@@ -34,6 +34,7 @@
                         <button id="gimbalModeClick" class="active" type="button">Click Center</button>
                         <button id="gimbalModeFace" type="button">Face Track</button>
                         <button id="gimbalModeSwimmer" type="button">Swimmer Track</button>
+                        <button id="gimbalModeBeacon" type="button">UWB Beacon</button>
                     </div>
                 </div>
                 <div class="gimbal-control-group gimbal-action-group">
@@ -42,6 +43,7 @@
                         <button class="btn btn-primary" id="gimbalConnect" type="button">Connect</button>
                         <button class="btn btn-danger" id="gimbalStop" type="button">Stop</button>
                         <button class="btn" id="gimbalHome" type="button">Home</button>
+                        <button class="btn btn-stream-refresh" id="gimbalRefreshVideo" type="button" title="Only refresh the gimbal video data stream">刷新画面</button>
                         <button class="btn btn-record" id="gimbalRecordToggle" type="button">Record</button>
                         <label class="switch-control" title="Camera OSD">
                             <span>OSD</span>
@@ -58,23 +60,26 @@
                     <img id="gimbalCameraFeed" class="camera-feed" alt="Gimbal video feed">
                     <canvas id="gimbalOverlay" class="vision-overlay"></canvas>
                     <div class="camera-placeholder" id="gimbalCameraPlaceholder">
-                        <strong>Gimbal</strong>
+                        <strong id="gimbalCameraPlaceholderTitle">画面加载中</strong>
                         <span id="gimbalCameraMessage">Waiting for the gimbal RTSP video stream.</span>
                     </div>
                     <div class="camera-overlay">
                         <span class="attitude-badge" id="gimbalModeBadge">CLICK</span>
-                        <span class="camera-meta" id="gimbalCameraSource">Source pending</span>
+                        <div class="camera-overlay-status">
+                            <span class="camera-stream-status is-loading" id="gimbalVideoBadge" aria-live="polite"><i></i><b>加载中</b></span>
+                            <span class="camera-meta" id="gimbalCameraSource">Source pending</span>
+                        </div>
                     </div>
                 </div>
 
                 <aside class="gimbal-side">
                     <div class="stat-grid gimbal-stat-grid">
                         <article class="stat-card compact-stat-card"><span class="label">Serial</span><span class="value" id="gimbalSerial">--</span></article>
-                        <article class="stat-card compact-stat-card"><span class="label">Status</span><span class="value" id="gimbalStatus">Idle</span></article>
+                        <article class="stat-card compact-stat-card gimbal-state-card is-offline" id="gimbalControlCard"><span class="label">Control Link</span><span class="value" id="gimbalStatus" aria-live="polite">未连接</span><small class="state-detail" id="gimbalStatusDetail">等待云台控制链路</small></article>
+                        <article class="stat-card compact-stat-card gimbal-state-card is-loading" id="gimbalVideoCard"><span class="label">Video Stream</span><span class="value" id="gimbalVideoStatus" aria-live="polite">加载中</span><small class="state-detail" id="gimbalVideo">等待画面数据</small></article>
                         <article class="stat-card compact-stat-card"><span class="label">Mode</span><span class="value" id="gimbalModeText">Click</span></article>
                         <article class="stat-card compact-stat-card"><span class="label">Target/Error</span><span class="value" id="gimbalTarget">No target</span></article>
                         <article class="stat-card compact-stat-card"><span class="label">Command</span><span class="value" id="gimbalCommand">Idle</span></article>
-                        <article class="stat-card compact-stat-card"><span class="label">Video</span><span class="value" id="gimbalVideo">--</span></article>
                     </div>
                     <div class="gimbal-reticle-card">
                         <div class="gimbal-reticle-mini"><span></span></div>
@@ -87,6 +92,6 @@
     <script src="/socket.io/socket.io.js?v=20260618bt"></script>
     <script src="js/realtime_client.js?v=20260618bt"></script>
     <script src="js/common_ui.js?v=20260618bt"></script>
-    <script src="js/page_gimbal.js?v=20260701gimbalpro"></script>
+    <script src="js/page_gimbal.js?v=20260825uwbbeacon1"></script>
 </body>
 </html>
