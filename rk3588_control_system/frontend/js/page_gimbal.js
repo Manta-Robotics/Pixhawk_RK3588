@@ -1,4 +1,13 @@
 (function () {
+    function requestedTrackModeFromLocation() {
+        try {
+            var requestedMode = new URLSearchParams(window.location.search).get("mode");
+            if (/^(beacon|uwb)$/i.test(String(requestedMode || ""))) return "beacon";
+        } catch (error) {
+            // Ignore malformed or unsupported query strings and keep the normal click mode.
+        }
+        return "";
+    }
     var mode = "click";
     var trackMode = "face";
     var runningTrackMode = "face";
@@ -24,16 +33,84 @@
     var guideStart = 0;
     var guideDurationMs = 1600;
     var mirrorX = true;
+    var cameraRetryTimer = null;
+    var cameraRetryDelayMs = 500;
+    var cameraSource = "/api/gimbal/stream";
+    var cameraState = "loading";
 
     function $(id) { return document.getElementById(id); }
     function setText(id, value) { var el = $(id); if (el) el.textContent = value; }
+    function setStateClass(element, value) {
+        if (!element) return;
+        ["is-live", "is-loading", "is-warning", "is-offline"].forEach(function (name) { element.classList.remove(name); });
+        element.classList.add(value);
+    }
+    function setCameraState(nextState, detail) {
+        cameraState = nextState;
+        var card = $("gimbalVideoCard");
+        var badge = $("gimbalVideoBadge");
+        var button = $("gimbalRefreshVideo");
+        var title = $("gimbalCameraPlaceholderTitle");
+        var labels = {
+            live: { text: "画面正常", badge: "LIVE", className: "is-live", title: "云台画面" },
+            loading: { text: "加载中", badge: "LOADING", className: "is-loading", title: "画面加载中" },
+            refreshing: { text: "正在刷新", badge: "REFRESH", className: "is-loading", title: "正在刷新画面" },
+            reconnecting: { text: "画面中断 · 重连中", badge: "RECONNECT", className: "is-warning", title: "画面连接中断" },
+            offline: { text: "画面不可用", badge: "OFFLINE", className: "is-offline", title: "暂无云台画面" }
+        };
+        var item = labels[nextState] || labels.offline;
+        setText("gimbalVideoStatus", item.text);
+        if (badge) {
+            setStateClass(badge, item.className);
+            var badgeText = badge.querySelector("b");
+            if (badgeText) badgeText.textContent = item.badge;
+        }
+        setStateClass(card, item.className);
+        if (title) title.textContent = item.title;
+        if (detail) setText("gimbalCameraMessage", detail);
+        if (button) {
+            button.disabled = nextState === "refreshing";
+            button.classList.toggle("is-refreshing", nextState === "refreshing");
+            button.textContent = nextState === "refreshing" ? "刷新中..." : "刷新画面";
+        }
+    }
+    function updateControlState(state, backendOnline) {
+        var card = $("gimbalControlCard");
+        if (!backendOnline) {
+            setText("gimbalStatus", "后端未连接");
+            setText("gimbalStatusDetail", "无法读取云台状态");
+            setStateClass(card, "is-offline");
+            connected = false;
+            renderControls();
+            return;
+        }
+        var linkStatus = String(state.linkStatus || "offline");
+        if (state.connected || linkStatus === "feedback") {
+            setText("gimbalStatus", "已连接");
+            setText("gimbalStatusDetail", "UART 正常 · 云台反馈在线");
+            setStateClass(card, "is-live");
+        } else if (state.portOpen || linkStatus === "port_only") {
+            setText("gimbalStatus", "等待云台反馈");
+            setText("gimbalStatusDetail", state.lastError || "串口已打开，尚未收到有效回传");
+            setStateClass(card, "is-warning");
+        } else {
+            setText("gimbalStatus", "未连接");
+            setText("gimbalStatusDetail", state.lastError || "点击 Connect 建立控制链路");
+            setStateClass(card, "is-offline");
+        }
+    }
     function normalizeTrackMode(value) {
-        return String(value || "").toLowerCase() === "swimmer" ? "swimmer" : "face";
+        var normalized = String(value || "").toLowerCase();
+        if (normalized === "beacon" || normalized === "uwb") return "beacon";
+        return normalized === "swimmer" ? "swimmer" : "face";
     }
     function trackLabel(value) {
-        return normalizeTrackMode(value) === "swimmer" ? "Swimmer" : "Face";
+        var normalized = normalizeTrackMode(value);
+        if (normalized === "beacon") return "Beacon";
+        return normalized === "swimmer" ? "Swimmer" : "Face";
     }
     function lostMessage(value) {
+        if (normalizeTrackMode(value) === "beacon") return "UWB signal stale";
         return normalizeTrackMode(value) === "swimmer" ? "can not find swimmer" : "CAN NOT FIND FACE";
     }
     function activeTrackMode() {
@@ -43,10 +120,12 @@
         var clickBtn = $("gimbalModeClick");
         var faceBtn = $("gimbalModeFace");
         var swimmerBtn = $("gimbalModeSwimmer");
+        var beaconBtn = $("gimbalModeBeacon");
         var currentMode = activeTrackMode();
         if (clickBtn) clickBtn.classList.toggle("active", mode === "click" && !trackingActive);
         if (faceBtn) faceBtn.classList.toggle("active", mode === "track" && trackMode === "face");
         if (swimmerBtn) swimmerBtn.classList.toggle("active", mode === "track" && trackMode === "swimmer");
+        if (beaconBtn) beaconBtn.classList.toggle("active", mode === "track" && trackMode === "beacon");
         setText("gimbalModeText", mode === "track" ? trackLabel(currentMode) + (trackingActive ? " Tracking" : " Ready") : "Click");
         setText("gimbalModeBadge", mode === "track" ? trackLabel(currentMode).toUpperCase() : "CLICK");
         var connectBtn = $("gimbalConnect");
@@ -75,6 +154,7 @@
         if (clickBtn) clickBtn.disabled = trackBusy;
         if (faceBtn) faceBtn.disabled = trackBusy;
         if (swimmerBtn) swimmerBtn.disabled = trackBusy;
+        if (beaconBtn) beaconBtn.disabled = trackBusy;
         var osdToggle = $("gimbalOsdToggle");
         if (osdToggle) osdToggle.disabled = osdBusy;
     }
@@ -105,7 +185,7 @@
         }
         videoTransport = state.videoTransport || "rtsp";
         setText("gimbalSerial", (state.serialPort || "--") + " @ " + (state.baudRate || "--"));
-        setText("gimbalStatus", state.connected ? "Connected" : (state.lastError || "Disconnected"));
+        updateControlState(state, true);
         setText("gimbalCommand", state.lastCommand || "Idle");
         setText("gimbalVideo", state.videoInput || state.videoSource || "--");
         setText("gimbalCameraSource", state.videoSource || "/api/camera/stream");
@@ -133,6 +213,12 @@
             }
             lastTarget = { x: targetX, y: targetY };
             setText("gimbalModeBadge", predicting ? "PREDICT" : trackLabel(targetMode).toUpperCase());
+            if (targetMode === "beacon" && state.lastTarget.locked) {
+                var yawError = Number(state.lastTarget.errorYawDeg || 0).toFixed(1);
+                var pitchError = Number(state.lastTarget.errorPitchDeg || 0).toFixed(1);
+                setText("gimbalTarget", (state.lastTarget.dryRun ? "DRY RUN " : "BEACON ") + "Yaw " + yawError + "° / Pitch " + pitchError + "°");
+                return;
+            }
             setText("gimbalTarget", state.lastTarget.locked ? (predicting ? "PREDICT " : trackLabel(targetMode).toUpperCase() + " ") + Math.round(targetX) + " / " + Math.round(targetY) : (state.lastTarget.message || lostMessage(targetMode)));
             renderControls();
             drawOverlay();
@@ -140,9 +226,9 @@
     }
     function refreshState() {
         fetch("/api/gimbal/state", { cache: "no-store" })
-            .then(function (r) { return r.json(); })
+            .then(function (r) { if (!r.ok) throw new Error("state unavailable"); return r.json(); })
             .then(function (body) { if (body && body.state) updateState(body.state); })
-            .catch(function () {});
+            .catch(function () { updateControlState({}, false); });
     }
     function refreshRecordingState() {
         fetch("/api/gimbal/recording/state", { cache: "no-store" })
@@ -155,17 +241,47 @@
             })
             .catch(function () {});
     }
-    function startCamera(source) {
+    function startCamera(source, reason) {
         var img = $("gimbalCameraFeed");
         var placeholder = $("gimbalCameraPlaceholder");
         var url = source || "/api/gimbal/stream";
         if (!img) return;
-        img.onload = function () { if (placeholder) placeholder.style.display = "none"; drawOverlay(); };
+        cameraSource = url;
+        if (placeholder) placeholder.style.display = "flex";
+        setCameraState(reason === "manual" ? "refreshing" : "loading", reason === "manual" ? "仅重新建立云台画面数据流，不改变控制和跟踪状态。" : "正在连接云台 RTSP 画面数据流。");
+        if (cameraRetryTimer) {
+            window.clearTimeout(cameraRetryTimer);
+            cameraRetryTimer = null;
+        }
+        img.onload = function () {
+            cameraRetryDelayMs = 500;
+            if (cameraRetryTimer) window.clearTimeout(cameraRetryTimer);
+            cameraRetryTimer = null;
+            if (placeholder) placeholder.style.display = "none";
+            setCameraState("live");
+            drawOverlay();
+        };
         img.onerror = function () {
             if (placeholder) placeholder.style.display = "flex";
-            setText("gimbalCameraMessage", "Proxy is running, but the RTSP stream is not producing decodable frames.");
+            setCameraState("reconnecting", "画面数据已中断，正在自动重新连接。");
+            if (cameraRetryTimer) return;
+            cameraRetryTimer = window.setTimeout(function () {
+                cameraRetryTimer = null;
+                img.src = cameraSource + (cameraSource.indexOf("?") === -1 ? "?" : "&") + "gimbal=" + Date.now();
+                cameraRetryDelayMs = Math.min(cameraRetryDelayMs * 2, 4000);
+            }, cameraRetryDelayMs);
         };
         img.src = url + (url.indexOf("?") === -1 ? "?" : "&") + "gimbal=" + Date.now();
+    }
+    function refreshCameraStream() {
+        var img = $("gimbalCameraFeed");
+        if (!img || cameraState === "refreshing") return;
+        if (cameraRetryTimer) {
+            window.clearTimeout(cameraRetryTimer);
+            cameraRetryTimer = null;
+        }
+        img.removeAttribute("src");
+        window.setTimeout(function () { startCamera(cameraSource, "manual"); }, 60);
     }
     function drawTrackOverlay(ctx, width, height) {
         if (mode !== "track" || !trackingActive) return;
@@ -380,6 +496,12 @@
             var targetY = Number.isFinite(Number(target.y)) ? Number(target.y) : Number(target.dy || 0);
             lastTarget = { x: targetX, y: targetY };
             setText("gimbalModeBadge", target.coasting ? "PREDICT" : trackLabel(targetMode).toUpperCase());
+            if (targetMode === "beacon") {
+                var beaconYawError = Number(target.errorYawDeg || 0).toFixed(1);
+                var beaconPitchError = Number(target.errorPitchDeg || 0).toFixed(1);
+                setText("gimbalTarget", (target.dryRun ? "DRY RUN " : "BEACON ") + "Yaw " + beaconYawError + "° / Pitch " + beaconPitchError + "°");
+                return;
+            }
             setText("gimbalTarget", (target.coasting ? "PREDICT " : trackLabel(targetMode).toUpperCase() + " ") + Math.round(targetX) + " / " + Math.round(targetY));
             renderControls();
             drawOverlay();
@@ -408,14 +530,19 @@
     document.addEventListener("DOMContentLoaded", function () {
         setMode("click");
         startCamera("/api/gimbal/stream");
+        document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) startCamera(cameraSource);
+        });
         var view = $("gimbalView");
         if (view) view.addEventListener("click", handleClick);
         var clickBtn = $("gimbalModeClick");
         var faceBtn = $("gimbalModeFace");
         var swimmerBtn = $("gimbalModeSwimmer");
+        var beaconBtn = $("gimbalModeBeacon");
         var connectBtn = $("gimbalConnect");
         var stopBtn = $("gimbalStop");
         var homeBtn = $("gimbalHome");
+        var refreshVideoBtn = $("gimbalRefreshVideo");
         var osdToggle = $("gimbalOsdToggle");
         var recordToggle = $("gimbalRecordToggle");
         if (clickBtn) clickBtn.addEventListener("click", function () {
@@ -433,6 +560,7 @@
         }
         if (faceBtn) faceBtn.addEventListener("click", function () { selectTrackMode("face"); });
         if (swimmerBtn) swimmerBtn.addEventListener("click", function () { selectTrackMode("swimmer"); });
+        if (beaconBtn) beaconBtn.addEventListener("click", function () { selectTrackMode("beacon"); });
         if (connectBtn) connectBtn.addEventListener("click", function () {
             if (connectBusy) return;
             connectBusy = true;
@@ -475,6 +603,7 @@
                 renderControls();
             });
         });
+        if (refreshVideoBtn) refreshVideoBtn.addEventListener("click", refreshCameraStream);
         if (osdToggle) osdToggle.addEventListener("change", function () {
             osdBusy = true;
             renderControls();
@@ -488,6 +617,9 @@
         if (recordToggle) recordToggle.addEventListener("click", toggleRecording);
         bindSocket();
         refreshState();
+        if (requestedTrackModeFromLocation() === "beacon") {
+            startTrackMode("beacon");
+        }
         refreshRecordingState();
         window.setInterval(refreshState, 1000);
         window.setInterval(refreshRecordingState, 2000);
