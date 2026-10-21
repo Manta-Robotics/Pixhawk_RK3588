@@ -15,6 +15,7 @@
     var trackBusy = false;
     var recordBusy = false;
     var osdBusy = false;
+    var osdSupported = true;
     var connectBusy = false;
     var stopBusy = false;
     var homeBusy = false;
@@ -87,7 +88,7 @@
         var linkStatus = String(state.linkStatus || "offline");
         if (state.connected || linkStatus === "feedback") {
             setText("gimbalStatus", "已连接");
-            setText("gimbalStatusDetail", "UART 正常 · 云台反馈在线");
+            setText("gimbalStatusDetail", (String(state.model || "云台") + " · " + String(state.transport || "UART").toUpperCase() + " 反馈在线"));
             setStateClass(card, "is-live");
         } else if (state.portOpen || linkStatus === "port_only") {
             setText("gimbalStatus", "等待云台反馈");
@@ -156,7 +157,8 @@
         if (swimmerBtn) swimmerBtn.disabled = trackBusy;
         if (beaconBtn) beaconBtn.disabled = trackBusy;
         var osdToggle = $("gimbalOsdToggle");
-        if (osdToggle) osdToggle.disabled = osdBusy;
+        if (osdToggle && osdToggle.parentElement) osdToggle.parentElement.hidden = !osdSupported;
+        if (osdToggle) osdToggle.disabled = osdBusy || !osdSupported;
     }
     function postJson(url, body) {
         return fetch(url, {
@@ -172,6 +174,10 @@
     }
     function updateState(state) {
         if (!state) return;
+        osdSupported = !state.capabilities || state.capabilities.osd !== false;
+        mirrorX = state.videoMirrorX !== false;
+        var image = $("gimbalCameraFeed");
+        if (image) image.style.transform = mirrorX ? "scaleX(-1)" : "none";
         connected = Boolean(state.connected);
         trackingActive = Boolean(state.trackingActive);
         if (state.trackMode) {

@@ -74,9 +74,9 @@ test('gimbal control selects exactly one supported transport', () => {
   assert.ok(validateSystemConfig(candidate).some((error) => error.includes('control_transport')));
 });
 
-test('gimbal pitch lower limit is the home angle', () => {
+test('gimbal pitch lower limit matches selected camera coordinates', () => {
   assert.equal(config.gimbal.axis.pitch_min_deg, 0);
-  assert.equal(config.gimbal.axis.pitch_home_feedback_deg, 2.5);
+  assert.equal(config.gimbal.axis.pitch_home_feedback_deg, 0);
   assert.ok(config.gimbal.axis.pitch_max_deg > config.gimbal.axis.pitch_min_deg);
 });
 
@@ -130,4 +130,13 @@ test('asymmetric rover ranges are rejected because zero must remain neutral', ()
   candidate.rover_throttle_min = -80;
   candidate.rover_throttle_max = 100;
   assert.ok(validateSystemConfig(candidate).some((error) => error.includes('symmetric')));
+});
+
+test('SIYI protocol rejects out-of-range limits and incompatible click modes', () => {
+  for (const mutate of [
+    c => { c.gimbal.protocol = 'unknown'; },
+    c => { c.gimbal.axis.pitch_max_deg = 150; },
+    c => { c.gimbal.axis.click_control_mode = 'select_target'; },
+    c => { c.gimbal.siyi.max_rate_command = 101; }
+  ]) { const candidate = structuredClone(config); mutate(candidate); assert.ok(validateSystemConfig(candidate).length > 0); }
 });

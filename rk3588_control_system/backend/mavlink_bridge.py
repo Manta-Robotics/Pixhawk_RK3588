@@ -373,6 +373,7 @@ class MAVLinkBridge:
         name: str,
         value: float,
         source: Optional[tuple[int, int]] = None,
+        sample_time_boot_ms: Optional[int] = None,
     ) -> None:
         now_ms = int(time.time() * 1000)
         updated = self.uwb_fusion.update(name, value, source=source, now_ms=now_ms)
@@ -396,7 +397,12 @@ class MAVLinkBridge:
                 self.uwb_fusion.apply_measurement_result(receiver_id, kalman.reject(now_ms, 'radio_invalid', heading))
             elif field_name in ('DIST', 'AZ') and receiver.received_measurement_at == now_ms and not receiver.pending_distance and not receiver.pending_azimuth:
                 result = kalman.update(receiver.raw_distance_m, receiver.raw_azimuth_deg, now_ms, heading,
-                                       valid=receiver.valid, sequence_id=receiver.sequence_id, tag_id=receiver.tag_id)
+                                       valid=receiver.valid,
+                                       # SEQ is low-rate diagnostic metadata. The sender's
+                                       # measurement timestamp identifies each complete pair
+                                       # without treating new observations as diagnostic replays.
+                                       sequence_id=sample_time_boot_ms if sample_time_boot_ms is not None else receiver.sequence_id,
+                                       tag_id=receiver.tag_id)
                 self.uwb_fusion.apply_measurement_result(receiver_id, result)
             elif field_name == 'EL' and abs(value) <= 90:
                 # Elevation is separate from the horizontal Cartesian state.
@@ -1584,7 +1590,10 @@ class MAVLinkBridge:
                 source = (int(msg.get_srcSystem()), int(msg.get_srcComponent()))
             except (AttributeError, TypeError, ValueError):
                 pass
-            self._update_uwb_named_value(name, value, source=source)
+            self._update_uwb_named_value(
+                name, value, source=source,
+                sample_time_boot_ms=getattr(msg, 'time_boot_ms', None),
+            )
 
         elif msg_type == 'STATUSTEXT':
             raw_text = getattr(msg, 'text', '')

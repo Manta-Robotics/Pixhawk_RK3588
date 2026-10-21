@@ -39,6 +39,7 @@ import {
   resetGimbalLinkHealth
 } from './gimbal_link_health.js';
 import { limitOutgoingGimbalFrame } from './gimbal_frame_limits.js';
+import { SiyiGimbal, decodeSiyiPackets } from './siyi_gimbal.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,6 +89,8 @@ const gimbalConfig = config.gimbal || {};
 const GIMBAL_BEACON_CONFIG = gimbalConfig.beacon || {};
 const UWB_FOLLOW_CONFIG = config.uwb_follow || {};
 const UWB_ACRO = UWB_FOLLOW_CONFIG.execution_mode === 'acro';
+const UWB_RELATIVE_IMU = UWB_FOLLOW_CONFIG.execution_mode === 'relative_imu';
+const UWB_RELATIVE_NMPC = UWB_RELATIVE_IMU && UWB_FOLLOW_CONFIG.relative_nmpc?.enabled === true;
 const UWB_FOLLOW_ENABLED = UWB_FOLLOW_CONFIG.enabled === true;
 const UWB_FOLLOW_RATE_HZ = Math.max(2, Math.min(20, Number(UWB_FOLLOW_CONFIG.control_rate_hz || 10)));
 const uwbControllerConfig = {
@@ -260,6 +263,10 @@ const commandSocket = dgram.createSocket('udp4');
 const telemetrySocket = dgram.createSocket('udp4');
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
 
+const GIMBAL_PROTOCOL = String(gimbalConfig.protocol || 'ztd095').toLowerCase();
+const IS_SIYI = GIMBAL_PROTOCOL === 'siyi';
+const siyiGimbal = IS_SIYI ? new SiyiGimbal(gimbalConfig.siyi || {}) : null;
+let siyiPollTimer = null;
 const GIMBAL_FRAME_LENGTH = 44;
 const GIMBAL_COMMAND_HZ = Math.max(1, Number(gimbalConfig.command_hz || 25));
 const GIMBAL_COMMAND_INTERVAL_MS = Math.round(1000 / GIMBAL_COMMAND_HZ);
@@ -420,6 +427,10 @@ const gimbalState = {
   connected: false,
   portOpen: false,
   linkStatus: 'offline',
+  protocol: GIMBAL_PROTOCOL,
+  model: String(gimbalConfig.model || 'ZTD095'),
+  capabilities: { osd: !IS_SIYI, laserRange: !IS_SIYI, cameraDetector: !IS_SIYI, cameraSdRecording: !IS_SIYI },
+  videoMirrorX: gimbalVideoConfig.mirror_x !== false,
   transport: GIMBAL_CONTROL_TRANSPORT,
   serialPort: GIMBAL_SERIAL_PORT,
   baudRate: GIMBAL_BAUD_RATE,
@@ -442,6 +453,7 @@ const gimbalState = {
   beacon: {
     enabled: GIMBAL_BEACON_CONFIG.enabled !== false,
     dryRun: GIMBAL_BEACON_DRY_RUN,
+    calibrationRequired: GIMBAL_BEACON_CONFIG.calibration_required === true,
     yawSourceScale: Number(GIMBAL_BEACON_CONFIG.yaw_source_scale || 1),
     pitchSourceScale: Number(GIMBAL_BEACON_CONFIG.pitch_source_scale || 1),
     yawOffsetDeg: Number(GIMBAL_BEACON_CONFIG.yaw_offset_deg || 0),
@@ -490,8 +502,8 @@ function updateGimbalDiagnostics() {
     feedbackFresh,
     now
   });
-  gimbalState.connected = diagnostics.connected;
-  gimbalState.linkStatus = diagnostics.linkStatus;
+  gimbalState.connected = diagnostics.connected && (!IS_SIYI || feedbackFresh);
+  gimbalState.linkStatus = IS_SIYI && !feedbackFresh && gimbalState.portOpen && diagnostics.linkStatus !== 'command_timeout' ? 'port_only' : diagnostics.linkStatus;
   gimbalState.commandResponse = { ...gimbalLinkHealth };
 
   if (GIMBAL_CONTROL_TRANSPORT === 'uart' && !serialPresent) {
@@ -1199,6 +1211,18 @@ function emitGimbalState() {
 }
 
 function parseGimbalFeedbackFrames() {
+  if (IS_SIYI) {
+    const decoded = decodeSiyiPackets(gimbalFeedbackParseBuffer);
+    gimbalFeedbackParseBuffer = decoded.remainder;
+    for (const packet of decoded.packets) {
+      const feedback = siyiGimbal.feedback(packet, gimbalState.feedback || {});
+      if (feedback) {
+        gimbalState.feedback = feedback;
+        acceptGimbalFeedback(gimbalLinkHealth, feedback.updatedAt);
+      }
+    }
+    return;
+  }
   while (gimbalFeedbackParseBuffer.length >= 2) {
     const headerIndex = gimbalFeedbackParseBuffer.indexOf(Buffer.from([0xfc, 0x2c]));
     if (headerIndex < 0) {
@@ -1303,6 +1327,30 @@ function configureGimbalSerial() {
   }
 }
 
+function startSiyiPolling() {
+  if (!IS_SIYI) return;
+  clearInterval(siyiPollTimer);
+  let lastConfigAt = 0;
+  const poll = () => {
+    if (!gimbalStream || !gimbalState.enabled) return;
+    try {
+      if (Date.now() - lastConfigAt >= 1000) {
+        gimbalStream.write(siyiGimbal.packet(0x0a));
+        lastConfigAt = Date.now();
+      }
+      gimbalStream.write(siyiGimbal.packet(0x0d));
+    } catch (error) { addLog('GIMBAL_ERR', `SIYI feedback poll: ${error.message}`); }
+  };
+  siyiPollTimer = setInterval(poll, 100);
+  poll();
+}
+
+function writeGimbalWireFrame(frame) {
+  if (!IS_SIYI) return gimbalStream.write(frame);
+  for (const packet of siyiGimbal.translate(frame, gimbalState.feedback)) gimbalStream.write(packet);
+  return true;
+}
+
 function finishGimbalControlOpen(description, options = {}) {
   resetGimbalLinkHealth(gimbalLinkHealth);
   gimbalState.portOpen = true;
@@ -1310,6 +1358,7 @@ function finishGimbalControlOpen(description, options = {}) {
   gimbalState.lastError = '';
   addLog('GIMBAL', description);
   if (options.readSerial) openGimbalReadStream();
+  startSiyiPolling();
   emitGimbalState();
   if (gimbalPendingHomeSource) {
     const pendingSource = gimbalPendingHomeSource;
@@ -1351,7 +1400,9 @@ function openGimbalUdp() {
 
   gimbalUdpSocket = socket;
   gimbalStream = writer;
-  socket.on('message', rememberGimbalRx);
+  socket.on('message', (data, remote) => {
+    if (remote.address === GIMBAL_UDP_HOST && remote.port === GIMBAL_UDP_PORT) rememberGimbalRx(data);
+  });
   socket.on('error', reportGimbalUdpError);
   socket.on('close', () => {
     if (gimbalUdpSocket !== socket) return;
@@ -1421,7 +1472,7 @@ function writeGimbalFrame(frame) {
   if (!gimbalTxEnabled) return false;
   if (!gimbalState.enabled || !gimbalStream) return false;
   try {
-    gimbalStream.write(limited.frame);
+    writeGimbalWireFrame(limited.frame);
     return true;
   } catch (error) {
     gimbalState.lastError = error.message;
@@ -1442,7 +1493,7 @@ function writeGimbalFrameBurst(frame, count = 1) {
       feedback: gimbalState.feedback
     });
     for (let index = 0; index < count; index += 1) {
-      gimbalStream.write(limited.frame);
+      writeGimbalWireFrame(limited.frame);
     }
     return true;
   } catch (error) {
@@ -1454,6 +1505,8 @@ function writeGimbalFrameBurst(frame, count = 1) {
 }
 
 function disconnectGimbalPort() {
+  clearInterval(siyiPollTimer);
+  siyiPollTimer = null;
   stopGimbalTracking(false);
   gimbalPendingHomeSource = '';
   gimbalHoldUntil = 0;
@@ -2088,6 +2141,7 @@ function holdGimbalTrackIdle(source = 'swimmer-lost') {
 }
 
 function sendGimbalCancelTrack(source = 'web') {
+  if (IS_SIYI) return { supported: true, hostTracking: true };
   const frame = buildGimbalFrame({ command: 0x3b, param1: 0, param2: 0 });
   setGimbalFrame(frame, `cancel-track:${source}`, 'idle', 180, { command: 0x3b });
   writeGimbalFrameBurst(frame, 5);
@@ -2252,7 +2306,7 @@ function moveGimbalToCalibrationPoint(point) {
 function persistBeaconCalibration(result) {
   const previous = { ...GIMBAL_BEACON_CONFIG };
   if (!result || result.model !== 'rigid_3d' || !result.extrinsic_3d) throw new Error('Unsupported UWB beacon calibration model');
-  Object.assign(GIMBAL_BEACON_CONFIG, { extrinsic_3d: result.extrinsic_3d });
+  Object.assign(GIMBAL_BEACON_CONFIG, { extrinsic_3d: result.extrinsic_3d, calibration_required: false });
   const errors = validateSystemConfig(config);
   if (errors.length) {
     Object.keys(GIMBAL_BEACON_CONFIG).forEach((key) => delete GIMBAL_BEACON_CONFIG[key]);
@@ -2269,7 +2323,7 @@ function persistBeaconCalibration(result) {
     Object.assign(GIMBAL_BEACON_CONFIG, previous);
     throw error;
   }
-  Object.assign(gimbalState.beacon, { calibrationModel: 'rigid_3d', extrinsic3dEnabled: true, calibrationMetrics: result.metrics });
+  Object.assign(gimbalState.beacon, { calibrationRequired: false, calibrationModel: 'rigid_3d', extrinsic3dEnabled: true, calibrationMetrics: result.metrics });
 }
 
 function startBeaconCalibrationSession() {
@@ -2433,6 +2487,7 @@ function sendGimbalZoomReset(source = 'web') {
 }
 
 function sendGimbalOsd(mode = 0, source = 'web') {
+  if (IS_SIYI) return { supported: false, message: 'SIYI A8 RTSP OSD is not controlled by the ZTD protocol' };
   beginGimbalResponseCheck(`osd:${source}`);
   const osdMode = clamp(Math.round(asFiniteNumber(mode, 0)), 0, 2);
   const frame = buildGimbalFrame({ command: 0x37, param1: osdMode, param2: 0 });
@@ -2443,6 +2498,9 @@ function sendGimbalOsd(mode = 0, source = 'web') {
 }
 
 function sendGimbalRecordCommand(action = 'start', source = 'web') {
+  // SIYI SD recording is a toggle. Replaying the legacy burst would undo it.
+  // Keep recording on RK3588, without changing the camera SD card state.
+  if (IS_SIYI) return { supported: false, recordingTarget: 'rk3588', action };
   beginGimbalResponseCheck(`record-${action}:${source}`);
   const mode = action === 'stop' || Number(action) === 2 ? 2 : 1;
   const frame = buildGimbalFrame({ command: 0x33, param1: mode, param2: 0 });
@@ -2453,6 +2511,7 @@ function sendGimbalRecordCommand(action = 'start', source = 'web') {
 }
 
 function sendGimbalStreamProfile(streamIndex = GIMBAL_RECORD_STREAM_INDEX, quality = GIMBAL_RECORD_STREAM_QUALITY, source = 'web') {
+  if (IS_SIYI) return { supported: false, message: 'SIYI encoding is configured using SDK 0x21' };
   const stream = clamp(Math.round(asFiniteNumber(streamIndex, GIMBAL_RECORD_STREAM_INDEX)), 0, 3);
   const compression = clamp(Math.round(asFiniteNumber(quality, GIMBAL_RECORD_STREAM_QUALITY)), 0, 5);
   const param1 = (stream << 8) | compression;
@@ -2517,6 +2576,7 @@ function waitForGimbalRx(previousLength, timeoutMs = 900) {
 }
 
 function sendGimbalDetectorPaused(paused, source = 'web') {
+  if (IS_SIYI) return { supported: false, hostTracking: true, paused: Boolean(paused) };
   const payload = `{"pausedetecor":"${paused ? '1' : '0'}"}`;
   const result = sendGimbalJsonCommand(payload, source);
   return { ...result, paused: Boolean(paused) };
@@ -2649,6 +2709,9 @@ function gimbalTrackLostMessage(mode = gimbalState.trackMode) {
 }
 
 function startGimbalBeaconTracking() {
+  if (IS_SIYI && GIMBAL_BEACON_CONFIG.calibration_required === true) {
+    return { ok: false, error: 'SIYI A8 replacement requires UWB-to-camera recalibration before beacon tracking' };
+  }
   if (GIMBAL_BEACON_CONFIG.enabled === false) {
     return { ok: false, error: 'UWB beacon tracking is disabled in config' };
   }
@@ -3652,7 +3715,7 @@ function selectUwbTrackingMethod(requestedMethod) {
   if (method === 'neural' && !neuralUwbFollowController) {
     return { ok: false, error: `neural_policy_unavailable:${neuralUwbFollowLoadError || 'load_failed'}` };
   }
-  if (uwbFollowState.active || uwbFollowTransitionBusy) {
+  if (uwbFollowState.active || uwbFollowTransitionBusy || uwbAutoResume.pending) {
     return { ok: false, error: 'stop_tracking_before_switching_method' };
   }
   intermittentUwbFollow.reset();
@@ -3705,10 +3768,23 @@ async function waitForFollowTelemetry(description, predicate, transitionId, { ti
 function sendUwbRelativeDrive(result) {
   if(result.relativeImuControl) {
     const governed=intermittentUwbFollow.governDrive({throttle:result.throttlePercent||0,steering:result.steeringDegrees||0},result);
-    const output=sendManualRoverOutput(governed,'UWB_IMU_RELATIVE');
+    // Limit the FINAL normalized command, after prediction/startup/braking
+    // caps. Independent yaw slew must never overpower the current surge and
+    // turn one propeller backwards. Reuse the traditional motor turn share.
+    const requested=normalizeRoverControl(governed);
+    const throttle=Math.max(0,requested.throttle);
+    const throttleSpan=Math.max(Math.abs(ROVER_THROTTLE_MIN),Math.abs(ROVER_THROTTLE_MAX),1);
+    const steeringSpan=Math.max(Math.abs(ROVER_STEERING_MIN),Math.abs(ROVER_STEERING_MAX),1);
+    const sameDirectionSteeringLimit=throttle*steeringSpan/throttleSpan
+      *traditionalManualPropulsion.limiter.config.steeringShare;
+    const steering=clamp(requested.steering,-sameDirectionSteeringLimit,sameDirectionSteeringLimit);
+    const output=sendManualRoverOutput({throttle,steering},'UWB_IMU_RELATIVE');
+    uwbFollowController.relativeImuControl?.trackApplied?.(output.throttle,output.steering);
     lastRoverCommandAt=Date.now();
     Object.assign(result,{throttlePercent:output.throttle,steeringDegrees:output.steering});
-    return {...output,safe:true,propulsion:'relative_rate_throttle',absoluteSpeedObservable:false};
+    return {...output,safe:true,sameDirectionSteeringLimit,
+      sameDirectionLimited:Math.abs(requested.steering)>sameDirectionSteeringLimit+1e-9,
+      propulsion:result.planner==='nmpc'?'optional_gps_relative_nmpc':result.gpsSpeedControlActive?'uwb_gps_speed':'relative_rate_throttle',absoluteSpeedObservable:result.gpsSpeedControlActive===true};
   }
   if (result.controlMode === 'relative_acro') {
     const command = intermittentUwbFollow.governAcro({ ...result,
@@ -3897,7 +3973,8 @@ function maintainUwbAutoResume() {
   const preflight = requireUwbFollowStartClearance('auto');
   const ready = uwbAutoResume.observe(now, telemetry, preflight);
   publishUwbFollowState({ ...idleUwbFollowResult(ready ? 'auto_resume_ready' : 'awaiting_trusted_uwb'),
-    status: 'awaiting_signal', lastStopReason: uwbAutoResume.lastStopReason }, false);
+    status: 'awaiting_signal', waitingReason: preflight.safe ? null : preflight.reason,
+    lastStopReason: uwbAutoResume.lastStopReason }, false);
   if (!ready || !uwbAutoResume.beginAttempt()) return;
   addLog('UWB_FOLLOW', 'Trusted UWB recovered; automatically restoring mode and arming');
   const response = { status() { return this; }, json(value) { return value; } };
@@ -4425,13 +4502,13 @@ app.get('/api/uwb-follow/state', (_req, res) => {
     enabled: UWB_FOLLOW_ENABLED,
     trackingMethod: uwbTrackingMethod,
     trackingMethods: {
-      traditional: { available: true, controllerProfile: traditionalUwbFollowController.config.controllerProfile, propulsion: UWB_ACRO ? 'acro_velocity' : 'dual_motor', controlMode: UWB_ACRO ? 'relative_acro' : 'relative_manual', requiredFlightMode: UWB_ACRO ? 'ACRO' : 'MANUAL', outputLogicVersion: UWB_ACRO ? 'traditional_acro_v1' : 'traditional_dual_v1' },
+      traditional: { available: true, controllerProfile: traditionalUwbFollowController.config.controllerProfile, propulsion: UWB_ACRO ? 'acro_velocity' : UWB_RELATIVE_NMPC ? 'optional_gps_relative_nmpc' : UWB_RELATIVE_IMU ? 'uwb_imu_optional_gps_speed' : 'dual_motor', controlMode: UWB_ACRO ? 'relative_acro' : 'relative_manual', requiredFlightMode: UWB_ACRO ? 'ACRO' : 'MANUAL', outputLogicVersion: UWB_ACRO ? 'traditional_acro_v1' : UWB_RELATIVE_NMPC ? 'relative_nmpc_forward_arc_v1' : UWB_RELATIVE_IMU ? 'relative_optional_gps_v1' : 'traditional_dual_v1' },
       neural: {
         available: neuralUwbFollowController !== null,
         controllerProfile: 'smart_usv_ppo',
         controlMode: UWB_ACRO ? 'relative_acro' : 'relative_manual',
         requiredFlightMode: UWB_ACRO ? 'ACRO' : 'MANUAL',
-        propulsion: UWB_ACRO ? 'acro_velocity' : 'dual_thrust',
+        propulsion: UWB_ACRO ? 'acro_velocity' : UWB_RELATIVE_NMPC ? 'optional_gps_relative_nmpc' : UWB_RELATIVE_IMU ? 'uwb_imu_optional_gps_speed' : 'dual_thrust',
         propulsionLogicVersion: UWB_ACRO ? 'neural_acro_v1' : 'dual_thrust_v4',
         model: neuralUwbFollowController ? path.basename(neuralUwbFollowController.actor.modelPath) : null,
         loadError: neuralUwbFollowLoadError,
@@ -4440,6 +4517,9 @@ app.get('/api/uwb-follow/state', (_req, res) => {
       }
     },
     config: {
+      executionMode: uwbFollowController.config.executionMode,
+      gpsSpeedClosedLoop: uwbFollowController.config.gpsSpeedClosedLoop,
+      relativeNmpc: uwbFollowController.config.relativeNmpc,
       prediction: intermittentUwbFollow.config,
       measurementFilter: config.uwb_measurement_filter || {},
       followingDistanceM: uwbFollowController.config.followingDistanceM,
@@ -4542,6 +4622,9 @@ app.post('/api/uwb-follow/start', startUwbFollowRequest = async (req, res) => {
   if (uwbFollowState.active) {
     return res.json({ success: true, alreadyActive: true, state: uwbFollowState });
   }
+  if (!automatic && uwbAutoResume.pending && !req.body?.trackingMethod) {
+    return res.status(202).json({ success: true, searching: true, alreadySearching: true, state: uwbFollowState });
+  }
   if (!automatic) uwbAutoResume.cancel();
 
   if (req.body?.trackingMethod) {
@@ -4554,6 +4637,18 @@ app.post('/api/uwb-follow/start', startUwbFollowRequest = async (req, res) => {
   uwbGpsDriftHold.reset();
   const initialPreflight = requireUwbFollowStartClearance('auto');
   if (!initialPreflight.safe) {
+    if (!automatic && initialPreflight.reason === 'uwb_stale') {
+      // Retain the explicit follow request, without entering mode/arm startup.
+      uwbFollowTransitionId += 1;
+      sendUwbFollowStop('awaiting_trusted_uwb');
+      disarmAndReturnManual('uwb_search');
+      uwbFollowControlMode = 'auto';
+      uwbAutoResume.search();
+      publishUwbFollowState({ ...idleUwbFollowResult('awaiting_trusted_uwb', 'awaiting_signal'),
+        waitingReason: 'uwb_stale' }, false);
+      addLog('UWB_FOLLOW', 'Operator requested follow; searching for trusted UWB with neutral propulsion');
+      return res.status(202).json({ success: true, searching: true, state: uwbFollowState });
+    }
     if (automatic) uwbAutoResume.attemptFailed(initialPreflight.reason);
     sendUwbFollowStop(initialPreflight.reason);
     disarmAndReturnManual(initialPreflight.reason);
@@ -4769,6 +4864,15 @@ app.get('/api/vision/state', (_req, res) => {
   res.json({ success: true, active: isVisionActive(), detections: systemState.vision.detections });
 });
 
+// Reject device-specific operations instead of emitting incompatible ZTD packets.
+app.use(['/api/gimbal/osd', '/api/gimbal/range', '/api/gimbal/json', '/api/gimbal/detector/start', '/api/gimbal/detector/stop', '/api/gimbal/stream/profile'], (req, res, next) => {
+  if (IS_SIYI && req.method === 'POST') {
+    res.status(501).json({ success: false, supported: false, message: 'This operation is unavailable on the SIYI A8 mini integration.' });
+    return;
+  }
+  next();
+});
+
 app.get('/api/gimbal/state', (_req, res) => {
   updateGimbalDiagnostics();
   res.json({ success: true, state: { ...gimbalState, trackingActive: Boolean(gimbalState.trackingActive), trackWorkerActive: isGimbalTrackingActive() } });
@@ -4901,7 +5005,7 @@ app.post('/api/gimbal/focus/auto', (_req, res) => {
     }
   }
   const result = sendGimbalZoomReset('web');
-  res.json({ success: true, result, state: gimbalState, message: 'Protocol 45H resets visible-light zoom; this protocol does not define autofocus.' });
+  res.json({ success: true, result, state: gimbalState, message: IS_SIYI ? 'SIYI A8 digital zoom reset to 1x; fixed-focus camera.' : 'Protocol 45H resets visible-light zoom; this protocol does not define autofocus.' });
 });
 
 app.post('/api/gimbal/osd', (req, res) => {

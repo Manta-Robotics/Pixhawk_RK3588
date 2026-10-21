@@ -1,13 +1,14 @@
 [Unit]
 Description=Manta Dashboard Backend
-After=network-online.target
-Wants=network-online.target
+After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
 User=__RUN_USER__
 WorkingDirectory=__PROJECT_DIR__
 Environment=NODE_ENV=production
+EnvironmentFile=-/etc/manta/manta.env
 UMask=0027
 ExecStart=/bin/bash __PROJECT_DIR__/scripts/systemd_backend.sh
 Restart=always

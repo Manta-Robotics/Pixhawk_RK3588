@@ -166,7 +166,7 @@
       "braking_deceleration_mps2": 0.3,
       "recovery_blend_ms": 800
     },
-    "execution_mode": "acro",
+    "execution_mode": "relative_imu",
     "auto_resume_after_uwb_timeout": true,
     "waiting_drift_hold": true,
     "far_pursuit_enabled": false,
@@ -174,6 +174,24 @@
       "enabled": true,
       "solve_budget_ms": 20,
       "clearance_policy": "adaptive"
+    },
+    "gps_speed_closed_loop": {
+      "enabled": true,
+      "acquire_ms": 2000,
+      "kp": 20,
+      "ki": 8,
+      "maximum_observed_speed_mps": 5
+    },
+    "relative_nmpc": {
+      "enabled": true,
+      "horizon_s": 2.4,
+      "solve_budget_ms": 15,
+      "surge_time_constant_s": 1,
+      "yaw_time_constant_s": 0.35,
+      "surge_map_exponent": 0.5,
+      "model_cruise_speed_mps": 0.8,
+      "model_position_error_mps": 0.1,
+      "steering_share": 0.8
     }
   },
   "logs_dir": "./logs",
@@ -194,7 +212,7 @@
     "connection_name": "Manta-Control-Hotspot",
     "ssid": "Manta-Control",
     "security": "open",
-    "password": "manta8888",
+    "password": "CHANGE_ME_AT_INSTALL",
     "interface": "p2p0",
     "fallback_interface": "wlan0",
     "band": "bg",
@@ -238,8 +256,8 @@
   "gimbal": {
     "enabled": true,
     "control_transport": "udp",
-    "udp_host": "192.168.144.108",
-    "udp_port": 9554,
+    "udp_host": "192.168.144.25",
+    "udp_port": 37260,
     "boot_config": "/boot/firmware/ubuntuEnv.txt",
     "uart_overlay": "rk3588-lubancat-uart3-m0-overlay",
     "serial_port": "/dev/ttyS3",
@@ -249,14 +267,14 @@
     "auto_home_on_connect": false,
     "axis": {
       "yaw_sign": 1,
-      "pitch_sign": -1,
-      "max_pixel_x": 960,
-      "max_pixel_y": 540,
-      "max_rate_dps": 95,
+      "pitch_sign": 1,
+      "max_pixel_x": 640,
+      "max_pixel_y": 360,
+      "max_rate_dps": 40,
       "click_rate_gain": 0.04,
-      "click_rate_dps": 85,
-      "click_yaw_fov_deg": 59.5,
-      "click_pitch_fov_deg": 35.5,
+      "click_rate_dps": 30,
+      "click_yaw_fov_deg": 81,
+      "click_pitch_fov_deg": 51.3,
       "click_duration_scale": 0.85,
       "click_extra_ms": 20,
       "track_rate_gain": 0.055,
@@ -312,11 +330,11 @@
       "track_counter_brake_gain": 0.18,
       "track_counter_brake_min_dps": 7,
       "track_counter_brake_max_dps": 18,
-      "yaw_min_deg": -150,
-      "yaw_max_deg": 150,
+      "yaw_min_deg": -135,
+      "yaw_max_deg": 135,
       "pitch_min_deg": 0,
-      "pitch_max_deg": 150,
-      "pitch_home_feedback_deg": 2.5,
+      "pitch_max_deg": 90,
+      "pitch_home_feedback_deg": 0,
       "soft_limit_brake_deg": 5
     },
     "beacon": {
@@ -339,15 +357,37 @@
       "yaw_gain": 3,
       "pitch_gain": 3,
       "max_yaw_rate_dps": 20,
-      "max_pitch_rate_dps": 15
+      "max_pitch_rate_dps": 15,
+      "calibration_required": false,
+      "extrinsic_3d": {
+        "enabled": true,
+        "matrix": [
+          1,
+          0,
+          0,
+          0,
+          -1,
+          0,
+          0,
+          0,
+          -1
+        ],
+        "translation_m": [
+          0,
+          0,
+          0.04
+        ],
+        "source": "user_measured_mount",
+        "note": "UWB receiver center 4 cm directly below A8 rotation center; same forward direction, confirmed by user 2026-10-20. Camera axes forward/right/down; raw UWB azimuth/elevation signs preserved from existing -1/-1 convention. Mount geometry, not a fitted multi-point calibration."
+      }
     },
     "calibration": {
-      "width": 1920,
-      "height": 1080,
-      "fx": 1679.7,
-      "fy": 1687,
-      "cx": 960,
-      "cy": 540,
+      "width": 1280,
+      "height": 720,
+      "fx": 749.344,
+      "fy": 749.344,
+      "cx": 640,
+      "cy": 360,
       "distortion": [
         0,
         0,
@@ -355,7 +395,7 @@
         0,
         0
       ],
-      "note": "Temporary intrinsics derived from ZTD095 visible camera FOV 59.5H x 35.5V. Replace with OpenCV chessboard calibration values for highest precision."
+      "note": "SIYI A8 mini 1x, measured stream 1280x720; approximate intrinsics from 81-degree horizontal FOV. Recalibrate with a chessboard for accurate click positioning."
     },
     "focus": {
       "auto_command": "0x45",
@@ -369,21 +409,22 @@
       "proxy_host": "127.0.0.1",
       "proxy_port": 8091,
       "local_stream_url": "http://127.0.0.1:8091/mobile.mjpg",
-      "fps": 30,
+      "fps": 25,
       "mobile_width": 960,
       "mobile_height": 540,
       "mobile_fps": 15,
       "mobile_jpeg_quality": 68,
       "low_latency": true,
       "transport": "rtsp",
-      "recognition_input": "rtsp://192.168.144.108/live/0",
-      "rtsp_input": "rtsp://192.168.144.108/live/0",
-      "record_input": "rtsp://192.168.144.108/live/0",
+      "recognition_input": "rtsp://192.168.144.25:8554/main.264",
+      "rtsp_input": "rtsp://192.168.144.25:8554/main.264",
+      "record_input": "rtsp://192.168.144.25:8554/main.264",
       "record_stream_index": 1,
       "record_stream_quality": 0,
-      "record_codec": "h264_rkmpp",
+      "record_codec": "copy",
       "record_bitrate": "12M",
-      "rtsp_transport": "tcp"
+      "rtsp_transport": "tcp",
+      "mirror_x": false
     },
     "face": {
       "enabled": true,
@@ -463,7 +504,16 @@
       "flow_threads": 2,
       "detector_threads": 2,
       "max_coast_seconds": 2
-    }
+    },
+    "model": "SIYI A8 mini",
+    "protocol": "siyi",
+    "network_interface": "br-manta",
+    "network_local_ip": "192.168.144.101",
+    "siyi": {
+      "rate_units_per_dps": 1,
+      "max_rate_command": 40
+    },
+    "network_mac": "7c:63:32:cf:c7:fe"
   },
   "vision": {
     "snapshot_url": "http://127.0.0.1:8090/snapshot.jpg",

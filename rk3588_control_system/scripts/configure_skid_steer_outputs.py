@@ -17,8 +17,10 @@ EXPECTED_PARAMS = {
     'RC3_REVERSED': 0,
     'SERVO1_FUNCTION': 73,
     'SERVO3_FUNCTION': 74,
-    'SERVO1_REVERSED': 1,
-    'SERVO3_REVERSED': 1,
+    # The 2026-10-21 straight test linked PWM below trim to actual aft thrust.
+    # Forward therefore uses PWM above trim. Recheck after wiring changes.
+    'SERVO1_REVERSED': 0,
+    'SERVO3_REVERSED': 0,
 }
 INFO_PARAMS = [
     'RCMAP_ROLL',

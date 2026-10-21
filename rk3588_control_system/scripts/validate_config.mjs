@@ -97,6 +97,18 @@ export function validateSystemConfig(config) {
   }
 
   const gimbal = isObject(config.gimbal) ? config.gimbal : {};
+  const protocol = String(gimbal.protocol || 'ztd095').toLowerCase();
+  if (!['ztd095', 'siyi'].includes(protocol)) errors.push('gimbal.protocol must be ztd095 or siyi');
+  if (protocol === 'siyi') {
+    if (gimbal.control_transport !== 'udp') errors.push('SIYI integration requires UDP control');
+    if (gimbal.axis?.click_control_mode !== 'guided_angle') errors.push('SIYI requires guided_angle click control');
+    if (Number(gimbal.axis?.yaw_min_deg) < -135 || Number(gimbal.axis?.yaw_max_deg) > 135
+      || Number(gimbal.axis?.pitch_min_deg) < -25 || Number(gimbal.axis?.pitch_max_deg) > 90)
+      errors.push('SIYI axis limits exceed the SDK control range');
+    if (!Number.isFinite(Number(gimbal.siyi?.rate_units_per_dps)) || Number(gimbal.siyi?.rate_units_per_dps) <= 0
+      || !Number.isFinite(Number(gimbal.siyi?.max_rate_command)) || Number(gimbal.siyi?.max_rate_command) <= 0
+      || Number(gimbal.siyi?.max_rate_command) > 100) errors.push('SIYI rate gain and command cap must be valid');
+  }
   const controlTransport = String(gimbal.control_transport || '').toLowerCase();
   if (!['uart', 'udp'].includes(controlTransport)) errors.push('gimbal.control_transport must be uart or udp');
   if (controlTransport === 'uart') {
@@ -155,6 +167,31 @@ export function validateSystemConfig(config) {
   if (config.uwb_follow?.auto_resume_after_uwb_timeout !== undefined
     && typeof config.uwb_follow.auto_resume_after_uwb_timeout !== 'boolean') errors.push('uwb_follow.auto_resume_after_uwb_timeout must be boolean');
   if (executionMode !== undefined && !['manual', 'acro', 'relative_imu'].includes(executionMode)) errors.push('uwb_follow.execution_mode must be manual, acro or relative_imu');
+  const gpsSpeed = config.uwb_follow?.gps_speed_closed_loop;
+  const relativeNmpc = config.uwb_follow?.relative_nmpc;
+  if (relativeNmpc !== undefined) {
+    if (!isObject(relativeNmpc)) errors.push('uwb_follow.relative_nmpc must be an object');
+    else {
+      if (typeof relativeNmpc.enabled !== 'boolean') errors.push('relative_nmpc.enabled must be boolean');
+      if (relativeNmpc.enabled && executionMode !== 'relative_imu') errors.push('Relative NMPC requires relative_imu execution');
+      const bounds = { horizon_s:[.3,3], solve_budget_ms:[1,20], surge_time_constant_s:[.2,3],
+        yaw_time_constant_s:[.1,2], surge_map_exponent:[.3,1.5], model_cruise_speed_mps:[.1,2], model_position_error_mps:[.05,1], steering_share:[.1,.8] };
+      for (const [key,[low,high]] of Object.entries(bounds)) {
+        if (relativeNmpc[key] !== undefined && (!Number.isFinite(relativeNmpc[key]) || relativeNmpc[key]<low || relativeNmpc[key]>high)) errors.push(`relative_nmpc.${key} must be finite and between ${low} and ${high}`);
+      }
+    }
+  }
+  if (gpsSpeed !== undefined) {
+    if (!isObject(gpsSpeed)) errors.push('uwb_follow.gps_speed_closed_loop must be an object');
+    else {
+      if (typeof gpsSpeed.enabled !== 'boolean') errors.push('gps_speed_closed_loop.enabled must be boolean');
+      if (gpsSpeed.enabled && executionMode !== 'relative_imu') errors.push('GPS speed feedback requires relative_imu execution');
+      const bounds = { acquire_ms: [1000, 30000], kp: [0, 100], ki: [0, 100], maximum_observed_speed_mps: [0.1, 30] };
+      for (const [key, [low, high]] of Object.entries(bounds)) {
+        if (gpsSpeed[key] !== undefined && (!Number.isFinite(gpsSpeed[key]) || gpsSpeed[key] < low || gpsSpeed[key] > high)) errors.push(`gps_speed_closed_loop.${key} must be finite and between ${low} and ${high}`);
+      }
+    }
+  }
   if (executionMode === 'acro' && (Number(config.uwb_follow.max_speed_mps) > 2
       || Number(config.uwb_follow.commissioning_speed_mps) > 2)) errors.push('ACRO follow speed limit must not exceed 2 m/s');
   const measurementFilter = config.uwb_measurement_filter;

@@ -1228,7 +1228,12 @@ function renderTrackingMode(){
 
 function uwbFollowIsStarting(){
   var status=String(state.uwbFollow&&state.uwbFollow.status||"");
-  return status==="disarming"||status==="switching_mode"||status==="arming";
+  return status==="disarming"||status==="switching_mode"||status==="arming"||status==="confirming_signal";
+}
+
+function uwbFollowIsRequested(){
+  var follow=state.uwbFollow||{};
+  return Boolean(follow.active||follow.followRequested||follow.autoResumePending)||uwbFollowIsStarting();
 }
 
 function renderDriveMode(){
@@ -1252,7 +1257,7 @@ function setDriveMode(mode){
     if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(false);
   }else{
     var enableManual=function(){if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(true);renderDriveMode()};
-    if(activeTransport&&((state.uwbFollow&&state.uwbFollow.active)||uwbFollowIsStarting())){
+    if(activeTransport&&uwbFollowIsRequested()){
       activeTransport.stopUwbFollow().catch(function(error){showToast(error.message||"停止自动跟随失败")}).finally(enableManual);
     }else enableManual();
   }
@@ -1263,22 +1268,25 @@ function setDriveMode(mode){
 function renderUwbFollow(){
   var follow=state.uwbFollow||{},button=$("#driveFollowSwitch"),label=$("#driveFollowSwitchLabel"),status=$("#driveFollowSwitchStatus");
   if(!button||!label||!status)return;
-  var busy=uwbFollowIsStarting();
+  var busy=uwbFollowIsStarting(),searching=Boolean(follow.autoResumePending)&&!busy,requested=uwbFollowIsRequested();
   var trackingMethod=String(follow.trackingMethod||"traditional").toLowerCase()==="neural"?"neural":"traditional";
   $$("[data-tracking-method]").forEach(function(methodButton){
     var selected=methodButton.dataset.trackingMethod===trackingMethod;
     methodButton.classList.toggle("active",selected);
     methodButton.setAttribute("aria-checked",String(selected));
-    methodButton.disabled=Boolean(follow.active)||busy||!state.connected||!state.controlLink;
+    methodButton.disabled=requested||!state.connected||!state.controlLink;
   });
   $("#trackingMethodState").textContent=trackingMethod==="neural"?"SMARTUSV PPO":"TRADITIONAL";
-  button.classList.toggle("active",Boolean(follow.active));
+  button.classList.toggle("active",requested);
   button.classList.toggle("busy",busy);
-  button.disabled=state.driveMode!=="auto"||(!follow.active&&!busy&&(!state.connected||!state.controlLink));
-  label.textContent=follow.active?localize("停止跟随","Stop follow"):busy?localize("取消启动","Cancel start"):localize("启动跟随","Start follow");
-  var labels={acro_velocity_unavailable:localize("等待有效航速数据","Waiting for valid velocity"),acro_parameters_not_ready:localize("等待ACRO控制参数","Waiting for ACRO parameters"),imu_stale:localize("航向数据过期，已退出","Stale heading; stopped"),prediction_clock_reset:localize("时钟变化，已退出","Clock changed; stopped"),predicting:localize("短时预测跟随","Predicted following"),waiting_target:localize("等待目标出水","Waiting for swimmer"),recovering:localize("定位恢复中","Recovering target"),prediction_tracking:localize("短时预测跟随","Predicted following"),prediction_recovering:localize("定位恢复中","Recovering target"),prediction_reacquiring:localize("校验出水测量","Checking new measurements"),prediction_pose_unavailable:localize("运动状态不足，等待出水","Motion estimate unavailable; waiting"),prediction_warming_up:localize("等待连续有效测量","Waiting for valid samples"),prediction_limit:localize("预测到限，等待出水","Prediction limit; waiting"),prediction_clearance:localize("间距不足，等待出水","Insufficient clearance; waiting"),prediction_speed_limit:localize("船速过高，暂停预测推进","Vessel too fast; waiting"),prediction_wait_timeout:localize("目标失联超时，已退出","Target timeout; stopped"),target_identity_changed:localize("目标身份变化，已退出","Target changed; stopped"),tracking:localize("跟随中","Tracking"),holding:localize("目标小于1.2米，保持停止","Target within 1.2 m; holding"),holding_distance:localize("目标小于1.2米，保持停止","Target within 1.2 m; holding"),method_selected:localize("等待启动","Ready to start"),disarming:localize("正在解除武装","Disarming"),switching_mode:localize("正在切换控制模式","Switching control mode"),arming:localize("正在自动武装","Auto arming"),gps_fix_invalid:localize("GPS无效","GPS invalid"),ekf_unhealthy:localize("EKF无效","EKF invalid"),imu_invalid:localize("IMU航向无效","IMU yaw invalid"),uwb_stale:localize("UWB失效","UWB stale"),guided_required:localize("需要GUIDED模式","GUIDED required"),manual_required:localize("需要MANUAL模式","MANUAL required"),pilot_steering_not_ready:localize("等待电机控制参数","Waiting for motor control parameters"),manual_mode_timeout:localize("MANUAL切换超时","MANUAL timeout"),acro_required:localize("需要ACRO模式","ACRO required"),guided_mode_timeout:localize("GUIDED切换超时","GUIDED timeout"),acro_mode_timeout:localize("ACRO切换超时","ACRO timeout"),arming_timeout:localize("武装超时","Arming timeout"),manual_stop:localize("已停止","Stopped"),not_started:localize("未启动","Not started")};
+  button.disabled=state.driveMode!=="auto"||(!requested&&(!state.connected||!state.controlLink));
+  label.textContent=follow.active?localize("停止跟随","Stop follow"):searching?localize("停止搜索","Stop search"):busy?localize("取消启动","Cancel start"):localize("启动跟随","Start follow");
+  var labels={awaiting_signal:localize("搜索 UWB","Searching for UWB"),awaiting_trusted_uwb:localize("搜索 UWB","Searching for UWB"),auto_resume_ready:localize("UWB 已找到，准备跟随","UWB acquired; preparing to follow"),confirming_recovered_uwb:localize("确认连续有效 UWB","Confirming valid UWB samples"),auto_resume_recovering:localize("定位恢复中","Recovering target"),acro_velocity_unavailable:localize("等待有效航速数据","Waiting for valid velocity"),acro_parameters_not_ready:localize("等待ACRO控制参数","Waiting for ACRO parameters"),imu_stale:localize("航向数据过期，已退出","Stale heading; stopped"),prediction_clock_reset:localize("时钟变化，已退出","Clock changed; stopped"),predicting:localize("短时预测跟随","Predicted following"),waiting_target:localize("等待目标出水","Waiting for swimmer"),recovering:localize("定位恢复中","Recovering target"),prediction_tracking:localize("短时预测跟随","Predicted following"),prediction_recovering:localize("定位恢复中","Recovering target"),prediction_reacquiring:localize("校验出水测量","Checking new measurements"),prediction_pose_unavailable:localize("运动状态不足，等待出水","Motion estimate unavailable; waiting"),prediction_warming_up:localize("等待连续有效测量","Waiting for valid samples"),prediction_limit:localize("预测到限，等待出水","Prediction limit; waiting"),prediction_clearance:localize("间距不足，等待出水","Insufficient clearance; waiting"),prediction_speed_limit:localize("船速过高，暂停预测推进","Vessel too fast; waiting"),prediction_wait_timeout:localize("目标失联超时，已退出","Target timeout; stopped"),target_identity_changed:localize("目标身份变化，已退出","Target changed; stopped"),tracking:localize("跟随中","Tracking"),holding:localize("间距保护，保持停止","Separation protection; holding"),holding_distance:localize("间距保护，保持停止","Separation protection; holding"),method_selected:localize("等待启动","Ready to start"),disarming:localize("正在解除武装","Disarming"),switching_mode:localize("正在切换控制模式","Switching control mode"),arming:localize("正在自动武装","Auto arming"),gps_fix_invalid:localize("GPS无效","GPS invalid"),ekf_unhealthy:localize("EKF无效","EKF invalid"),imu_invalid:localize("IMU航向无效","IMU yaw invalid"),uwb_stale:localize("UWB失效","UWB stale"),guided_required:localize("需要GUIDED模式","GUIDED required"),manual_required:localize("需要MANUAL模式","MANUAL required"),pilot_steering_not_ready:localize("等待电机控制参数","Waiting for motor control parameters"),manual_mode_timeout:localize("MANUAL切换超时","MANUAL timeout"),acro_required:localize("需要ACRO模式","ACRO required"),guided_mode_timeout:localize("GUIDED切换超时","GUIDED timeout"),acro_mode_timeout:localize("ACRO切换超时","ACRO timeout"),arming_timeout:localize("武装超时","Arming timeout"),manual_stop:localize("已停止","Stopped"),not_started:localize("未启动","Not started")};
   var estimate=follow.targetEstimate||{};
-  status.textContent=labels[follow.reason]||labels[follow.status]||String(follow.reason||follow.status||localize("未启动","Not started"));
+  status.textContent=searching?localize("搜索 UWB · 等待有效信号","Searching for UWB · waiting for valid signal"):labels[follow.reason]||labels[follow.status]||String(follow.reason||follow.status||localize("未启动","Not started"));
+  if(follow.active&&follow.relativeImuControl&&!follow.pausePropulsion)status.textContent=(follow.planner==="nmpc"?(follow.gpsSpeedControlActive?localize("GPS 闭环预测 · ","GPS predictive control · "):localize("UWB 相对预测 · ","UWB relative predictive control · ")):(follow.gpsSpeedControlActive?localize("GPS 速度闭环 · ","GPS speed feedback · "):localize("UWB 角度跟随 · ","UWB bearing follow · ")))+status.textContent;
+  if(follow.active&&follow.planner==="nmpc"&&follow.pausePropulsion)status.textContent=follow.reason==="nmpc_relative_motion_warming_up"?localize("建立相对运动估计","Estimating relative motion"):localize("预测约束未满足，推进暂停","Prediction constraints unmet; propulsion paused");
+  if(searching&&follow.waitingReason&&follow.waitingReason!=="uwb_stale")status.textContent=localize("搜索 UWB · ","Searching for UWB · ")+(labels[follow.waitingReason]||follow.waitingReason);
   if(follow.active&&["innovation_outlier","distance_out_of_range","azimuth_out_of_range","elevation_out_of_range","non_finite_measurement"].includes(state.uwb&&state.uwb.rejectionReason))status.textContent=localize("拒绝异常值 · ","Outlier rejected · ")+status.textContent;
   if(follow.active&&estimate.source==="predicted"&&Number.isFinite(estimate.predictionAgeMs))status.textContent+=" · "+(estimate.predictionAgeMs/1000).toFixed(1)+"s · "+localize("误差界 ","Error bound ")+Number(estimate.uncertaintyM||0).toFixed(2)+"m";
   renderRelativePosition();
@@ -1286,7 +1294,7 @@ function renderUwbFollow(){
     if(follow.active){
       var relative=follow.relativeBodyM||{},forward=Number(relative.x),right=Number(relative.y);
       $("#driveOutput").textContent=Number.isFinite(forward)&&Number.isFinite(right)?localize("前后 ","FWD ")+forward.toFixed(2)+"m · "+localize("左右 ","RIGHT ")+right.toFixed(2)+"m · "+String(follow.requiredFlightMode||"AUTO"):Number(follow.desiredSpeedMps||0).toFixed(2)+" m/s · AUTO";
-    }else $("#driveOutput").textContent=busy?String(follow.status||"STARTING").toUpperCase():"AUTO READY";
+    }else $("#driveOutput").textContent=searching?localize("搜索 UWB · 推进停止","SEARCHING UWB · PROPULSION STOPPED"):busy?String(follow.status||"STARTING").toUpperCase():"AUTO READY";
   }
 }
 
@@ -1371,13 +1379,14 @@ function gimbalControlAvailable(){
 
 function applyGimbalState(payload){
   var previousLinkStatus=state.gimbalLinkStatus;
+  state.gimbalOsdSupported=!payload.capabilities||payload.capabilities.osd!==false;
   state.gimbalOnline=Boolean(payload.connected);state.gimbalOutputAvailable=Boolean(payload.portOpen||payload.connected);state.gimbalLinkStatus=String(payload.linkStatus||(!state.gimbalOutputAvailable?"offline":"ready"));state.trackingActive=Boolean(payload.trackingActive);
   if(state.gimbalLinkStatus==="command_timeout"&&previousLinkStatus!=="command_timeout")showToast(payload.lastError||"云台命令无响应，请检查云台供电和串口接线","The gimbal did not respond to the command. Check power and serial wiring.");
   if(payload.trackMode==="face"||payload.trackMode==="swimmer"||payload.trackMode==="beacon"){state.runningTrackMode=payload.trackMode;if(state.trackingActive||state.gimbalMode==="click")state.trackMode=payload.trackMode}
   if(state.trackingActive){state.gimbalMode=state.trackMode;state.clickMarker=null}
   if(payload.trackStatus){state.trackStatus=payload.trackStatus;if(!payload.trackStatus.locked)state.trackTarget=null}
   if(payload.lastTarget&&payload.lastTarget.locked&&state.trackingActive)state.trackTarget=payload.lastTarget;
-  renderTrackingMode();
+  renderGimbalOsd();renderTrackingMode();
 }
 
 function gimbalVideoMapping(sourceWidthOverride,sourceHeightOverride){
@@ -1806,7 +1815,7 @@ function completePairing(){
 
 function disconnect(){
   var activeTransport=transport;
-  if(activeTransport&&((state.uwbFollow&&state.uwbFollow.active)||uwbFollowIsStarting())&&activeTransport.stopUwbFollow)activeTransport.stopUwbFollow().catch(function(){});
+  if(activeTransport&&uwbFollowIsRequested()&&activeTransport.stopUwbFollow)activeTransport.stopUwbFollow().catch(function(){});
   if(activeTransport)activeTransport.disconnect().catch(function(){});
   state.connected=false;state.boardOnline=false;state.pixhawkOnline=false;state.imuOnline=false;state.motorsOnline=false;state.gimbalOnline=false;state.gimbalOutputAvailable=false;state.gimbalLinkStatus="offline";state.controlLink=false;state.connection="idle";state.speed=0;
   state.driveMode="manual";if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(true);
@@ -1898,7 +1907,7 @@ function renderHardwareStatus(){
   if($("#gimbalMetric"))$("#gimbalMetric").textContent=state.gimbalLinkStatus==="command_timeout"?"ERR":state.gimbalLinkStatus==="feedback"?"LIVE":state.gimbalOutputAvailable?"READY":"OFF";
   var imuOffline=$("#imuOffline");if(imuOffline)imuOffline.hidden=!state.connected||state.imuOnline;
   if(!state.videoLost&&!state.gimbalFault)$("#videoAlert").hidden=true;
-  $$('[data-gimbal-mode],[data-gimbal-action],#gimbalOsd').forEach(function(button){button.disabled=state.connected&&!state.gimbalOutputAvailable});
+  $$('[data-gimbal-mode],[data-gimbal-action],#gimbalOsd').forEach(function(button){button.disabled=state.connected&&!state.gimbalOutputAvailable;if(button.id==="gimbalOsd"&&state.gimbalOsdSupported===false)button.disabled=true});
   function light(id,status){var item=$(id);if(item)item.dataset.state=status;}
   light("#hostLinkLight",state.connected&&state.boardOnline?"online":"offline");
   light("#pixhawkLinkLight",state.connected&&state.pixhawkOnline?"online":"offline");
@@ -1985,6 +1994,7 @@ function setEmergency(active){
 
 function renderGimbalOsd(){
   var btn=$("#gimbalOsd");if(!btn)return;
+  btn.hidden=state.gimbalOsdSupported===false;
   btn.classList.toggle("active",state.osdEnabled);
   btn.setAttribute("aria-pressed",String(state.osdEnabled));
   btn.setAttribute("title",state.osdEnabled?localize("隐藏云台 OSD","Hide gimbal OSD"):localize("显示云台 OSD","Show gimbal OSD"));
@@ -2490,18 +2500,17 @@ if(!gimbalControlAvailable()){showToast("云台当前不可控制","Gimbal contr
     if(state.driveMode!=="auto")return;
     var activeTransport=ensureTransport();if(!activeTransport)return;
     var followStatus=String(state.uwbFollow&&state.uwbFollow.status||"");
-    var starting=followStatus==="disarming"||followStatus==="switching_mode"||followStatus==="arming";
-    if(state.uwbFollow&&(state.uwbFollow.active||starting)){
+    var starting=uwbFollowIsStarting();
+    if(uwbFollowIsRequested()){
       activeTransport.stopUwbFollow().catch(function(error){showToast(error.message||"停止自动跟随失败")});return;
     }
     if(!state.connected||!state.controlLink){showToast("Manta控制链路未连接");return}
-    if(!state.uwb||!state.uwb.online||!state.uwb.fresh){showToast("UWB数据无效，自动跟随保持停止");return}
-    activeTransport.startUwbFollow().then(function(){showToast(Number(state.uwb.distanceM)<1.2?"自动跟随已开启；目标小于1.2米，推进保持停止":"已按定位状态选择控制模式并武装，UWB跟随已启动")}).catch(function(error){showToast(error.message||"启动自动跟随失败")});
+    activeTransport.startUwbFollow().then(function(result){if(result&&(result.searching||result.state&&result.state.autoResumePending)){showToast(localize("正在搜索 UWB；信号稳定后自动跟随","Searching for UWB; following resumes after signal confirmation"));return}showToast(Number(state.uwb.distanceM)<1.2?"自动跟随已开启；目标小于1.2米，推进保持停止":"已按定位状态选择控制模式并武装，UWB跟随已启动")}).catch(function(error){showToast(error.message||"启动自动跟随失败")});
   });
   $$("[data-tracking-method]").forEach(function(methodButton){methodButton.addEventListener("click",function(){
     var method=methodButton.dataset.trackingMethod;
     var follow=state.uwbFollow||{};
-    if(follow.active||uwbFollowIsStarting()){showToast(localize("请先停止跟随，再切换控制方法","Stop following before switching the controller"));return}
+    if(uwbFollowIsRequested()){showToast(localize("请先停止跟随，再切换控制方法","Stop following before switching the controller"));return}
     var activeTransport=ensureTransport();
     if(!activeTransport||!activeTransport.setUwbFollowMethod){showToast(localize("当前控制链路不支持方法切换","Controller switching is unavailable"));return}
     $$("[data-tracking-method]").forEach(function(button){button.disabled=true});

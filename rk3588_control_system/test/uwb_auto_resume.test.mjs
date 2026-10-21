@@ -190,3 +190,66 @@ test('neutral transition still rejects close raw range, changed target and stale
   const m=packet(3000,false);change(m);assert.ok(p.transitionFailure(3000,m,{safe:false,reason:'uwb_stale'}));
  }
 });
+
+
+test('an explicit search can wait for first acquisition without enabling timeout auto-resume globally',()=>{
+ const p=new UwbAutoResume({...config,auto_resume_after_uwb_timeout:false});
+ p.search();assert.equal(p.requested,true);assert.equal(p.pending,true);
+ for(let now=2000;now<=2200;now+=100)assert.equal(p.observe(now,packet(now),{safe:true}),now===2200);
+ p.started(packet(2300),2300,true);p.stopped('prediction_wait_timeout');assert.equal(p.pending,false);
+});
+
+test('initial acquisition never confirms a window made from changing tag identities',()=>{
+ const p=new UwbAutoResume(config);p.search();
+ for(let now=2000;now<3000;now+=100){const m=packet(now);m.uwb.tagId=now%200===0?7:8;assert.equal(p.observe(now,m,{safe:true}),false);}
+ for(let now=3000;now<=3200;now+=100){const m=packet(now);m.uwb.tagId=9;assert.equal(p.observe(now,m,{safe:true}),now===3200);}
+});
+
+function reply(){return {code:200,value:null,status(code){this.code=code;return this;},json(value){this.value=value;return value;}};}
+async function initialSearch(){
+ const s=server();vm.runInContext(source.slice(source.indexOf('function idleUwbFollowResult('),source.indexOf('function publishUwbFollowState(')),s.context);s.box.uwbAutoResume.cancel();s.box.uwbFollowState={active:false,status:'stopped'};
+ s.box.now=2000;s.box.systemState.telemetry={...packet(2000,false),armed:false,flightMode:'MANUAL'};
+ const response=reply();await s.box.startUwbFollowRequest({body:{}},response);
+ return {...s,response};
+}
+
+test('production start accepts missing UWB as a cancellable neutral search and never arms while invalid',async()=>{
+ const {box,commands,step,response}=await initialSearch();
+ assert.equal(response.code,202);assert.equal(response.value.success,true);assert.equal(response.value.searching,true);
+ assert.equal(box.uwbFollowState.status,'awaiting_signal');assert.equal(box.uwbFollowState.autoResumePending,true);
+ for(let now=2100;now<=10000;now+=100)await step(now,false);
+ assert.equal(box.uwbFollowState.active,false);assert.equal(box.uwbFollowState.followRequested,true);
+ assert.equal(box.systemState.telemetry.armed,false);assert.equal(box.uwbFollowState.forwardSpeedMps,0);
+ assert.equal(commands.filter(([name])=>name==='ARM'||name==='DRIVE').length,0);
+ const second=reply();await box.startUwbFollowRequest({body:{}},second);
+ assert.equal(second.code,202);assert.equal(second.value.alreadySearching,true);
+});
+
+test('initial search reuses the confirmed recovery startup exactly once after trusted UWB returns',async()=>{
+ const {box,commands,step}=await initialSearch();
+ await step(2100);await step(2200);assert.equal(commands.filter(([n])=>n==='ARM').length,0);
+ await step(2300);assert.equal(box.uwbFollowState.active,true);assert.equal(box.uwbFollowState.status,'recovering');
+ assert.equal(box.uwbFollowState.forwardSpeedMps,0);assert.equal(commands.filter(([n])=>n==='ARM').length,1);
+});
+
+test('stop during initial search revokes the request and returned UWB cannot rearm',async()=>{
+ const {box,context,commands,step}=await initialSearch();
+ vm.runInContext("stopUwbFollow('manual_stop',{disarm:true})",context);
+ for(let now=2100;now<=3000;now+=100)await step(now);
+ assert.equal(box.uwbAutoResume.pending,false);assert.equal(box.uwbFollowState.active,false);
+ assert.equal(commands.filter(([n])=>n==='ARM').length,0);
+});
+
+test('fresh UWB with invalid navigation remains in search without mode switching or arming',async()=>{
+ const {box,commands,context}=await initialSearch();
+ for(let now=2100;now<=3000;now+=100){box.now=now;box.systemState.telemetry={...packet(now),armed:false,flightMode:'MANUAL',gps:{fixType:1}};
+  vm.runInContext('updateUwbFollow()',context);}
+ assert.equal(box.uwbFollowState.autoResumePending,true);assert.equal(box.uwbFollowState.waitingReason,'acro_velocity_unavailable');
+ assert.equal(commands.filter(([n,p])=>n==='ARM'||n==='SET_MODE'&&p.mode==='ACRO').length,0);
+});
+
+test('radio loss without a prediction window retains an existing authorized follow request',()=>{
+ const p=new UwbAutoResume(config);p.started(packet(1000),1000);p.stopped('uwb_stale');
+ assert.equal(p.pending,true);assert.equal(p.requested,true);
+ p.stopped('manual_stop');assert.equal(p.pending,false);assert.equal(p.requested,false);
+});

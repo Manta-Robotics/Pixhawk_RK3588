@@ -26,16 +26,16 @@ backend/server.js
 
 | RK3588 物理针脚 | 功能 | Pixhawk |
 | --- | --- | --- |
-| 8 | UART1 TX | TELEM2 RX 蓝 |
-| 10 | UART1 RX | TELEM2 TX 黄 |
+| 8 | UART1 TX | TELEM2 RX |
+| 10 | UART1 RX | TELEM2 TX |
 | 6 | GND | TELEM2 GND |
 
 ### 云台 UART
 
 | RK3588 物理针脚 | 功能 | 云台 |
 | --- | --- | --- |
-| 5 | UART3 TX | RX 黄|
-| 3 | UART3 RX | TX 绿|
+| 5 | UART3 TX | RX |
+| 3 | UART3 RX | TX |
 | 9 | GND | GND |
 
 TX/RX 必须交叉连接，所有设备必须共地。当前串口配置为：
@@ -43,16 +43,18 @@ TX/RX 必须交叉连接，所有设备必须共地。当前串口配置为：
 - Pixhawk：`/dev/ttyS1 @ 115200`
 - 云台：`/dev/ttyS3 @ 115200`
 
+新板安装器会按主配置启用 `rk3588-lubancat-uart1-m1-overlay`（Pixhawk UART1）和 `rk3588-lubancat-uart3-m0-overlay`（云台 UART3）。接口定义与原板保持一致；overlay 写入后需手动重启才会生成对应设备节点。
+
 ## 3. 安装
 
-要求 Ubuntu 22.04、root 权限、Node.js 18+、Python 3、FFmpeg 和 NetworkManager。
+要求兼容 LubanCat RK3588 的 Ubuntu 22.04/24.04 aarch64 系统和 root 权限。安装器会配置 Node.js 20+、项目 Python 虚拟环境、FFmpeg、NetworkManager 与 MediaMTX。此仓库安装应用层，不能替代厂家系统镜像烧录。
 
 ```bash
 cd /root/Pixhawk_RK3588/rk3588_control_system
 bash quickstart.sh
 ```
 
-安装脚本会验证配置、安装依赖和八个 systemd 服务。UART/摄像头 overlay 首次变更后需要由操作人员确认并手动重启板子，脚本不会自动重启。
+安装脚本会验证配置、安装依赖和九个 systemd 服务，并为每块板生成独立的蓝牙凭据到 `/etc/manta/manta.env`。当前主配置将 `Manta-Control` 设为开放热点，无需 Wi-Fi 密码；如改回 WPA2，可继续使用环境文件中的设备独立密码。UART/摄像头 overlay 首次变更后需要由操作人员确认并手动重启板子；脚本不会启动 MANTA 服务、重启服务或自动重启板子。无硬件副作用检查使用 `bash quickstart.sh --check-only`；暂不改 overlay 使用 `--skip-boot-config`。
 
 ## 4. 启停与状态
 
@@ -76,7 +78,9 @@ sudo journalctl -u manta-backend.service -f
 | 蓝牙 PAN | `http://10.43.0.1:3000` |
 | SSH/VSCode | SSH Host `manta` |
 
-手机连接 `Manta-Control` 后，系统连通性探测会返回成功，避免 iPhone/iPad 将热点标记为受限并中断下载。请在 Safari 中打开 `http://10.42.0.1:3000`。
+手机无需密码即可连接 `Manta-Control`。系统连通性探测会返回成功，避免 iPhone/iPad 将热点标记为受限并中断下载；请在 Safari 中打开 `http://10.42.0.1:3000`。开放热点不提供链路加密，只应在可信、近距离环境中使用。
+
+前端提供设备状态、控制、视频、云台和 GPS 地图界面，可由手机或电脑通过 MANTA 网络访问。GPS 位置来自 Pixhawk，地图支持板载离线影像。
 
 ## 6. 云台视频与录像
 
@@ -101,6 +105,10 @@ GIMBAL_REQUIRE_4K=1 bash scripts/probe_gimbal_rtsp.sh
 
 ## 8. 配置与检查
 
+UWB 游泳者间歇跟随支持短时轨迹预测、等待出水和连续新测量恢复；配置、默认边界和验证步骤见 [UWB 间歇跟随](docs/UWB_INTERMITTENT_FOLLOW.md)。预测坐标始终与实测分开。
+
+UWB 原始测量先做基础校验和预测创新检测，再做卡尔曼更新；可疑点仅预测并增大协方差。参数与诊断见 [UWB 原始测量门控](docs/UWB_MEASUREMENT_GATE.md)。
+
 主配置：`config/system.config.json`。
 
 ```bash
@@ -111,7 +119,7 @@ npm run check
 npm run maintenance
 ```
 
-`npm run check:config` 只校验主配置。`npm run check` 会统一检查 JavaScript、Python、Shell、JSON 和 systemd 服务模板；`npm run maintenance` 会先运行自动化测试，再运行全部静态检查。配置校验覆盖串口、端口、热点密码、RTSP 地址、手机预览参数、录像编码器和跟踪保持区。
+`npm run check:config` 只校验主配置。`npm run check` 会在对应解释器可用时检查 JavaScript、Python、Shell、JSON 和 systemd 服务模板；跳过项会明确输出。`npm run maintenance` 会先运行自动化测试，再运行全部静态检查。配置校验覆盖串口、端口、热点密码占位符、RTSP 地址、手机预览参数、录像编码器和跟踪保持区。
 
 ## 9. 目录职责
 
@@ -182,189 +190,9 @@ npm run maintenance
 - `systemd/` 模板是服务定义的源码；不要只在 `/etc/systemd/system/` 热修而不回写仓库。
 - 自动化检查不得启动电机、连接串口、改网络或写飞控参数；这些属于明确授权的板端验证步骤。
 - 软件检查通过只说明语法、配置和现有单元测试通过，不代表推进器、失联保护、急停或视频链路已完成实机验证。
-- 每次提交尽量只覆盖一个可解释的维护单元，并在 commit 或 PR 中写清变更范围、验证证据、受影响服务和回滚方式；高风险硬件与基础设施改动优先走功能分支和 PR。
+- 每次提交尽量只覆盖一个可解释的维护单元，并在 PR 中写清变更范围、验证证据、受影响服务和回滚方式。
 
-## 10. 电机控制开发指南
-
-本系统采用“RK3588 生成运动意图、Pixhawk 执行履带混控和安全状态管理”的分层方式。新控制器应复用现有后端接口，不应从业务代码直接占用 `/dev/ttyS1`，也不应绕过 Pixhawk 直接向 Main 输出写 PWM。
-
-### 10.1 当前控制模型与通道
-
-当前车辆按双电机差速/履带式底盘配置，`1500us` 为中值，低于中值为一个方向，高于中值为相反方向。具体方向还受 Pixhawk 的 `SERVOx_REVERSED`、电调设置和接线影响，不能只按 PWM 数字推断实机前进方向。
-
-| 层级 | 当前映射 | 配置来源 |
-| --- | --- | --- |
-| 运动意图 | 油门 `-100..100`，转向 `-45..45` | `config/system.config.json` |
-| Pixhawk RC 输入 | 转向输入 CH1，油门输入 CH3 | `rover_steering_input_channel`、`rover_throttle_input_channel` |
-| Pixhawk Main 输出 | Main1 左电机，Main3 右电机 | `rover_left_channel`、`rover_right_channel` |
-| 后端 PWM 范围 | `1000..2000us`，中值 `1500us` | `min_motor_pwm`、`max_motor_pwm`、`default_motor_pwm` |
-| 可用电机通道 | CH1、CH3 启用；CH2、CH4 预留 | `config/motor_config.json` |
-
-`system.config.json` 中的全局 PWM 范围是后端实际限幅来源。`motor_config.json` 当前主要提供通道启用状态和电机元数据，其中每个电机的 `min_pwm`、`max_pwm`、`center_pwm` 尚未用于逐通道限幅；如果以后需要不同电机采用不同范围，应同时修改校验、混控、测试和文档。
-
-### 10.2 从控制输入到电机输出
-
-```text
-Web / iPad / 自主控制算法
-  |  REST: POST /api/control/rover
-  |  Socket.IO: rover_drive
-  v
-backend/server.js
-  |  输入转数字 -> 范围限幅 -> 油门/转向转 PWM
-  |  UDP JSON 命令 ROVER_DRIVE -> 127.0.0.1:14551
-  v
-backend/mavlink_bridge.py
-  |  MAVLink RC_CHANNELS_OVERRIDE
-  |  CH3=油门输入，CH1=转向输入，其余通道保持 ignore
-  v
-Pixhawk 履带混控
-  |  SERVO1_FUNCTION=73 -> Main1 左电机
-  |  SERVO3_FUNCTION=74 -> Main3 右电机
-  v
-电调 -> 左/右电机
-
-Pixhawk SERVO_OUTPUT_RAW / ESC telemetry
-  -> mavlink_bridge.py -> UDP 14552 -> server.js
-  -> /api/status、/api/telemetry、Socket.IO telemetry_update
-```
-
-后端负责输入校验、软件限幅、状态聚合和日志；桥接进程负责 UDP、MAVLink 与串口协议转换；实际混控、解锁状态和最终 Main 输出由 Pixhawk 决定。
-
-### 10.3 对外控制接口
-
-| 接口 | 输入 | 用途与注意事项 |
-| --- | --- | --- |
-| `POST /api/control/rover` | `{"throttle": 0, "steering": 0}` | 推荐的 REST 入口。成对提交油门和转向，超出配置范围时自动限幅，并在返回值中给出 `clamped`。 |
-| Socket.IO `rover_drive` | `{ throttle, steering }` | 推荐的实时遥控入口；服务端返回 `rover_drive_ack`，并广播 `rover_control_update`。 |
-| `POST /api/control/motor` | `{channel,pwm}` 或 `{motors:[...]}` | 兼容旧电机/视觉控制器。只接受 `motor_config.json` 中启用的通道，随后反算成油门/转向并仍由 Pixhawk 混控。新控制器优先使用 rover 接口。 |
-| Socket.IO `motor_control` | `{ channel, pwm }` | 上述兼容入口的实时版本；错误通过 `error_message` 返回。 |
-| `GET /api/motors` | 无 | 查看后端保存的电机命令状态和 rover 控制状态，不等同于 Pixhawk 实际输出。 |
-| `GET /api/status` | 无 | 查看连接、解锁、限制值、输入/输出通道和综合遥测。 |
-| `POST /api/emergency/stop` | 空 JSON | 将油门/转向输入置中，并发送解除武装命令。它是软件请求，仍需独立物理急停和飞控失联保护。 |
-| Socket.IO `arm` / `disarm` | 无 | 当前解锁/解除武装入口；REST 暂无对应 arm/disarm 路由。 |
-
-只读检查和中值命令示例：
-
-```bash
-curl -fsS http://127.0.0.1:3000/api/status
-curl -fsS http://127.0.0.1:3000/api/motors
-
-# 仅在推进器已移除或动力输出已物理断开的台架上发送。
-curl -fsS -X POST http://127.0.0.1:3000/api/control/rover \
-  -H 'Content-Type: application/json' \
-  -d '{"throttle":0,"steering":0}'
-
-curl -fsS -X POST http://127.0.0.1:3000/api/emergency/stop \
-  -H 'Content-Type: application/json' \
-  -d '{}'
-```
-
-前端控制器可复用 `frontend/js/realtime_client.js` 中的 `drive()`、`setMotorPwm()`、`arm()`、`disarm()` 和 `emergencyStop()`，不要在不同页面重复实现协议。
-
-### 10.4 限幅与差速换算
-
-`backend/server.js -> normalizeRoverControl()` 执行以下换算，所有 PWM 最终都会限制在 `PWM_MIN..PWM_MAX`：
-
-```text
-throttle_scale = (PWM_MAX - PWM_CENTER) / max(abs(throttle_min), abs(throttle_max))
-steering_scale = (PWM_MAX - PWM_CENTER) / max(abs(steering_min), abs(steering_max))
-
-throttle_input_pwm = PWM_CENTER + throttle * throttle_scale
-steering_input_pwm = PWM_CENTER + steering * steering_scale
-
-left_pwm  = PWM_CENTER + throttle * throttle_scale - steering * steering_scale
-right_pwm = PWM_CENTER + throttle * throttle_scale + steering * steering_scale
-```
-
-在当前配置下，油门每单位约对应 `5us`，转向每单位约对应 `11.11us`。`left_pwm/right_pwm` 是后端用于界面显示和状态记录的期望值；确认真实输出时必须查看 Pixhawk 回传的 `telemetry.servoOutputs`。
-
-`/api/control/motor` 会把当前左/右 PWM 反算为油门和转向输入。批量 `motors` 数组目前按元素顺序逐条处理并逐条发送，不是原子操作，可能出现极短的中间状态；需要同步更新两侧电机的新控制器应使用 `/api/control/rover`。
-
-### 10.5 Pixhawk 参数与自动配置
-
-桥接服务每次收到 Pixhawk 心跳后会检查并在不匹配时写入以下参数：
-
-| 参数 | 当前目标值 | 作用 |
-| --- | ---: | --- |
-| `PILOT_STEER_TYPE` | `0` | 使用常规油门/转向输入方式。 |
-| `RC1_REVERSED`、`RC3_REVERSED` | `0` | 输入层不反转，避免与输出反转叠加。 |
-| `SERVO1_FUNCTION` | `73` | Main1 作为左侧履带/电机输出。 |
-| `SERVO3_FUNCTION` | `74` | Main3 作为右侧履带/电机输出。 |
-| `SERVO1_REVERSED`、`SERVO3_REVERSED` | `1` | 当前实机接线对应的输出反转设置。 |
-
-这些参数由 `mavlink_bridge.py -> _ensure_rover_motor_outputs()` 维护，修改代码或 QGroundControl 参数前必须先明确唯一权威来源，否则桥接重连时会把参数恢复成代码中的目标值。
-
-`scripts/configure_skid_steer_outputs.py` 可独立检查相同映射；它会直接占用 Pixhawk 串口，因此不能和 `manta-bridge.service` 同时运行：
-
-```bash
-# 前提：解除武装、移除推进器或断开动力输出，并保留现场维护连接。
-sudo systemctl stop manta-backend.service
-sudo systemctl stop manta-bridge.service
-
-# 默认只检查；只有经操作人员确认后才允许使用 --apply 写参数。
-python3 scripts/configure_skid_steer_outputs.py
-# python3 scripts/configure_skid_steer_outputs.py --apply
-
-sudo systemctl start manta-bridge.service
-sudo systemctl start manta-backend.service
-```
-
-### 10.6 解锁、急停与当前安全边界
-
-- 普通 rover/motor 接口当前不会检查 `isConnected` 或 `armed` 后再发送；是否产生实际动力由 Pixhawk 状态决定。
-- `server.js -> sendMavlinkCommand()` 使用本机 UDP，无逐命令确认；HTTP/Socket.IO 成功表示后端已接收并发送，不表示 Pixhawk 或电调已经执行。
-- 桥接对 RC Override 再做一次 `1000..2000us` 限幅，并拒绝原始 `MOTOR_CONTROL` 命令，确保输出反转仍由 Pixhawk 参数统一管理。
-- 软件急停流程是“油门/转向回到 `1500us` -> 发送 DISARM -> 更新界面状态”，但当前没有等待 Pixhawk ACK 后再返回，也不是锁存式急停：后续控制命令仍会被接收，正在运行的视觉控制进程也不会由该接口停止。
-- 当前代码没有通用的 motor command deadman/超时自动回中机制，Socket.IO 客户端断开时也不会自动发送中值。开发实时遥控或自主控制前，必须同时设计命令超时、客户端断开、后端退出、桥接掉线和 Pixhawk RC Override 失效后的安全行为。
-- `motorStatus` 和 `roverControl` 是后端命令状态；`SERVO_OUTPUT_RAW` 才是 Pixhawk 输出观测。两者不一致时应先停止动力，再检查解锁、模式、failsafe、混控参数和串口链路。
-- 软件保护不能替代物理急停、动力接触器、保险、Pixhawk failsafe 和现场安全员。任何非中值测试都应先移除推进器或架空底盘。
-
-### 10.7 新控制逻辑应该修改哪里
-
-| 需求 | 首选修改位置 | 必须同步验证 |
-| --- | --- | --- |
-| 新增 Web/iPad 操纵方式 | `frontend/`，复用 `realtime_client.js` | 断连、中值回归、重复连接、触控释放状态 |
-| 修改输入范围或通道 | `config/system.config.json` | `validate_config.mjs`、配置测试、Pixhawk 参数、README |
-| 修改通道启用或电机元数据 | `config/motor_config.json` | 左右通道均启用、后端启动日志、接口拒绝行为 |
-| 修改限幅、混控或命令语义 | `backend/server.js` | 纯函数/协议测试、边界值、NaN、超范围、急停 |
-| 修改 MAVLink 或 Pixhawk 参数策略 | `backend/mavlink_bridge.py` | 串口重连、参数读写 ACK、RC Override、真实输出遥测 |
-| 新增自主控制算法 | 独立脚本，通过 `/api/control/rover` 调用后端 | 控制频率、目标丢失、进程退出、网络失败、超时回中 |
-| 修改视觉跟车 | `scripts/vision_face_controller.py` | 当前兼容 motor API、目标丢失保持时间、退出回中、左右同步 |
-| 修改服务启动方式 | `systemd/*.template`、安装脚本 | `daemon-reload`、ExecStart、启动顺序、异常重启和日志 |
-
-不要在新算法中复制 PWM 限幅、串口连接或 Pixhawk 参数写入逻辑。控制算法只生成标准化的 `throttle/steering`，安全门控和协议边界集中维护，才能避免不同控制源出现相反方向、不同中值或不同急停语义。
-
-### 10.8 推荐开发与台架调试顺序
-
-1. 确认主板位于预期分支且工作区干净，运行 `npm run maintenance`。
-2. 解除武装，移除推进器、断开动力输出或架空底盘，确认物理急停可用。
-3. 用 `systemctl status manta-bridge manta-backend` 和 `/api/status` 确认桥接、心跳、通道与限制值。
-4. 先发送中值 `throttle=0, steering=0`，确认命令状态和 `SERVO_OUTPUT_RAW` 都回到预期中值。
-5. 按“单侧小幅 -> 另一侧小幅 -> 同向 -> 原地转向”逐步测试；每一步都记录输入、预测左右 PWM、真实 Main 输出和电机方向。
-6. 测试手动 disarm、软件 emergency stop、控制端断开、后端停止、桥接停止和 Pixhawk 失联；任何场景不能保持不可控动力。
-7. 只重启改动影响的服务：后端/配置修改通常重启 `manta-backend`，桥接或通道/Pixhawk 策略修改重启 `manta-bridge`，前端静态文件通常刷新浏览器即可。
-8. 验证完成后提交代码、配置、测试和记录；不要提交飞控参数备份、设备凭据或现场日志。
-
-常用观测命令：
-
-```bash
-sudo journalctl -u manta-bridge.service -f
-sudo journalctl -u manta-backend.service -f
-curl -fsS http://127.0.0.1:3000/api/telemetry
-curl -fsS 'http://127.0.0.1:3000/api/logs?limit=100'
-```
-
-### 10.9 控制系统改动验收清单
-
-- 输入非法、缺失、非数字或超范围时，系统会拒绝或按文档限幅，不会产生未定义 PWM。
-- `throttle=0, steering=0`、急停、disarm 和控制器退出均回到确认过的安全状态。
-- 左右方向、通道和反转只在一个层级定义，没有“代码反转 + Pixhawk 反转 + 接线反转”相互抵消。
-- UI 命令状态、后端日志、RC 输入意图和 `SERVO_OUTPUT_RAW` 能够对应追踪。
-- 客户端断开、命令超时、UDP 丢包、串口断开、Pixhawk 重启和服务崩溃都完成台架验证。
-- 自动化测试覆盖混控公式、边界值、通道禁用、批量命令和急停；实机/HIL 结果单独记录。
-- 修改后的服务重启范围、回滚提交和 Pixhawk 参数恢复方法已经记录。
-
-## 11. 安全要求
+## 10. 安全要求
 
 - 首次电机测试必须移除推进器或断开动力输出。
 - 串口接线或模式切换前先解除武装。
@@ -372,8 +200,32 @@ curl -fsS 'http://127.0.0.1:3000/api/logs?limit=100'
 - 不要把热点密码、SSH 私钥或飞控参数备份提交到 Git。
 - 修改控制算法后至少运行 `npm test`、`npm run check` 和板端状态检查。
 
-## 12. 已知限制
+## 11. 已知限制
 
-- 当前可验证的云台 `/live/0` 码流为 1080p；4K 必须由云台固件提供真实高分辨率流。
+- 当前云台为 SIYI A8 mini：`rtsp://192.168.144.25:8554/main.264`，实测 H.264、1280×720、25 fps；RK3588 录像直接保存此码流。
 - OV8858 本地摄像头依赖板级 overlay 与实际传感器状态。
 - iOS 对 Linux 蓝牙 PAN 的支持不稳定，Wi-Fi 热点是推荐的手机控制路径。
+
+## SIYI A8 mini 接入
+
+当前云台已替换为 SIYI A8 mini，OV8858 本地相机保持原配置。控制采用 SIYI SDK UDP `192.168.144.25:37260`，路由脚本读取系统配置，在 `br-manta` 上使用 `192.168.144.101/32`。画面、识别、录像及 MediaMTX 均读取 `rtsp://192.168.144.25:8554/main.264`。旧 ZTD095 控制帧只用于内部规划，由适配器转成 SIYI 数据包后发送。
+
+软件以向右、向下为正，SIYI 俯仰向上为正；倒装回传的 180° 偏移由适配器按设备安装状态修正。SDK 角度范围为 yaw ±135°、pitch -90° 至 +25°，对应软件 pitch -25° 至 +90°。每 100 ms 请求姿态，CRC 错误或过期反馈不用于运动控制。速度接口是比例量，`gimbal.siyi.rate_units_per_dps` 是待调参数，输出受 `max_rate_command` 限制。
+
+录像保存到 RK3588，不自动切换相机 SD 卡录像；A8 没有旧云台的激光测距及内置检测控制，相关 API 返回 501。旧云台 RTSP OSD 命令不可用于 A8，界面隐藏该开关。A8 固定焦距，原自动对焦入口改为恢复 1x 数字变倍。
+
+2026-10-20 用户确认 UWB 接收器中心位于 A8 云台旋转中心正下方 4 cm，朝向与回中镜头一致。已按此安装关系启用 `gimbal.beacon.extrinsic_3d`：相机坐标前/右/下，矩阵 `diag(1,-1,-1)` 保留既有 UWB 角度符号约定，平移 `[0,0,0.04]` 米；目标在 UWB 等高方向、距离 1 米时，相机应下俯约 2.29°，距离 4 米时约 0.57°。`calibration_required=false`，允许启动信标跟踪。该配置来自安装尺寸，不表示完成多点实测标定；可通过现有标定向导进一步校正安装偏差。旧角度缩放与偏置也被船体控制使用，因此原值保留，云台位置补偿通过独立三维变换计算。图像内参由 81° 水平视场近似推算，精确指向需棋盘格标定。
+
+协议依据：[SIYI 官方 SDK V0.1.1](https://siyi.biz/siyi_file/A8%20mini/SDK%20-%20V0.1.1.pdf)。
+
+现场发现 192.168.144.25 的 ARP 记录曾被另一 MAC 00301bba02db 抢占；配置 `gimbal.network_mac=7c:63:32:cf:c7:fe`，由路由服务为本台 A8 固定邻居记录。换一台 A8 时必须核对并更新该 MAC。
+
+## 无 UWB 时启动自动跟随
+
+自动跟随开关允许在 UWB 无效时发起请求。后端返回 HTTP 202，状态为 `awaiting_signal`，`followRequested=true`、`autoResumePending=true`；界面显示“搜索 UWB”，开关可再次点击“停止搜索”。搜索阶段保持中立输出及未武装状态，不发送前进或旋转搜索指令。
+
+收到同一目标连续、不同时间戳的可信 UWB 测量后，复用现有恢复流程；仍需导航、航向、控制参数、距离和视野检查通过，然后切换模式、武装并再次确认 UWB。跟随中 UWB 超时也保留请求并进入等待。停止搜索、手动接管、切回手动、急停或明确解除武装会取消请求，之后恢复信号不会自行启动。此处“搜索”表示等待接收有效 UWB，不表示船体盲目转圈。
+
+## 推进器方向记录
+
+2026-10-20 根据实机反馈，将左推进器 `SERVO1_REVERSED` 从 1 改为 0。右推进器 `SERVO3_REVERSED` 实机为 0，保持原值；通道功能、RC 输入方向、中位与 PWM 上下限均未更改。`configure_skid_steer_outputs.py` 已同步左右输出反向参数为 0，避免以后应用脚本时覆盖本次修正。

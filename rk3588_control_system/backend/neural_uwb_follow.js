@@ -244,13 +244,15 @@ export class NeuralUwbFollowController extends UwbFollowController {
     const error=normalizeAngleDeg(heading*RAD_TO_DEG-preflight.yawDeg);
     const torque=clamp(.5*(-error*DEG_TO_RAD)-.25*(-preflight.measuredYawRateDegS*DEG_TO_RAD),-.5,.5);
     const result=this.relativeImuControl.update({now,preflight,telemetry,estimate,guidance:this.traditionalFastGuidance,
-      policy:{nominalThrottlePercent:Math.min(this.config.maxSpeedMps,nominalSpeed)/this.config.maxSpeedMps*this.config.relativeThrottleLimitPercent,
+      policy:{nominalSpeedMps:nominalSpeed,nominalThrottlePercent:Math.min(this.config.maxSpeedMps,nominalSpeed)/this.config.maxSpeedMps*this.config.relativeThrottleLimitPercent,
         headingErrorDeg:error,yawRateDegS:-torque/.5*this.config.maxYawRateDegS}});
     this.previousCommandSpeedMps=nominalSpeed;this.previousCommandHeadingRad=heading;
     return {...result,trackingMethod:'neural',controllerProfile:'ppo_missing_absolute_velocity_experiment',
       neuralModel:path.basename(this.actor.modelPath),neuralAction:action,neuralObservation:observation,
       neuralAbsoluteVelocityMissing:true,neuralObservationAdaptation:'own absolute velocity imputed zero; target slots use relative velocity proxy',
-      speedFeedForwardSource:'experimental_ppo_nominal_throttle'};
+        neuralRole:result.planner==='nmpc'?'nominal_throttle_reference':'direct_relative_guidance',
+        speedFeedForwardSource:result.planner==='nmpc'?result.speedFeedForwardSource
+          :result.gpsSpeedControlActive?'gps_speed_pi':'experimental_ppo_nominal_throttle'};
   }
 
   update({ now = Date.now(), telemetry = {}, connected = false, controlMode = 'auto', targetEstimate = null, targetMotionEstimate = null } = {}) {

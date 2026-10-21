@@ -6,7 +6,8 @@ Wants=bluetooth.service manta-backend.service
 [Service]
 Type=simple
 WorkingDirectory=__PROJECT_DIR__
-ExecStart=/usr/bin/python3 __PROJECT_DIR__/scripts/bluetooth_pan_server.py
+EnvironmentFile=-/etc/manta/manta.env
+ExecStart=/bin/bash __PROJECT_DIR__/scripts/python_service.sh scripts/bluetooth_pan_server.py
 Restart=always
 RestartSec=2
 StandardOutput=append:__PROJECT_DIR__/logs/bluetooth-pan.log
