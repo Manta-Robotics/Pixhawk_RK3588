@@ -1,0 +1,36 @@
+# MANTA low-latency camera relay.
+# The camera H.264 RTSP stream is forwarded without transcoding.
+logLevel: info
+logDestinations: [stdout]
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 64
+
+api: true
+apiAddress: 127.0.0.1:9997
+metrics: false
+playback: false
+rtsp: false
+rtmp: false
+hls: false
+srt: false
+moq: false
+
+webrtc: true
+webrtcAddress: :8889
+webrtcEncryption: false
+webrtcAllowOrigins: ["*"]
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcIPsFromInterfaces: true
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts: []
+webrtcICEServers2: []
+webrtcHandshakeTimeout: 10s
+webrtcTrackGatherTimeout: 3s
+
+paths:
+  gimbal:
+    source: rtsp://192.168.144.25:8554/main.264
+    sourceOnDemand: false
+    rtspTransport: tcp

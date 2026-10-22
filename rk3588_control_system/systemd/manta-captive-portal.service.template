@@ -1,12 +1,12 @@
 [Unit]
 Description=Manta Captive Portal Redirector
-After=network-online.target manta-hotspot.service manta-backend.service
-Wants=network-online.target manta-hotspot.service manta-backend.service
+After=network.target manta-hotspot.service manta-backend.service
+Wants=network.target manta-hotspot.service manta-backend.service
 
 [Service]
 Type=simple
 WorkingDirectory=__PROJECT_DIR__
-ExecStart=/usr/bin/python3 __PROJECT_DIR__/scripts/captive_portal_server.py
+ExecStart=/bin/bash __PROJECT_DIR__/scripts/python_service.sh scripts/captive_portal_server.py
 Restart=always
 RestartSec=2
 StandardOutput=append:__PROJECT_DIR__/logs/portal.log

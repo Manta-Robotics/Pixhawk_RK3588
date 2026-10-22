@@ -2,8 +2,10 @@
   "motors": [
     {
       "channel": 1,
-      "name": "左电机_Main1",
+      "name": "左电机_Main1_ThrottleLeft",
       "type": "brushless",
+      "control_mode": "pixhawk_rover_mixer",
+      "servo_function": 73,
       "direction": "cw",
       "min_pwm": 1000,
       "max_pwm": 2000,
@@ -14,6 +16,8 @@
       "channel": 2,
       "name": "预留_Main2",
       "type": "brushless",
+      "control_mode": "disabled",
+      "servo_function": 0,
       "direction": "ccw",
       "min_pwm": 1000,
       "max_pwm": 2000,
@@ -22,8 +26,10 @@
     },
     {
       "channel": 3,
-      "name": "右电机_Main3",
+      "name": "右电机_Main3_ThrottleRight",
       "type": "brushless",
+      "control_mode": "pixhawk_rover_mixer",
+      "servo_function": 74,
       "direction": "cw",
       "min_pwm": 1000,
       "max_pwm": 2000,
@@ -34,6 +40,8 @@
       "channel": 4,
       "name": "预留_Main4",
       "type": "brushless",
+      "control_mode": "disabled",
+      "servo_function": 0,
       "direction": "ccw",
       "min_pwm": 1000,
       "max_pwm": 2000,
@@ -42,7 +50,8 @@
     }
   ],
   "brushless_config": {
-    "protocol": "PWM",
+    "protocol": "Pixhawk Rover mixer",
+    "mavlink_input": "MANUAL_CONTROL",
     "frequency": 400,
     "idle_pwm": 1000,
     "max_pwm": 2000,

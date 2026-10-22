@@ -14,7 +14,7 @@
     }
   ],
   "security": {
-    "pin": "1234",
+    "pin": "__GENERATED_PER_DEVICE__",
     "authentication_required": true,
     "encryption_enabled": false
   },
