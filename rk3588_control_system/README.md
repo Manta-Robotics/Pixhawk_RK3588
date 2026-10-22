@@ -236,4 +236,18 @@ npm run maintenance
 
 后端将独立数据保存到 `/api/telemetry` 的 `telemetry.uwb`，并发送 Socket.IO `uwb_update` 事件；原有 `telemetry_update`、相机、云台及其他 HTTP 请求均保留。相机健康请求在后台异步执行，共享最近结果，600 ms 超时不阻塞遥测；温度检查与跟踪进程清理也不再同步等待外部操作。
 
-定位频率应按新的 `measurementUpdatedAt` 统计，不能将重复位置的遥测包数或诊断 `goodCount` 当作新位置更新率。电脑只能接收飞控实际转发的测量；本次改动不改变 UWB 固件或飞控的转发周期。
+定位频率应按新的 `measurementUpdatedAt` 统计，不能将重复位置的遥测包数或诊断 `goodCount` 当作新位置更新率。电脑只能接收飞控实际转发的测量；仅更新上位机不会改变飞控 Lua 脚本的转发周期。
+
+### 飞控逐帧转发
+
+2026-10-22 检查当天已部署脚本的回读副本，发现 `SEND_PERIOD_MS = 100`：脚本每 100 ms 至多转发一个位置，因此接收端约 9 Hz，即使 UWB UART 的有效帧计数增长更快。修改 `telemetry_rate_hz` 或 MAVLink 通用流速率无法移除这个 Lua 条件。
+
+`scripts/pixhawk/uwb_aoa.lua` 基于该双路脚本修改，保留 SERIAL1/2 Scripting、115200 波特率、距离校验及每轮最多 48 字节。每 10 ms 交替处理一个接收器，每次最多完成一个位置并立即转发，支持每路最高 50 Hz；设计目标是跟上此前约 40 Hz 的输入。达到更高输入频率或调度延迟持续增大时仍可能积压，不能据此保证任意输入速率。
+
+每帧发送 `DIST`、`EL`、`AZ`；`AZ` 最后完成距离/方位配对，`VALID` 状态变化安排在它之前。`GOOD`、`SENT`、接收字节和 CRC 等诊断改为约每秒一轮、分散到不同调度轮次。双路各 40 Hz 时，三个未签名 MAVLink 2 浮点消息约占 7200 B/s，另加诊断与正常遥测；115200、8N1 的理论容量为 11520 B/s，实际仍需检查丢包与负载。没有关闭相机、云台或其他上位机请求，也不发送武装、推进器控制或 EKF 输入。
+
+飞控 SD 卡上的部署位置为 `/APM/scripts/uwb_aoa.lua`。更新前应回读并备份当前文件，确认与本次基线相符；解除武装且跟随停止时替换并重启 Lua，回读校验新文件并检查脚本错误。无需刷写整套固件或更改串口参数。只提交文件到 GitHub 不会更新飞控 SD 卡；未连接硬件时只能完成离线验证。
+
+实测工具：`python scripts/measure_uwb_forwarding.py --seconds 30`。它只读取已运行桥接的 `/api/telemetry`，不打开串口、不发送命令。分别报告每路飞控有效帧计数增长率、转发尝试计数增长率、桥接收到和滤波接受的新位置观察频率。旧 Lua 无 `SENT` 时该项为 null；计数重置会重新建立窗口，HTTP 轮询偏慢时位置观察频率可能低估。应比较每个接收器的 `sensors[].goodCount`，顶层融合计数会因接收器失效或切换而变化。
+
+Lua 回归测试使用可选 `lupa` 的 Lua 5.3 解释器执行实际脚本并模拟 UART：`python -m unittest discover -s test -p test_pixhawk_uwb_lua.py -v`。模拟结果不能替代飞控硬件上的执行耗时、串口和 MAVLink 丢包实测。

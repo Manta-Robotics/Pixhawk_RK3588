@@ -11,13 +11,13 @@ from typing import Deque, Dict, Iterable, Optional, Tuple
 
 
 UWB_NAME_PATTERNS = (
-    re.compile(r"^UWB([12])_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN)$"),
-    re.compile(r"^UWB_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN)([12])$"),
+    re.compile(r"^UWB([12])_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL)$"),
+    re.compile(r"^UWB_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL)([12])$"),
 )
 LEGACY_UWB_NAMES = {
     "UWB_DIST", "UWB_AZ", "UWB_EL", "UWB_GOOD", "UWB_VALID",
     "UWB_SEQ", "UWB_ANCH", "UWB_TAG", "UWB_STAT",
-    "UWB_RX", "UWB_HB", "UWB_CRC", "UWB_LEN",
+    "UWB_RX", "UWB_HB", "UWB_CRC", "UWB_LEN", "UWB_SENT", "UWB_AVL",
 }
 
 
@@ -40,6 +40,8 @@ class UwbReceiver:
     azimuth_deg: Optional[float] = None
     elevation_deg: Optional[float] = None
     good_count: int = 0
+    sent_count: Optional[int] = None
+    max_available: Optional[int] = None
     sequence_id: Optional[int] = None
     anchor_id: Optional[int] = None
     tag_id: Optional[int] = None
@@ -109,6 +111,8 @@ class UwbReceiver:
             "bodyAzimuthDeg": self.body_azimuth_deg(),
             "elevationDeg": self.elevation_deg,
             "goodCount": self.good_count,
+            "sentCount": self.sent_count,
+            "maxAvailable": self.max_available,
             "sequenceId": self.sequence_id,
             "anchorId": self.anchor_id,
             "tagId": self.tag_id,
@@ -331,6 +335,12 @@ class DualUwbFusion:
 
         if field_name == "GOOD":
             receiver.good_count = max(0, int(value))
+            return receiver_id, field_name
+        if field_name == "SENT":
+            receiver.sent_count = max(0, int(value))
+            return receiver_id, field_name
+        if field_name == "AVL":
+            receiver.max_available = max(0, int(value))
             return receiver_id, field_name
         if field_name == "VALID":
             receiver.valid = value > 0

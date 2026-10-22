@@ -43,7 +43,12 @@ class ImmediateUwbTests(unittest.TestCase):
         self.bridge._send_node_packet.reset_mock()
         self.bridge._update_uwb_named_value('UWB1_GOOD', 100)
         self.bridge._update_uwb_named_value('UWB1_SEQ', 100)
+        self.bridge._update_uwb_named_value('UWB1_SENT', 100)
+        self.bridge._update_uwb_named_value('UWB1_AVL', 37)
         self.bridge._send_node_packet.assert_not_called()
+        sensor = self.bridge._uwb_payload()['sensors'][0]
+        self.assertEqual(sensor['sentCount'], 100)
+        self.assertEqual(sensor['maxAvailable'], 37)
         self.bridge._update_uwb_named_value('UWB1_VALID', 0)
         self.assertFalse(self.bridge._send_node_packet.call_args.args[1]['fresh'])
 

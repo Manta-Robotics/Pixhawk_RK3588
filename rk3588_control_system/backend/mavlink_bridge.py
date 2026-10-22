@@ -429,7 +429,7 @@ class MAVLinkBridge:
                 self.uwb_fusion.set_filtered(receiver_id, 'EL', value)
             self._refresh_uwb_fusion()
             return
-        if field_name in {'GOOD', 'VALID', 'SEQ', 'ANCH', 'TAG', 'STAT', 'RX', 'HB', 'CRC', 'LEN', 'REJECTED'}:
+        if field_name in {'GOOD', 'VALID', 'SEQ', 'ANCH', 'TAG', 'STAT', 'RX', 'HB', 'CRC', 'LEN', 'SENT', 'AVL', 'REJECTED'}:
             self._refresh_uwb_fusion()
             return
         filtered = self._uwb_filters[(receiver_id, field_name)].update(value)
