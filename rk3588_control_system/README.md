@@ -229,3 +229,11 @@ npm run maintenance
 ## 推进器方向记录
 
 2026-10-20 根据实机反馈，将左推进器 `SERVO1_REVERSED` 从 1 改为 0。右推进器 `SERVO3_REVERSED` 实机为 0，保持原值；通道功能、RC 输入方向、中位与 PWM 上下限均未更改。`configure_skid_steer_outputs.py` 已同步左右输出反向参数为 0，避免以后应用脚本时覆盖本次修正。
+
+## UWB 独立接收与实时推送
+
+桥接程序独占 MAVLink 串口，持续以非阻塞方式接收。完整 UWB 距离/方位测量经过原有校验与滤波后，立即通过 UDP `type: uwb` 发布；无需等待 GPS、IMU 或整包遥测的发送周期。无效测量也立即发布失效状态，原有融合、武装、失联保护与推进器限制保持生效。
+
+后端将独立数据保存到 `/api/telemetry` 的 `telemetry.uwb`，并发送 Socket.IO `uwb_update` 事件；原有 `telemetry_update`、相机、云台及其他 HTTP 请求均保留。相机健康请求在后台异步执行，共享最近结果，600 ms 超时不阻塞遥测；温度检查与跟踪进程清理也不再同步等待外部操作。
+
+定位频率应按新的 `measurementUpdatedAt` 统计，不能将重复位置的遥测包数或诊断 `goodCount` 当作新位置更新率。电脑只能接收飞控实际转发的测量；本次改动不改变 UWB 固件或飞控的转发周期。

@@ -301,6 +301,7 @@
         this.socket = window.io({ transports: ["websocket", "polling"], timeout: 5000 });
         this.socket.on("connect", function () { this.emit("connection", { connected: true, degraded: false }); }.bind(this));
         this.socket.on("telemetry_update", function (telemetry) { this.applyTelemetry(telemetry); }.bind(this));
+        this.socket.on("uwb_update", function (uwb) { this.emit("telemetry", { uwb: uwb || {} }); }.bind(this));
         this.socket.on("system_state", function (state) { if (state) this.applyStatus({ data: state }); }.bind(this));
         this.socket.on("motor_output_update", function (motors) {
             motors = motors || {};

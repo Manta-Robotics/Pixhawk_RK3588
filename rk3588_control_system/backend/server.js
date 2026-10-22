@@ -11,7 +11,8 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import bodyParser from 'body-parser';
 import dgram from 'dgram';
-import { spawn, spawnSync } from 'child_process';
+import { spawn } from 'child_process';
+import { createAsyncHealth } from './async_health.js';
 import net from 'net';
 import os from 'os';
 import http from 'http';
@@ -737,31 +738,7 @@ function buildDirectCameraUrl(req, pathname) {
   return `${protocol}://${hostname}:${SNAPSHOT_PORT}${pathname}`;
 }
 
-function readLocalCameraHealth() {
-  const url = `http://127.0.0.1:${SNAPSHOT_PORT}/healthz`;
-  try {
-    const result = spawnSync('curl', ['-sS', '--max-time', '0.6', url], {
-      encoding: 'utf8',
-      maxBuffer: 1024 * 1024
-    });
-    if (result.status !== 0) {
-      const message = String(result.stderr || result.stdout || '').trim() || `Camera health check failed with exit ${result.status}`;
-      return { ok: false, message };
-    }
-    const payload = JSON.parse(String(result.stdout || '{}'));
-    return {
-      ok: Boolean(payload.ok),
-      message: String(payload.lastError || payload.message || ''),
-      cachedDevice: String(payload.cachedDevice || ''),
-      cachedName: String(payload.cachedName || ''),
-      lastFrameAgeSeconds: typeof payload.lastFrameAgeSeconds === 'number' && Number.isFinite(payload.lastFrameAgeSeconds)
-        ? payload.lastFrameAgeSeconds
-        : null
-    };
-  } catch (error) {
-    return { ok: false, message: error.message };
-  }
-}
+const readLocalCameraHealth = createAsyncHealth(`http://127.0.0.1:${SNAPSHOT_PORT}/healthz`);
 
 function readCameraState(connectivity, req = null) {
   const isLocalCameraTransport = String(cameraConfig.transport || '').trim().toLowerCase() === 'local';
@@ -1071,7 +1048,9 @@ function addLog(level, message) {
   }
 
   try {
-    fs.appendFileSync(SYSTEM_LOG_FILE, `[${timestamp}] [${level}] ${message}\n`);
+    fs.appendFile(SYSTEM_LOG_FILE, `[${timestamp}] [${level}] ${message}\n`, (error) => {
+      if (error) console.error(`[Log] Failed to write log file: ${error.message}`);
+    });
   } catch (error) {
     console.error(`[Log] Failed to write log file: ${error.message}`);
   }
@@ -1082,7 +1061,8 @@ function addLog(level, message) {
 }
 
 function emitTelemetryUpdate() {
-  io.volatile.emit('telemetry_update', systemState.telemetry);
+  // Motor-output writes must not cause the following telemetry packet to be dropped.
+  io.emit('telemetry_update', systemState.telemetry);
 }
 
 function flushTelemetryCsv(force = false) {
@@ -2681,19 +2661,20 @@ function cleanupStaleGimbalTrackWorkers(reason = 'cleanup') {
   ];
   const protectedPid = gimbalTrackProcess && gimbalTrackProcess.pid ? Number(gimbalTrackProcess.pid) : 0;
   for (const marker of scriptMarkers) {
-    const result = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' });
-    const pids = String(result.stdout || '')
-      .split(/\s+/)
-      .map((value) => Number(value))
-      .filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid && pid !== protectedPid);
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 'SIGTERM');
-        addLog('GIMBAL_TRACK', `Killed stale tracker pid=${pid} reason=${reason}`);
-      } catch (error) {
-        addLog('GIMBAL_ERR', `Failed to kill stale tracker pid=${pid}: ${error.message}`);
+    const child = spawn('pgrep', ['-f', marker], { windowsHide: true });
+    let output = '';
+    child.stdout.on('data', (chunk) => { if (output.length < 65536) output += chunk; });
+    child.on('error', () => {}); // pgrep is unavailable on Windows.
+    child.on('close', () => {
+      // Re-read the protected PID: tracking may have started while pgrep was running.
+      const currentPid = gimbalTrackProcess?.pid || protectedPid;
+      const pids = output.split(/\s+/).map(Number)
+        .filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid && pid !== child.pid && pid !== currentPid);
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGTERM'); addLog('GIMBAL_TRACK', `Killed stale tracker pid=${pid} reason=${reason}`); }
+        catch (error) { addLog('GIMBAL_ERR', `Failed to kill stale tracker pid=${pid}: ${error.message}`); }
       }
-    }
+    });
   }
 }
 
@@ -2978,36 +2959,24 @@ function startGimbalTracking(options = {}) {
   }
 }
 
-function readHostBoardTemperature() {
+async function readHostBoardTemperature() {
   try {
-    const entries = fs.readdirSync(THERMAL_CLASS_DIR, { withFileTypes: true });
-    const temperatures = entries
-      .filter((entry) => entry.name.startsWith('thermal_zone'))
-      .map((entry) => path.join(THERMAL_CLASS_DIR, entry.name, 'temp'))
-      .filter((tempPath) => fs.existsSync(tempPath))
-      .map((tempPath) => Number(fs.readFileSync(tempPath, 'utf8').trim()))
-      .map((rawValue) => (rawValue > 1000 ? rawValue / 1000 : rawValue))
-      .filter((value) => Number.isFinite(value) && value >= -40 && value <= 150);
-
-    if (temperatures.length === 0) {
-      return null;
-    }
-
-    return Math.max(...temperatures);
-  } catch (_error) {
-    return null;
-  }
+    const entries = await fs.promises.readdir(THERMAL_CLASS_DIR, { withFileTypes: true });
+    const readings = await Promise.all(entries.filter((entry) => entry.name.startsWith('thermal_zone'))
+      .map(async (entry) => {
+        try { const raw = Number((await fs.promises.readFile(path.join(THERMAL_CLASS_DIR, entry.name, 'temp'), 'utf8')).trim());
+          return raw > 1000 ? raw / 1000 : raw;
+        } catch (_) { return NaN; }
+      }));
+    const valid = readings.filter((value) => Number.isFinite(value) && value >= -40 && value <= 150);
+    return valid.length ? Math.max(...valid) : null;
+  } catch (_) { return null; }
 }
 
-function refreshHostBoardTemperature() {
-  const nextTemperature = readHostBoardTemperature();
+async function refreshHostBoardTemperature() {
+  const nextTemperature = await readHostBoardTemperature();
   const previousTemperature = systemState.telemetry.temperature.hostBoard;
-
-  if (!Number.isFinite(nextTemperature)) {
-    return;
-  }
-
-  if (previousTemperature === null || Math.abs(nextTemperature - previousTemperature) >= 0.2) {
+  if (Number.isFinite(nextTemperature) && (previousTemperature === null || Math.abs(nextTemperature - previousTemperature) >= 0.2)) {
     systemState.telemetry.temperature.hostBoard = nextTemperature;
     emitTelemetryUpdate();
   }
@@ -4095,6 +4064,54 @@ function updateUwbFollow() {
   }
 }
 
+function mergeUwbTelemetry(previous, incomingUwb) {
+  const nextTelemetry = { uwb: { ...previous } };
+  nextTelemetry.uwb.measurementStatus = String(incomingUwb.measurementStatus || 'unavailable');
+  nextTelemetry.uwb.rejectionReason = incomingUwb.rejectionReason ? String(incomingUwb.rejectionReason) : null;
+  for (const key of ['distanceM', 'azimuthDeg', 'elevationDeg', 'rawDistanceM', 'rawAzimuthDeg', 'rawElevationDeg', 'relativeXM', 'relativeYM', 'updatedAt', 'measurementUpdatedAt', 'measurementNis']) {
+    if (Object.prototype.hasOwnProperty.call(incomingUwb, key)) {
+      nextTelemetry.uwb[key] = incomingUwb[key] === null
+        ? null
+        : asFiniteNumber(incomingUwb[key], nextTelemetry.uwb[key]);
+    }
+  }
+  nextTelemetry.uwb.goodCount = asFiniteNumber(incomingUwb.goodCount, nextTelemetry.uwb.goodCount || 0);
+  nextTelemetry.uwb.receiverCount = asFiniteNumber(
+    incomingUwb.receiverCount,
+    nextTelemetry.uwb.receiverCount || 0
+  );
+  nextTelemetry.uwb.observingReceiverCount = asFiniteNumber(
+    incomingUwb.observingReceiverCount,
+    nextTelemetry.uwb.observingReceiverCount || 0
+  );
+  if (Array.isArray(incomingUwb.activeReceiverIds)) {
+    nextTelemetry.uwb.activeReceiverIds = incomingUwb.activeReceiverIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value >= 1 && value <= 2);
+  }
+  if (typeof incomingUwb.fusionMode === 'string') {
+    nextTelemetry.uwb.fusionMode = incomingUwb.fusionMode;
+  }
+  if (Object.prototype.hasOwnProperty.call(incomingUwb, 'bearingDisagreementDeg')) {
+    nextTelemetry.uwb.bearingDisagreementDeg = incomingUwb.bearingDisagreementDeg === null
+      ? null
+      : asFiniteNumber(incomingUwb.bearingDisagreementDeg, nextTelemetry.uwb.bearingDisagreementDeg);
+  }
+  if (Object.prototype.hasOwnProperty.call(incomingUwb, 'positionDisagreementM')) {
+    nextTelemetry.uwb.positionDisagreementM = incomingUwb.positionDisagreementM === null
+      ? null
+      : asFiniteNumber(incomingUwb.positionDisagreementM, nextTelemetry.uwb.positionDisagreementM);
+  }
+  if (Array.isArray(incomingUwb.sensors)) {
+    nextTelemetry.uwb.sensors = incomingUwb.sensors.map((sensor) => ({ ...sensor }));
+  }
+  if (typeof incomingUwb.online === 'boolean') nextTelemetry.uwb.online = incomingUwb.online;
+  if (typeof incomingUwb.fresh === 'boolean') nextTelemetry.uwb.fresh = incomingUwb.fresh;
+  if (typeof incomingUwb.source === 'string') nextTelemetry.uwb.source = incomingUwb.source;
+  if (typeof incomingUwb.filter === 'string') nextTelemetry.uwb.filter = incomingUwb.filter;
+  return nextTelemetry.uwb;
+}
+
 function updateTelemetry(newTelemetry = {}) {
   if (!newTelemetry || typeof newTelemetry !== 'object') {
     return;
@@ -4212,50 +4229,7 @@ function updateTelemetry(newTelemetry = {}) {
   }
 
   if (newTelemetry.uwb && typeof newTelemetry.uwb === 'object') {
-    const incomingUwb = newTelemetry.uwb;
-    nextTelemetry.uwb.measurementStatus = String(incomingUwb.measurementStatus || 'unavailable');
-    nextTelemetry.uwb.rejectionReason = incomingUwb.rejectionReason ? String(incomingUwb.rejectionReason) : null;
-    for (const key of ['distanceM', 'azimuthDeg', 'elevationDeg', 'rawDistanceM', 'rawAzimuthDeg', 'rawElevationDeg', 'relativeXM', 'relativeYM', 'updatedAt', 'measurementUpdatedAt', 'measurementNis']) {
-      if (Object.prototype.hasOwnProperty.call(incomingUwb, key)) {
-        nextTelemetry.uwb[key] = incomingUwb[key] === null
-          ? null
-          : asFiniteNumber(incomingUwb[key], nextTelemetry.uwb[key]);
-      }
-    }
-    nextTelemetry.uwb.goodCount = asFiniteNumber(incomingUwb.goodCount, nextTelemetry.uwb.goodCount || 0);
-    nextTelemetry.uwb.receiverCount = asFiniteNumber(
-      incomingUwb.receiverCount,
-      nextTelemetry.uwb.receiverCount || 0
-    );
-    nextTelemetry.uwb.observingReceiverCount = asFiniteNumber(
-      incomingUwb.observingReceiverCount,
-      nextTelemetry.uwb.observingReceiverCount || 0
-    );
-    if (Array.isArray(incomingUwb.activeReceiverIds)) {
-      nextTelemetry.uwb.activeReceiverIds = incomingUwb.activeReceiverIds
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value >= 1 && value <= 2);
-    }
-    if (typeof incomingUwb.fusionMode === 'string') {
-      nextTelemetry.uwb.fusionMode = incomingUwb.fusionMode;
-    }
-    if (Object.prototype.hasOwnProperty.call(incomingUwb, 'bearingDisagreementDeg')) {
-      nextTelemetry.uwb.bearingDisagreementDeg = incomingUwb.bearingDisagreementDeg === null
-        ? null
-        : asFiniteNumber(incomingUwb.bearingDisagreementDeg, nextTelemetry.uwb.bearingDisagreementDeg);
-    }
-    if (Object.prototype.hasOwnProperty.call(incomingUwb, 'positionDisagreementM')) {
-      nextTelemetry.uwb.positionDisagreementM = incomingUwb.positionDisagreementM === null
-        ? null
-        : asFiniteNumber(incomingUwb.positionDisagreementM, nextTelemetry.uwb.positionDisagreementM);
-    }
-    if (Array.isArray(incomingUwb.sensors)) {
-      nextTelemetry.uwb.sensors = incomingUwb.sensors.map((sensor) => ({ ...sensor }));
-    }
-    if (typeof incomingUwb.online === 'boolean') nextTelemetry.uwb.online = incomingUwb.online;
-    if (typeof incomingUwb.fresh === 'boolean') nextTelemetry.uwb.fresh = incomingUwb.fresh;
-    if (typeof incomingUwb.source === 'string') nextTelemetry.uwb.source = incomingUwb.source;
-    if (typeof incomingUwb.filter === 'string') nextTelemetry.uwb.filter = incomingUwb.filter;
+    nextTelemetry.uwb = mergeUwbTelemetry(nextTelemetry.uwb, newTelemetry.uwb);
   }
 
   if (newTelemetry.imuCalibration && typeof newTelemetry.imuCalibration === 'object') {
@@ -4396,6 +4370,14 @@ telemetrySocket.on('message', (rawMessage) => {
   try {
     const packet = JSON.parse(rawMessage.toString('utf8'));
 
+    if (packet.type === 'uwb') {
+      // This path does not refresh any other sensor or wait for the full telemetry timer.
+      systemState.telemetry = { ...systemState.telemetry,
+        uwb: mergeUwbTelemetry(systemState.telemetry.uwb, packet.payload || {}) };
+      io.emit('uwb_update', systemState.telemetry.uwb);
+      return;
+    }
+
     if (packet.type === 'telemetry') {
       updateTelemetry(packet.payload || {});
       if (!systemState.isConnected) {
@@ -4440,7 +4422,10 @@ if (GIMBAL_AUTO_CONNECT) {
 app.get('/api/status', (req, res) => {
   refreshPeripheralState();
   refreshHardwareState();
-  systemState.camera = readCameraState(systemState.connectivity, req);
+  if (String(cameraConfig.transport || '').toLowerCase() !== 'local') {
+    const directUrl = buildDirectCameraUrl(req, '/stream.mjpg');
+    if (directUrl) systemState.camera = { ...systemState.camera, sourceUrl: directUrl, openUrl: directUrl };
+  }
   res.json({
     success: true,
     timestamp: new Date().toISOString(),
