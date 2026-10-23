@@ -8,7 +8,7 @@ def wrap(angle):
 
 
 class AdaptiveAngularFilter:
-    def __init__(self, stationary_tau=.4, moving_tau=.06):
+    def __init__(self, stationary_tau=.4, moving_tau=.01):
         self.stationary_tau, self.moving_tau = stationary_tau, moving_tau
         self.reset()
 
@@ -39,7 +39,9 @@ class AdaptiveAngularFilter:
             errors = [angle - ma - self.rate * (t - mt) for t, angle in zip(ts, angles)]
             residual = math.sqrt(sum(error ** 2 for error in errors) / max(1, len(errors) - 2))
             rate_error = max(noise_deg * .5, residual) / math.sqrt(denominator)
-            moving = abs(self.rate) > max(4.0, 2.5 * rate_error)
+            # A faster moving output must not amplify occasional noise slopes.
+            # Require stronger trend evidence before leaving stationary mode.
+            moving = abs(self.rate) > max(4.0, 3.5 * rate_error)
             # Release promptly for persistent displacement, not one noisy point.
             recent = self.points[-3:]
             departures = [wrap(angle - self.angle) for _, angle in recent]

@@ -14,7 +14,7 @@ DEFAULTS = {
     'acceleration_std_mps2': 2.0, 'initial_velocity_std_mps': 2.0,
     'nis_threshold': 9.21, 'absolute_gate_m': 0.6,
     'max_relative_speed_mps': 6.0, 'rejection_covariance_scale': 1.25,
-    'adaptive_enabled': True, 'stationary_time_constant_s': .4, 'moving_time_constant_s': .06,
+    'adaptive_enabled': True, 'stationary_time_constant_s': .4, 'moving_time_constant_s': .01,
     'occlusion_enabled': True,
 }
 
