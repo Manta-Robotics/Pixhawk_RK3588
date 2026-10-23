@@ -32,7 +32,17 @@ jobs:
           cache: npm
           cache-dependency-path: rk3588_control_system/package-lock.json
 
-      - name: Install dependencies
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: rk3588_control_system/requirements-test.txt
+
+      - name: Install Python test dependencies
+        run: python -m pip install -r requirements-test.txt
+
+      - name: Install Node.js dependencies
         run: npm ci
 
       - name: Run maintenance checks

@@ -10,9 +10,13 @@
 
 ```bash
 cd rk3588_control_system
+python3 -m pip install -r requirements-test.txt
 npm ci
 npm run maintenance
 ```
+
+自动检查使用 Python 3.11 和上述测试依赖，包含 MAVLink 与 Lua 5.3 脚本测试；
+无需安装完整相机/机器学习运行环境，也不会连接硬件。
 
 `npm run maintenance` 只执行无硬件副作用的测试和静态检查。涉及硬件时，还需要按改动范围完成板端验证：
 
