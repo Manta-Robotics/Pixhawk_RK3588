@@ -21,6 +21,21 @@ test('measurement gate rejects unsafe covariance and noise parameters', () => {
   }
 });
 
+test('adaptive bearing settings are optional, bounded and ordered', () => {
+  const legacy = structuredClone(config);
+  for (const key of ['adaptive_enabled', 'stationary_time_constant_s', 'moving_time_constant_s']) delete legacy.uwb_measurement_filter[key];
+  assert.deepEqual(validateSystemConfig(legacy), []);
+  for (const [key, value] of [['adaptive_enabled', 'yes'], ['stationary_time_constant_s', 0],
+    ['moving_time_constant_s', null], ['moving_time_constant_s', 1]]) {
+    const c = structuredClone(config); c.uwb_measurement_filter[key] = value;
+    assert.ok(validateSystemConfig(c).some(error => error.includes(`uwb_measurement_filter.${key}`)), key);
+  }
+  const reversed = structuredClone(config);
+  reversed.uwb_measurement_filter.stationary_time_constant_s = .1;
+  reversed.uwb_measurement_filter.moving_time_constant_s = .2;
+  assert.ok(validateSystemConfig(reversed).some(error => error.includes('time_constant')));
+});
+
 test('prediction rejects unsafe ranges, non-numeric fields and an unbounded waiting window', () => {
   for (const [key, value] of [['enabled', 'true'], ['horizon_ms', 50000], ['min_samples', 1],
     ['max_throttle_percent', 100], ['max_speed_mps', null], ['braking_deceleration_mps2', 0]]) {
@@ -74,9 +89,9 @@ test('gimbal control selects exactly one supported transport', () => {
   assert.ok(validateSystemConfig(candidate).some((error) => error.includes('control_transport')));
 });
 
-test('gimbal pitch lower limit is the home angle', () => {
+test('gimbal pitch lower limit matches selected camera coordinates', () => {
   assert.equal(config.gimbal.axis.pitch_min_deg, 0);
-  assert.equal(config.gimbal.axis.pitch_home_feedback_deg, 2.5);
+  assert.equal(config.gimbal.axis.pitch_home_feedback_deg, 0);
   assert.ok(config.gimbal.axis.pitch_max_deg > config.gimbal.axis.pitch_min_deg);
 });
 
@@ -85,6 +100,16 @@ test('UDP gimbal control does not require a UART overlay', () => {
   candidate.gimbal.control_transport = 'udp';
   delete candidate.gimbal.uart_overlay;
   delete candidate.gimbal.boot_config;
+  assert.deepEqual(validateSystemConfig(candidate), []);
+});
+
+test('UWB occlusion guard accepts old configs and requires boolean when specified', () => {
+  const candidate = structuredClone(config);
+  delete candidate.uwb_measurement_filter.occlusion_enabled;
+  assert.deepEqual(validateSystemConfig(candidate), []);
+  candidate.uwb_measurement_filter.occlusion_enabled = 'true';
+  assert.ok(validateSystemConfig(candidate).some(e => e.includes('occlusion_enabled')));
+  candidate.uwb_measurement_filter.occlusion_enabled = true;
   assert.deepEqual(validateSystemConfig(candidate), []);
 });
 
@@ -130,4 +155,13 @@ test('asymmetric rover ranges are rejected because zero must remain neutral', ()
   candidate.rover_throttle_min = -80;
   candidate.rover_throttle_max = 100;
   assert.ok(validateSystemConfig(candidate).some((error) => error.includes('symmetric')));
+});
+
+test('SIYI protocol rejects out-of-range limits and incompatible click modes', () => {
+  for (const mutate of [
+    c => { c.gimbal.protocol = 'unknown'; },
+    c => { c.gimbal.axis.pitch_max_deg = 150; },
+    c => { c.gimbal.axis.click_control_mode = 'select_target'; },
+    c => { c.gimbal.siyi.max_rate_command = 101; }
+  ]) { const candidate = structuredClone(config); mutate(candidate); assert.ok(validateSystemConfig(candidate).length > 0); }
 });

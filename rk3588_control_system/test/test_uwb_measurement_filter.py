@@ -2,6 +2,7 @@ import math
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 from uwb_measurement_filter import GatedUwbKalman
@@ -138,5 +139,61 @@ class BridgeGateTests(unittest.TestCase):
             self.bridge._update_uwb_named_value('UWB1_AZ', 400)
         self.assertEqual(self.bridge.uwb_fusion.receivers[1].filter_reason, 'azimuth_out_of_range')
         self.assertIsNone(self.bridge._uwb_measurement_filters[1].axes)
+
+    def wire_value(self, now, name, value, sample_time):
+        self.bridge.flight_data.attitude_updated_at = now
+        msg = SimpleNamespace(
+            get_type=lambda: 'NAMED_VALUE_FLOAT', get_srcSystem=lambda: 1,
+            get_srcComponent=lambda: 1, name=name, value=value,
+            time_boot_ms=sample_time,
+        )
+        with patch('backend.mavlink_bridge.time.time', return_value=now / 1000):
+            self.bridge._parse_message(msg)
+
+    def wire_pair(self, now, sample_time, distance=3):
+        self.wire_value(now, 'UWB1_VALID', 1, sample_time)
+        self.wire_value(now, 'UWB1_DIST', distance, sample_time)
+        self.wire_value(now, 'UWB1_AZ', 0, sample_time + 1)
+
+    def test_new_wire_samples_stay_fresh_with_five_second_diagnostic_sequence(self):
+        self.wire_value(1000, 'UWB1_SEQ', 7, 100)
+        receiver = self.bridge.uwb_fusion.receivers[1]
+        for i in range(40):
+            now = 1000 + i * 100
+            self.wire_pair(now, 100 + i * 100)
+            self.assertTrue(receiver.fresh(now, 800))
+            self.assertEqual(receiver.measurement_updated_at, now)
+        self.assertEqual(receiver.sequence_id, 7)
+        self.assertEqual(self.bridge._uwb_measurement_filters[1].accepted_count, 40)
+
+    def test_replayed_wire_pair_does_not_refresh_accepted_measurement(self):
+        self.wire_pair(1000, 100)
+        self.wire_value(1500, 'UWB1_SEQ', 8, 600)
+        self.wire_pair(2000, 100)
+        receiver = self.bridge.uwb_fusion.receivers[1]
+        self.assertEqual(receiver.measurement_updated_at, 1000)
+        self.assertFalse(receiver.fresh(2000, 800))
+        self.assertEqual(self.bridge._uwb_measurement_filters[1].accepted_count, 1)
+
+    def test_wire_metadata_and_incomplete_or_outlier_samples_cannot_refresh_measurement(self):
+        self.wire_pair(1000, 100)
+        for name in ('SEQ', 'GOOD', 'HB', 'EL', 'VALID'):
+            self.wire_value(2000, 'UWB1_' + name, 1, 1100)
+        self.wire_value(2000, 'UWB1_DIST', 3, 1100)
+        receiver = self.bridge.uwb_fusion.receivers[1]
+        self.assertEqual(receiver.measurement_updated_at, 1000)
+        self.assertFalse(receiver.fresh(2000, 800))
+        self.wire_pair(2100, 1200)
+        for i in range(12):
+            self.wire_pair(2200 + i * 100, 1300 + i * 100)
+        accepted_at = receiver.measurement_updated_at
+        self.wire_pair(3400, 2500, distance=15)
+        self.assertEqual(receiver.measurement_updated_at, accepted_at)
+        self.assertEqual(receiver.filter_reason, 'innovation_outlier')
+
+    def test_sender_clock_wrap_is_a_new_measurement(self):
+        self.wire_pair(1000, 4294967200)
+        self.wire_pair(1100, 0)
+        self.assertEqual(self.bridge.uwb_fusion.receivers[1].measurement_updated_at, 1100)
 
 if __name__ == '__main__': unittest.main()

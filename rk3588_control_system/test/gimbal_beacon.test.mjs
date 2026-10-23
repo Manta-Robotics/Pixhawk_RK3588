@@ -163,3 +163,23 @@ test('enabled 3D extrinsic safely gates measurements without distance', () => {
   assert.equal(result.valid, false);
   assert.equal(result.reason, 'uwb_distance_unavailable');
 });
+
+// Physical acceptance cases for the installed A8: UWB 4 cm below the pivot.
+test('installed A8 mount compensates vertical parallax according to target distance', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { gimbal } = JSON.parse(readFileSync(new URL('../config/system.config.json', import.meta.url), 'utf8'));
+  const predict = (distanceM, elevationDeg = 0, azimuthDeg = 0) => computeBeaconControl({
+    now, uwb: { ...freshUwb, distanceM, elevationDeg, azimuthDeg }, config: gimbal.beacon
+  });
+  const near = predict(1), far = predict(4);
+  assert.equal(near.valid, true);
+  assert.ok(Math.abs(near.targetPitchDeg - 2.29061004) < 1e-5, 'same height as UWB needs a downward camera tilt');
+  assert.ok(Math.abs(far.targetPitchDeg - 0.57293870) < 1e-5, 'parallax shrinks as distance increases');
+  const atCameraHeight = predict(Math.hypot(1, 0.04), Math.atan2(0.04, 1) * 180 / Math.PI);
+  assert.ok(Math.abs(atCameraHeight.targetPitchDeg) < 1e-6, 'camera-height target stays on the horizon');
+  assert.ok(predict(1, -10).targetPitchDeg > near.targetPitchDeg, 'lower targets require more downward tilt');
+  assert.ok(predict(1, 10).targetPitchDeg < 0, 'higher targets require upward tilt');
+  assert.ok(Math.abs(predict(2, 0, 15).targetYawDeg + 15) < 1e-6, 'preserve installed UWB azimuth convention');
+  assert.ok(Math.abs(predict(2, 0, -15).targetYawDeg - 15) < 1e-6);
+  assert.equal(gimbal.beacon.calibration_required, false);
+});

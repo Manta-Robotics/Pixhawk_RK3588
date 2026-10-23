@@ -1,6 +1,7 @@
 import { TraditionalFastGuidance } from './traditional_fast_guidance.js';
 import { usableControlEstimate } from './uwb_target_prediction.js';
 import { RelativeImuControl } from './uwb_relative_imu.js';
+import { RELATIVE_NMPC_DEFAULTS } from './uwb_relative_nmpc.js';
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -52,6 +53,18 @@ export class UwbFollowController {
       prediction: config.prediction || {},
       manualPropulsion: config.manual_propulsion === 'single_side',
       executionMode: ['acro','relative_imu'].includes(config.execution_mode) ? config.execution_mode : null,
+      relativeNmpc: {
+        ...RELATIVE_NMPC_DEFAULTS,
+        ...config.relative_nmpc,
+        enabled: config.relative_nmpc?.enabled === true
+      },
+      gpsSpeedClosedLoop: {
+        enabled: config.gps_speed_closed_loop?.enabled === true,
+        acquireMs: Math.max(0, finite(config.gps_speed_closed_loop?.acquire_ms, 2000)),
+        kp: Math.max(0, finite(config.gps_speed_closed_loop?.kp, 20)),
+        ki: Math.max(0, finite(config.gps_speed_closed_loop?.ki, 8)),
+        maximumObservedSpeedMps: Math.max(0.1, finite(config.gps_speed_closed_loop?.maximum_observed_speed_mps, 5))
+      },
       followingDistanceM: Math.max(0.1, finite(config.following_distance_m, 1.5)),
       controllerProfile: String(config.controller_profile || 'ilos_curvature').trim().toLowerCase() === 'traditional_fast'
         ? 'traditional_fast'

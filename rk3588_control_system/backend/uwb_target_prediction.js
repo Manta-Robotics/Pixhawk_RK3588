@@ -27,8 +27,13 @@ function identity(uwb) {
 }
 
 function measurementKey(uwb) {
-  const sequences = (uwb.sensors || []).filter((s) => (uwb.activeReceiverIds || []).includes(s.receiverId)
-    && number(s.sequenceId) !== null).map((s) => `${s.receiverId}:${s.sequenceId}`).sort();
+  // Versioned posteriors have already passed the bridge's measurement/replay
+  // gate. Their accepted clock advances for each observation; sequenceId is
+  // diagnostic metadata and may stay unchanged for several seconds.
+  const sequences = (uwb.sensors || []).filter((s) => (uwb.activeReceiverIds || []).includes(s.receiverId))
+    .flatMap((s) => s.filterAdmissionVersion === 1 && number(s.measurementUpdatedAt) !== null
+      ? [`${s.receiverId}:accepted:${s.measurementUpdatedAt}`]
+      : number(s.sequenceId) !== null ? [`${s.receiverId}:${s.sequenceId}`] : []).sort();
   return sequences.length ? sequences.join('|') : `time:${uwb.measurementUpdatedAt}`;
 }
 

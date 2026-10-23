@@ -2,6 +2,7 @@
 // Own GPS/IMU + last admitted posterior only; no simulator target/state access.
 // This is a bounded approximate optimizer, not a global optimum or a certified
 // hydrodynamic model. Every applied solution is checked against the same tube.
+import {uwbObservationQuarantined} from './uwb_quality.js';
 const R=Math.PI/180, earth=6378137;
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const wrap=x=>((x+180)%360+360)%360-180;
@@ -38,7 +39,7 @@ export class UwbRejectNmpc {
    ||!fresh(e.lastMeasuredAt,now,p.measurement_gap_ms??450)||e.evaluatedAt!==now
    ||!finite(e.relativeBodyM?.x)||!finite(e.relativeBodyM?.y)||!finite(e.uncertaintyM)||e.uncertaintyM<0
    ||!finite(t.position?.lat)||!finite(t.position?.lon)||!finite(t.attitude?.yaw)
-   ||!s||s.valid===false||s.measurementStatus!=='trusted'||s.receivedMeasurementAt!==e.lastMeasuredAt
+   ||!s||uwbObservationQuarantined(s)||s.valid===false||s.measurementStatus!=='trusted'||s.receivedMeasurementAt!==e.lastMeasuredAt
    ||this.accepted?.measurementAt===e.lastMeasuredAt)return;
   const yaw=t.attitude.yaw*R,b=e.relativeBodyM;
   const trusted=e.velocityEstimate?.trusted===true&&finite(e.targetVelocityNedMps?.x)&&finite(e.targetVelocityNedMps?.y);
@@ -80,7 +81,7 @@ export class UwbRejectNmpc {
    +.10*time+.10*time*time; // own short-horizon model error allowance
   const adaptive=m.clearance_policy==='adaptive';
   const safety=c.safety_distance_m??.3;
-  const live=direction?.trusted===true&&fresh(direction.at,now,p.measurement_gap_ms??450);
+  const live=!sensors.some(uwbObservationQuarantined)&&direction?.trusted===true&&fresh(direction.at,now,p.measurement_gap_ms??450);
   const initialAngle=live?wrap(direction.headingDeg-t.attitude.yaw):wrap(Math.atan2(target.y,target.x)/R-t.attitude.yaw);
   // Covariance, future target motion and stopping distance are already explicit
   // constraints. Replace the legacy blanket 1.2 m by physical safety + a small

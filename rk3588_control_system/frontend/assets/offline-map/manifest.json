@@ -1,0 +1,27 @@
+{
+  "version": 4,
+  "name": "Shenzhen board-hosted offline satellite map",
+  "bounds": {
+    "west": 113.718170688,
+    "south": 22.373566761,
+    "east": 114.658220739,
+    "north": 22.875257567
+  },
+  "center": [
+    114.0579,
+    22.5431
+  ],
+  "tileSize": 256,
+  "minZoom": 9,
+  "maxZoom": 18,
+  "initialZoom": 10.2,
+  "source": "ESA WorldCover overview plus Shenzhen 0.5 m imagery",
+  "sourceResolution": "Shenzhen 0.5 m source; offline display through zoom 18 (about 0.55 m/pixel)",
+  "shortResolution": "Shenzhen ~0.5 m",
+  "attribution": "深圳市规划和自然资源数据管理中心 / ESA WorldCover",
+  "displayLabel": "地图来源：板载深圳约0.5米离线卫星影像；位置来源：Pixhawk GPS。",
+  "mobileLabelZh": "板载深圳离线卫星图 · 约0.5米 · GPS：Pixhawk",
+  "mobileLabelEn": "Offline Shenzhen satellite · ~0.5 m · GPS: Pixhawk",
+  "coverage": "Shenzhen municipality",
+  "notForNavigation": true
+}

@@ -31,7 +31,8 @@ except ImportError:
     sys.exit(1)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = Path(os.environ.get('MANTA_CONFIG_FILE', BASE_DIR / 'config' / 'system.config.json'))
+CONFIG_PATH = Path(os.environ.get('MANTA_CONFIG_FILE') or os.environ.get('MANTA_CONFIG_PATH')
+                   or BASE_DIR / 'config' / 'system.config.json')
 LOGS_DIR = Path(os.environ.get('MANTA_LOGS_DIR', BASE_DIR / 'logs'))
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 MAVLINK_LOG_PATH = LOGS_DIR / 'mavlink.log'
@@ -335,6 +336,7 @@ class MAVLinkBridge:
         self.command_socket.setblocking(False)
 
         self.telemetry_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.telemetry_socket.setblocking(False)
         self.node_addr = ('127.0.0.1', self.telemetry_port)
 
         self.mission_planner_tcp_enabled = bool(mission_planner_tcp_config.get('enabled', False))
@@ -368,11 +370,31 @@ class MAVLinkBridge:
             return raw_name.decode('utf-8', 'ignore').rstrip('\x00')
         return str(raw_name).rstrip('\x00')
 
-    def _update_uwb_named_value(
+    def _update_uwb_named_value(self, name: str, value: float,
+                                source=None, sample_time_boot_ms=None) -> None:
+        parsed = self.uwb_fusion.parse_name(name)
+        receiver = None
+        if parsed is not None:
+            receiver_id = parsed[0] or self.uwb_fusion._legacy_receiver(source)
+            receiver = self.uwb_fusion.receivers[receiver_id]
+        def revision():
+            if receiver is None:
+                return None
+            return (receiver.received_measurement_at, receiver.measurement_updated_at,
+                    receiver.rejected_count, receiver.valid, receiver.measurement_status)
+        before = revision()
+        self._apply_uwb_named_value(name, value, source, sample_time_boot_ms)
+        if receiver is not None and revision() != before and hasattr(self, 'telemetry_socket'):
+            # Publish completed observations and invalidations immediately. No GPS,
+            # IMU, camera request, or periodic telemetry deadline is awaited here.
+            self._send_node_packet('uwb', self._uwb_payload())
+
+    def _apply_uwb_named_value(
         self,
         name: str,
         value: float,
         source: Optional[tuple[int, int]] = None,
+        sample_time_boot_ms: Optional[int] = None,
     ) -> None:
         now_ms = int(time.time() * 1000)
         updated = self.uwb_fusion.update(name, value, source=source, now_ms=now_ms)
@@ -395,15 +417,25 @@ class MAVLinkBridge:
             elif field_name == 'VALID' and receiver.valid is False:
                 self.uwb_fusion.apply_measurement_result(receiver_id, kalman.reject(now_ms, 'radio_invalid', heading))
             elif field_name in ('DIST', 'AZ') and receiver.received_measurement_at == now_ms and not receiver.pending_distance and not receiver.pending_azimuth:
-                result = kalman.update(receiver.raw_distance_m, receiver.raw_azimuth_deg, now_ms, heading,
-                                       valid=receiver.valid, sequence_id=receiver.sequence_id, tag_id=receiver.tag_id)
+                if abs(receiver.raw_azimuth_deg) > self.uwb_fusion.receiver_fov_half_deg:
+                    # Reject out-of-coverage observations before they move the
+                    # posterior or enter its raw-consensus recovery history.
+                    result = kalman.reject(now_ms, 'outside_receiver_fov', heading)
+                else:
+                    result = kalman.update(
+                        receiver.raw_distance_m, receiver.raw_azimuth_deg, now_ms, heading,
+                        valid=receiver.valid,
+                        # SEQ is low-rate diagnostic metadata. The sender's
+                        # timestamp identifies each complete observation.
+                        sequence_id=sample_time_boot_ms if sample_time_boot_ms is not None else receiver.sequence_id,
+                        tag_id=receiver.tag_id)
                 self.uwb_fusion.apply_measurement_result(receiver_id, result)
             elif field_name == 'EL' and abs(value) <= 90:
                 # Elevation is separate from the horizontal Cartesian state.
                 self.uwb_fusion.set_filtered(receiver_id, 'EL', value)
             self._refresh_uwb_fusion()
             return
-        if field_name in {'GOOD', 'VALID', 'SEQ', 'ANCH', 'TAG', 'STAT', 'RX', 'HB', 'CRC', 'LEN', 'REJECTED'}:
+        if field_name in {'GOOD', 'VALID', 'SEQ', 'ANCH', 'TAG', 'STAT', 'RX', 'HB', 'CRC', 'LEN', 'SENT', 'AVL', 'REJECTED'}:
             self._refresh_uwb_fusion()
             return
         filtered = self._uwb_filters[(receiver_id, field_name)].update(value)
@@ -637,7 +669,7 @@ class MAVLinkBridge:
         if self.mission_planner_server is None or self.master is None:
             return
 
-        while True:
+        for _ in range(8):
             try:
                 client, peer = self.mission_planner_server.accept()
             except BlockingIOError:
@@ -1366,7 +1398,7 @@ class MAVLinkBridge:
         logger.warning('Unknown command from node: %s', command)
 
     def _poll_commands(self) -> None:
-        while True:
+        for _ in range(32):
             try:
                 raw_data, _addr = self.command_socket.recvfrom(65535)
             except BlockingIOError:
@@ -1584,7 +1616,10 @@ class MAVLinkBridge:
                 source = (int(msg.get_srcSystem()), int(msg.get_srcComponent()))
             except (AttributeError, TypeError, ValueError):
                 pass
-            self._update_uwb_named_value(name, value, source=source)
+            self._update_uwb_named_value(
+                name, value, source=source,
+                sample_time_boot_ms=getattr(msg, 'time_boot_ms', None),
+            )
 
         elif msg_type == 'STATUSTEXT':
             raw_text = getattr(msg, 'text', '')
@@ -1660,7 +1695,11 @@ class MAVLinkBridge:
         if self.master is None:
             return
 
-        while True:
+        # Bound a busy receive burst so commands and heartbeats still get time.
+        deadline = time.monotonic() + 0.003
+        for _ in range(256):
+            if time.monotonic() >= deadline:
+                break
             try:
                 msg = self.master.recv_match(blocking=False)
             except Exception as exc:
@@ -1672,6 +1711,45 @@ class MAVLinkBridge:
 
             self._broadcast_mission_planner(msg)
             self._parse_message(msg)
+
+    def _uwb_payload(self, fused_uwb=None) -> Dict[str, Any]:
+        if fused_uwb is None:
+            self._refresh_uwb_fusion()
+            fused_uwb = self.uwb_fusion.fused(int(time.time() * 1000))
+        uwb_fresh = fused_uwb['fresh']
+        return {
+            'online': uwb_fresh,
+            'fresh': uwb_fresh,
+            'distanceM': self.uwb_data.distance_m,
+            'azimuthDeg': self.uwb_data.azimuth_deg,
+            'elevationDeg': self.uwb_data.elevation_deg,
+            'rawDistanceM': self.uwb_data.raw_distance_m,
+            'rawAzimuthDeg': self.uwb_data.raw_azimuth_deg,
+            'rawElevationDeg': self.uwb_data.raw_elevation_deg,
+            'goodCount': self.uwb_data.good_count,
+            'updatedAt': self.uwb_data.updated_at,
+            'measurementUpdatedAt': max((sensor.get('measurementUpdatedAt') or 0 for sensor in fused_uwb['sensors'] if sensor['receiverId'] in fused_uwb['active_receiver_ids']), default=0) or None,
+            'receiverCount': fused_uwb['receiver_count'],
+            'observingReceiverCount': fused_uwb['observing_receiver_count'],
+            'activeReceiverIds': fused_uwb['active_receiver_ids'],
+            'fusionMode': fused_uwb['fusion_mode'],
+            'bearingDisagreementDeg': fused_uwb['bearing_disagreement_deg'],
+            'positionDisagreementM': fused_uwb['position_disagreement_m'],
+            'relativeXM': fused_uwb['relative_x_m'],
+            'relativeYM': fused_uwb['relative_y_m'],
+            'sensors': fused_uwb['sensors'],
+            'source': (
+                'TELEM1_NAMED_VALUE_FLOAT'
+                if self.uwb_fusion.enabled_receiver_ids == {1}
+                else 'TELEM2_NAMED_VALUE_FLOAT'
+                if self.uwb_fusion.enabled_receiver_ids == {2}
+                else 'TELEM1_TELEM2_NAMED_VALUE_FLOAT'
+            ),
+            'filter': 'raw_validation_innovation_gate_cv_kalman_then_fusion' if self.uwb_filter_enabled else 'fast_per_receiver_kalman_then_body_xy_fusion',
+            'measurementStatus': 'trusted' if uwb_fresh else 'suspect' if any(s.get('measurementStatus') == 'suspect' for s in fused_uwb['sensors']) else 'unavailable',
+            'rejectionReason': None if uwb_fresh else next((s.get('filterReason') for s in fused_uwb['sensors'] if s.get('measurementStatus') == 'suspect'), None),
+            'measurementNis': max((s['filterNis'] for s in fused_uwb['sensors'] if s.get('filterNis') is not None and (not uwb_fresh or s['receiverId'] in fused_uwb['active_receiver_ids'])), default=None),
+        }
 
     def _telemetry_payload(self) -> Dict[str, Any]:
         temperature_payload: Dict[str, Any] = {}
@@ -1685,7 +1763,6 @@ class MAVLinkBridge:
         now_ms = int(time.time() * 1000)
         self._refresh_uwb_fusion()
         fused_uwb = self.uwb_fusion.fused(now_ms)
-        uwb_fresh = fused_uwb['fresh']
 
         return {
             'position': {
@@ -1759,39 +1836,7 @@ class MAVLinkBridge:
                 'course': self.flight_data.gps_course,
                 'updatedAt': self.flight_data.gps_updated_at,
             },
-            'uwb': {
-                'online': uwb_fresh,
-                'fresh': uwb_fresh,
-                'distanceM': self.uwb_data.distance_m,
-                'azimuthDeg': self.uwb_data.azimuth_deg,
-                'elevationDeg': self.uwb_data.elevation_deg,
-                'rawDistanceM': self.uwb_data.raw_distance_m,
-                'rawAzimuthDeg': self.uwb_data.raw_azimuth_deg,
-                'rawElevationDeg': self.uwb_data.raw_elevation_deg,
-                'goodCount': self.uwb_data.good_count,
-                'updatedAt': self.uwb_data.updated_at,
-                'measurementUpdatedAt': max((sensor.get('measurementUpdatedAt') or 0 for sensor in fused_uwb['sensors'] if sensor['receiverId'] in fused_uwb['active_receiver_ids']), default=0) or None,
-                'receiverCount': fused_uwb['receiver_count'],
-                'observingReceiverCount': fused_uwb['observing_receiver_count'],
-                'activeReceiverIds': fused_uwb['active_receiver_ids'],
-                'fusionMode': fused_uwb['fusion_mode'],
-                'bearingDisagreementDeg': fused_uwb['bearing_disagreement_deg'],
-                'positionDisagreementM': fused_uwb['position_disagreement_m'],
-                'relativeXM': fused_uwb['relative_x_m'],
-                'relativeYM': fused_uwb['relative_y_m'],
-                'sensors': fused_uwb['sensors'],
-                'source': (
-                    'TELEM1_NAMED_VALUE_FLOAT'
-                    if self.uwb_fusion.enabled_receiver_ids == {1}
-                    else 'TELEM2_NAMED_VALUE_FLOAT'
-                    if self.uwb_fusion.enabled_receiver_ids == {2}
-                    else 'TELEM1_TELEM2_NAMED_VALUE_FLOAT'
-                ),
-                'filter': 'raw_validation_innovation_gate_cv_kalman_then_fusion' if self.uwb_filter_enabled else 'fast_per_receiver_kalman_then_body_xy_fusion',
-                'measurementStatus': 'trusted' if uwb_fresh else 'suspect' if any(s.get('measurementStatus') == 'suspect' for s in fused_uwb['sensors']) else 'unavailable',
-                'rejectionReason': None if uwb_fresh else next((s.get('filterReason') for s in fused_uwb['sensors'] if s.get('measurementStatus') == 'suspect'), None),
-                'measurementNis': max((s['filterNis'] for s in fused_uwb['sensors'] if s.get('filterNis') is not None and (not uwb_fresh or s['receiverId'] in fused_uwb['active_receiver_ids'])), default=None),
-            },
+            'uwb': self._uwb_payload(fused_uwb),
             'imuCalibration': {
                 'active': self.imu_calibration.active,
                 'mode': self.imu_calibration.mode,
@@ -1825,9 +1870,9 @@ class MAVLinkBridge:
             while self.connected:
                 now = time.time()
 
+                self._poll_mavlink()
                 self._poll_commands()
                 self._poll_mission_planner()
-                self._poll_mavlink()
                 self._request_pilot_steer_type()
                 self._request_acro_parameters()
 

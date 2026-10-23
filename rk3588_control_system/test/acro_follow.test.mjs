@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -7,7 +8,7 @@ import { NeuralUwbFollowController } from '../backend/neural_uwb_follow.js';
 import { IntermittentUwbFollow } from '../backend/uwb_target_prediction.js';
 const config={execution_mode:'acro',manual_propulsion:'single_side',prediction:{enabled:true},max_speed_mps:2,commissioning_speed_mps:2,
   bearing_sign:1,bearing_scale:1,bearing_offset_deg:0,controller_profile:'traditional_fast',
-  max_yaw_rate_deg_s:14,neural_model_path:new URL('../models/smart_usv_uwb_policy.json',import.meta.url).pathname};
+  max_yaw_rate_deg_s:14,neural_model_path:fileURLToPath(new URL('../models/smart_usv_uwb_policy.json',import.meta.url))};
 const telemetry=(now=1000)=>({armed:true,flightMode:'ACRO',pilotSteering:{ready:true,type:0},
   acroControl:{ready:true,updatedAt:now},attitude:{yaw:0,yawRateDegS:0,updatedAt:now},
   position:{updatedAt:now},ekf:{healthy:true,updatedAt:now},gps:{fixType:3},velocity:{vx:0,vy:0},

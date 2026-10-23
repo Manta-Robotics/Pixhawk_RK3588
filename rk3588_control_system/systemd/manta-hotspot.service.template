@@ -7,6 +7,7 @@ Before=manta-captive-portal.service
 [Service]
 Type=oneshot
 WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=-/etc/manta/manta.env
 ExecStart=/bin/bash __PROJECT_DIR__/scripts/ensure_hotspot.sh start
 ExecStop=/bin/bash __PROJECT_DIR__/scripts/ensure_hotspot.sh stop
 RemainAfterExit=yes

@@ -1,0 +1,4 @@
+# Dependencies for hardware-free maintenance tests; camera/ML packages are not required.
+pymavlink>=2.4.36,<3
+# Execute the deployed Pixhawk script under Lua 5.3 instead of skipping its tests.
+lupa>=2,<3

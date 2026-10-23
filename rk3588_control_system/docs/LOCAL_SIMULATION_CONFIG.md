@@ -6,7 +6,7 @@ Stonefish 环境独立维护在 <https://github.com/Manta-Robotics/Stonefish_SIT
 
 配置入口：
 
-- `MANTA_CONFIG_FILE`：覆盖主配置文件路径；不设置时继续使用 `config/system.config.json`。
+- `MANTA_CONFIG_FILE`：覆盖 Node 服务和 Python 桥接的主配置文件路径；优先于兼容入口 `MANTA_CONFIG_PATH`。两者都不设置时继续使用 `config/system.config.json`。
 - `MANTA_LOGS_DIR`：覆盖 Python 桥接日志目录；不设置时继续使用项目 `logs/`。
 - `MANTA_SIMULATION=1`：显式启用本地仿真外设隔离。
 

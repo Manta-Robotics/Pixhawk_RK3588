@@ -11,13 +11,13 @@ from typing import Deque, Dict, Iterable, Optional, Tuple
 
 
 UWB_NAME_PATTERNS = (
-    re.compile(r"^UWB([12])_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN)$"),
-    re.compile(r"^UWB_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN)([12])$"),
+    re.compile(r"^UWB([12])_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL)$"),
+    re.compile(r"^UWB_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL)([12])$"),
 )
 LEGACY_UWB_NAMES = {
     "UWB_DIST", "UWB_AZ", "UWB_EL", "UWB_GOOD", "UWB_VALID",
     "UWB_SEQ", "UWB_ANCH", "UWB_TAG", "UWB_STAT",
-    "UWB_RX", "UWB_HB", "UWB_CRC", "UWB_LEN",
+    "UWB_RX", "UWB_HB", "UWB_CRC", "UWB_LEN", "UWB_SENT", "UWB_AVL",
 }
 
 
@@ -40,6 +40,8 @@ class UwbReceiver:
     azimuth_deg: Optional[float] = None
     elevation_deg: Optional[float] = None
     good_count: int = 0
+    sent_count: Optional[int] = None
+    max_available: Optional[int] = None
     sequence_id: Optional[int] = None
     anchor_id: Optional[int] = None
     tag_id: Optional[int] = None
@@ -59,9 +61,13 @@ class UwbReceiver:
     filter_nis: Optional[float] = None
     filter_innovation_m: Optional[float] = None
     filter_uncertainty_m: Optional[float] = None
+    unsmoothed_azimuth_deg: Optional[float] = None
+    angular_filter_mode: Optional[str] = None
+    smoothing_displacement_m: Optional[float] = None
     filter_recovery_count: int = 0
     filter_admission_version: int = 0
     filter_recovery_diagnostics: Optional[dict] = None
+    occlusion_diagnostics: Optional[dict] = None
     pending_distance: bool = False
     pending_azimuth: bool = False
     distance_sample_at: Optional[int] = None
@@ -109,6 +115,8 @@ class UwbReceiver:
             "bodyAzimuthDeg": self.body_azimuth_deg(),
             "elevationDeg": self.elevation_deg,
             "goodCount": self.good_count,
+            "sentCount": self.sent_count,
+            "maxAvailable": self.max_available,
             "sequenceId": self.sequence_id,
             "anchorId": self.anchor_id,
             "tagId": self.tag_id,
@@ -127,9 +135,13 @@ class UwbReceiver:
             "filterNis": self.filter_nis,
             "filterInnovationM": self.filter_innovation_m,
             "filterUncertaintyM": self.filter_uncertainty_m,
+            "unsmoothedAzimuthDeg": self.unsmoothed_azimuth_deg,
+            "angularFilterMode": self.angular_filter_mode,
+            "smoothingDisplacementM": self.smoothing_displacement_m,
             "filterRecoveryCount": self.filter_recovery_count,
             "filterAdmissionVersion": self.filter_admission_version,
             "filterRecoveryDiagnostics": self.filter_recovery_diagnostics,
+            "occlusionDiagnostics": self.occlusion_diagnostics,
             "fresh": self.fresh(now_ms, timeout_ms),
             "rejectedCount": self.rejected_count,
             "invalidReason": self.invalid_reason,
@@ -239,9 +251,12 @@ class DualUwbFusion:
         return max(0.01, min(1.0, distance_score * azimuth_score))
 
     def _coverage_weight(self, receiver: UwbReceiver) -> float:
-        if receiver.azimuth_deg is None:
+        # Antenna coverage describes the observation angle, not a predicted
+        # posterior which may lag or overshoot a turn at the field boundary.
+        angle = receiver.raw_azimuth_deg if receiver.require_gate else receiver.azimuth_deg
+        if angle is None:
             return 0.0
-        off_axis_deg = abs(wrap_angle_deg(receiver.azimuth_deg))
+        off_axis_deg = abs(wrap_angle_deg(angle))
         if off_axis_deg > self.receiver_fov_half_deg:
             return 0.0
         normalized = off_axis_deg / self.receiver_fov_half_deg
@@ -332,6 +347,12 @@ class DualUwbFusion:
         if field_name == "GOOD":
             receiver.good_count = max(0, int(value))
             return receiver_id, field_name
+        if field_name == "SENT":
+            receiver.sent_count = max(0, int(value))
+            return receiver_id, field_name
+        if field_name == "AVL":
+            receiver.max_available = max(0, int(value))
+            return receiver_id, field_name
         if field_name == "VALID":
             receiver.valid = value > 0
             if not receiver.valid:
@@ -417,9 +438,13 @@ class DualUwbFusion:
         receiver.filter_nis = result.get('nis')
         receiver.filter_innovation_m = result.get('innovation_m')
         receiver.filter_uncertainty_m = result.get('uncertainty_m')
+        receiver.unsmoothed_azimuth_deg = result.get('unsmoothed_azimuth_deg')
+        receiver.angular_filter_mode = result.get('angular_filter_mode')
+        receiver.smoothing_displacement_m = result.get('smoothing_displacement_m')
         receiver.filter_recovery_count = result.get('recovery_count', 0)
         receiver.filter_admission_version = result.get('admission_version', 0)
         receiver.filter_recovery_diagnostics = result.get('recovery_diagnostics')
+        receiver.occlusion_diagnostics = result.get('occlusion_diagnostics')
         receiver.rejected_count = max(receiver.rejected_count, result.get('rejected_count', 0))
         if result.get('accepted'):
             self.set_filtered(receiver_id, 'DIST', result['distance_m'])
@@ -458,6 +483,14 @@ class DualUwbFusion:
         ]
         for sensor in sensors:
             receiver = self.receivers[sensor["receiverId"]]
+            angle = receiver.raw_azimuth_deg if receiver.require_gate else receiver.azimuth_deg
+            sensor['withinFov'] = None if angle is None else abs(wrap_angle_deg(angle)) <= self.receiver_fov_half_deg
+            sensor['fovHalfDeg'] = self.receiver_fov_half_deg
+            sensor['fusionExclusionReason'] = (
+                'no_complete_measurement' if angle is None else
+                'outside_receiver_fov' if not sensor['withinFov'] else
+                receiver.filter_reason if not receiver.complete() else
+                'stale_measurement' if not receiver.fresh(now_ms, self.freshness_ms) else None)
             sensor["stabilityWeight"] = self._stability_weight(receiver)
             sensor["fusionWeight"] = self._coverage_weight(receiver) * sensor["stabilityWeight"]
         if not candidates:

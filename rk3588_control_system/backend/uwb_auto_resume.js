@@ -12,15 +12,18 @@ export class UwbAutoResume {
   this.enabled=config.auto_resume_after_uwb_timeout===true;
   this.c=config;this.p=config.prediction||{};this.cancel();
  }
- clearWindow(){this.samples=0;this.firstAt=null;this.lastAt=null;this.point=null;}
+ clearWindow(){this.samples=0;this.firstAt=null;this.lastAt=null;this.point=null;this.windowTarget=null;}
  cancel(){this.requested=false;this.pending=false;this.attempting=false;this.target=null;this.lastStopReason=null;this.resumeAt=null;this.clearWindow();}
+ // An operator may request acquisition before the first valid radio packet.
+ // This authorizes waiting only; observe() still requires the complete resume gate.
+ search(){this.cancel();this.requested=true;this.pending=true;this.lastStopReason='uwb_stale';}
  started(telemetry={},now=Date.now(),automatic=false){
   this.requested=this.enabled;this.pending=false;this.attempting=false;
   this.target=targetId(telemetry.uwb)||this.target;this.resumeAt=automatic?now:null;this.clearWindow();
  }
  stopped(reason){
   this.resumeAt=null;this.clearWindow();this.attempting=false;this.lastStopReason=reason;
-  this.pending=this.enabled&&this.requested&&reason==='prediction_wait_timeout';
+  this.pending=this.enabled&&this.requested&&['prediction_wait_timeout','uwb_stale'].includes(reason);
   if(!this.pending)this.requested=false;
  }
  attemptFailed(reason){
@@ -70,6 +73,9 @@ export class UwbAutoResume {
     return false;
   }
   if(this.lastAt!==null&&at<=this.lastAt)return false;
+  // Acquisition may start without a known tag. Never mix identities in its
+  // confirmation window, even when a caller has not yet bound a target.
+  if(this.lastAt!==null&&id!==this.windowTarget)this.clearWindow();
   const theta=(a.yaw+bearing)*Math.PI/180,point={x:range*Math.cos(theta),y:range*Math.sin(theta)};
   const dt=this.lastAt===null?0:(at-this.lastAt)/1000;
   const own=telemetry.velocity||{};
@@ -77,7 +83,7 @@ export class UwbAutoResume {
   if(this.lastAt!==null&&(at-this.lastAt>gap||Math.hypot(point.x-this.point.x,point.y-this.point.y)
     >(this.p.innovation_gate_m??.6)+((this.p.max_target_speed_mps??3)+ownSpeed)*dt))this.clearWindow();
   if(this.firstAt===null)this.firstAt=at;
-  this.lastAt=at;this.point=point;this.samples++;
+  this.lastAt=at;this.point=point;this.windowTarget=id;this.samples++;
   return this.samples>=(this.p.min_samples??3)&&at-this.firstAt>=180;
  }
  beginAttempt(){if(!this.pending||this.attempting)return false;this.attempting=true;return true;}

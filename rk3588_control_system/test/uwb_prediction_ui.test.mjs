@@ -21,6 +21,8 @@ test('lost raw UWB still renders an explicitly labelled dashed predicted target'
     uwbFollow: { active: true, relativeBodyM: { x: 3, y: 1 }, targetEstimate: {
       usable: true, source: 'predicted', relativeBodyM: { x: 3, y: 1 } } } };
   const context = vm.createContext({ state, $, localize: (zh) => zh, clamp: (x, lo, hi) => Math.min(hi, Math.max(lo, x)) });
+  vm.runInContext('var window=globalThis;\n' + fs.readFileSync(new URL('../frontend/js/uwb-display-smoother.js', import.meta.url), 'utf8'), context);
+  vm.runInContext(html.slice(html.indexOf('var uwbDisplaySmoother='), html.indexOf('function renderRelativePosition(){')), context);
   const fn = html.slice(html.indexOf('function renderRelativePosition(){'), html.indexOf('function currentMapLocation(){'));
   vm.runInContext(fn + '\nrenderRelativePosition();', context);
   assert.equal($('#relativePositionTitle').textContent, '目标预测位置');
@@ -30,4 +32,18 @@ test('lost raw UWB still renders an explicitly labelled dashed predicted target'
   state.uwbFollow.targetEstimate.usable = false;
   vm.runInContext('renderRelativePosition()', context);
   assert.equal($('#relativeFusionMode').textContent, '等待 UWB');
+  state.uwb = { online: true, fresh: true, distanceM: 3, azimuthDeg: 20, measurementUpdatedAt: Date.now() };
+  const before = structuredClone(state.uwb);
+  vm.runInContext('renderRelativePosition()', context);
+  assert.equal($('#relativePositionPanel').dataset.state, 'online');
+  assert.deepEqual(state.uwb, before);
+  state.uwb = { online: true, fresh: false, measurementStatus: 'suspect', sensors: [
+    { receiverId: 1, occlusionDiagnostics: { state: 'quarantined' } } ] };
+  vm.runInContext('renderRelativePosition()', context);
+  assert.equal($('#relativePositionPanel').dataset.state, 'offline');
+  assert.equal($('#relativeFusionMode').textContent, '定位异常，等待恢复');
+  state.connected = false;
+  vm.runInContext('renderRelativePosition()', context);
+  assert.equal($('#relativePositionPanel').dataset.state, 'offline');
+  assert.equal(vm.runInContext('uwbDisplaySmoother.angle', context), null);
 });
