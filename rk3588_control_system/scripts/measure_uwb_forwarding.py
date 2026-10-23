@@ -9,6 +9,7 @@ import argparse
 import json
 import time
 from urllib.request import urlopen
+from urllib.parse import urljoin
 
 
 class CounterWindow:
@@ -39,9 +40,17 @@ def fetch(url):
     return payload.get('telemetry', payload)
 
 
+def connected(url):
+    # /api/telemetry contains only telemetry. Connection state lives in the
+    # status envelope, not in telemetry.connected.
+    with urlopen(urljoin(url, 'status'), timeout=2) as response:
+        payload = json.load(response)
+    return payload.get('data', {}).get('pixhawkStatus') == 'connected'
+
+
 def measure(url, duration, interval):
     telemetry = fetch(url)
-    if telemetry.get('connected') is not True:
+    if not connected(url):
         raise RuntimeError('Flight controller is disconnected; no live measurement was taken.')
     rows = {}
     for sensor in telemetry.get('uwb', {}).get('sensors', []):
@@ -54,13 +63,16 @@ def measure(url, duration, interval):
     started = time.monotonic()
     requests = 0
     disconnected = False
+    next_connection_check = started + 1
     while time.monotonic() - started < duration:
         telemetry = fetch(url)
         at = time.monotonic()
         requests += 1
-        if telemetry.get('connected') is not True:
-            disconnected = True
-            break
+        if at >= next_connection_check:
+            if not connected(url):
+                disconnected = True
+                break
+            next_connection_check = time.monotonic() + 1
         for sensor in telemetry.get('uwb', {}).get('sensors', []):
             row = rows.get(sensor['receiverId'])
             if row is None:

@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import io
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('uwb_rates', Path(__file__).resolve().parents[1] / 'scripts/measure_uwb_forwarding.py')
 rates = importlib.util.module_from_spec(spec)
@@ -8,6 +10,13 @@ spec.loader.exec_module(rates)
 
 
 class RateCounterTests(unittest.TestCase):
+    def test_connection_state_comes_from_status_envelope(self):
+        with patch.object(rates, 'urlopen', return_value=io.BytesIO(b'{"data":{"pixhawkStatus":"connected"}}')) as request:
+            self.assertTrue(rates.connected('http://127.0.0.1:3000/api/telemetry'))
+            self.assertEqual(request.call_args.args[0], 'http://127.0.0.1:3000/api/status')
+        with patch.object(rates, 'urlopen', return_value=io.BytesIO(b'{"data":{"pixhawkStatus":"disconnected"}}')):
+            self.assertFalse(rates.connected('http://127.0.0.1:3000/api/telemetry'))
+
     def test_diagnostic_refreshes_not_http_polls_determine_rate(self):
         counter = rates.CounterWindow()
         for index in range(301):
