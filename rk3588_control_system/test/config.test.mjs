@@ -21,6 +21,21 @@ test('measurement gate rejects unsafe covariance and noise parameters', () => {
   }
 });
 
+test('adaptive bearing settings are optional, bounded and ordered', () => {
+  const legacy = structuredClone(config);
+  for (const key of ['adaptive_enabled', 'stationary_time_constant_s', 'moving_time_constant_s']) delete legacy.uwb_measurement_filter[key];
+  assert.deepEqual(validateSystemConfig(legacy), []);
+  for (const [key, value] of [['adaptive_enabled', 'yes'], ['stationary_time_constant_s', 0],
+    ['moving_time_constant_s', null], ['moving_time_constant_s', 1]]) {
+    const c = structuredClone(config); c.uwb_measurement_filter[key] = value;
+    assert.ok(validateSystemConfig(c).some(error => error.includes(`uwb_measurement_filter.${key}`)), key);
+  }
+  const reversed = structuredClone(config);
+  reversed.uwb_measurement_filter.stationary_time_constant_s = .1;
+  reversed.uwb_measurement_filter.moving_time_constant_s = .2;
+  assert.ok(validateSystemConfig(reversed).some(error => error.includes('time_constant')));
+});
+
 test('prediction rejects unsafe ranges, non-numeric fields and an unbounded waiting window', () => {
   for (const [key, value] of [['enabled', 'true'], ['horizon_ms', 50000], ['min_samples', 1],
     ['max_throttle_percent', 100], ['max_speed_mps', null], ['braking_deceleration_mps2', 0]]) {

@@ -545,6 +545,9 @@
     "nis_threshold": 9.21,
     "absolute_gate_m": 0.6,
     "max_relative_speed_mps": 6.0,
-    "rejection_covariance_scale": 1.25
+    "rejection_covariance_scale": 1.25,
+    "adaptive_enabled": true,
+    "stationary_time_constant_s": 0.4,
+    "moving_time_constant_s": 0.06
   }
 }

@@ -6,12 +6,14 @@ Without reliable heading, a frame is rejected instead of inventing a pose.
 """
 import math
 import itertools
+from uwb_angular_filter import AdaptiveAngularFilter
 
 DEFAULTS = {
     'enabled': True, 'distance_std_m': 0.12, 'angle_std_deg': 2.0,
     'acceleration_std_mps2': 2.0, 'initial_velocity_std_mps': 2.0,
     'nis_threshold': 9.21, 'absolute_gate_m': 0.6,
     'max_relative_speed_mps': 6.0, 'rejection_covariance_scale': 1.25,
+    'adaptive_enabled': True, 'stationary_time_constant_s': .4, 'moving_time_constant_s': .06,
 }
 
 
@@ -68,8 +70,12 @@ class GatedUwbKalman:
                  bearing_sign=1.0, bearing_scale=1.0, bearing_offset_deg=0.0, mount_yaw_deg=0.0):
         self.config = {**DEFAULTS, **(config or {})}
         for key in DEFAULTS:
-            if key != 'enabled' and (not finite(self.config[key]) or self.config[key] <= 0):
+            if key not in ('enabled', 'adaptive_enabled') and (not finite(self.config[key]) or self.config[key] <= 0):
                 raise ValueError('invalid UWB measurement filter parameter: ' + key)
+        if not isinstance(self.config['adaptive_enabled'], bool):
+            raise ValueError('adaptive_enabled must be boolean')
+        if not .01 <= self.config['moving_time_constant_s'] <= self.config['stationary_time_constant_s'] <= 2:
+            raise ValueError('invalid adaptive angular time constants')
         if self.config['rejection_covariance_scale'] < 1:
             raise ValueError('rejection covariance scale must not reduce uncertainty')
         if not finite(bearing_scale) or bearing_scale <= 0 or bearing_sign not in (-1, 1):
@@ -90,6 +96,7 @@ class GatedUwbKalman:
         self.raw_window = []
         self.recovery_count = 0
         self.recovery_diagnostics = {'reason': 'warming_up', 'hits': 0}
+        self.angular_filter = AdaptiveAngularFilter(self.config['stationary_time_constant_s'], self.config['moving_time_constant_s'])
 
     def _predict(self, now_ms):
         if self.axes is None: return
@@ -168,7 +175,15 @@ class GatedUwbKalman:
         self.at=self.last_accepted_at=now_ms
         self.accepted_count+=1;self.recovery_count+=1
         self.status,self.reason='trusted','raw_window_reacquired'
+        self.angular_filter.reset()
+        self._update_angular_filter(position, now_ms)
         return {**self.result(now_ms,heading_deg),'accepted':True,'duplicate':False}
+
+    def _update_angular_filter(self, measurement, now_ms):
+        if self.config['adaptive_enabled']:
+            posterior = math.degrees(math.atan2(self.axes[1].position, self.axes[0].position))
+            raw = math.degrees(math.atan2(measurement[1], measurement[0]))
+            self.angular_filter.observe(raw, posterior, now_ms, self.config['angle_std_deg'] * self.scale)
 
     def update(self, distance_m, azimuth_deg, now_ms, heading_deg, *, elevation_deg=None,
                valid=True, sequence_id=None, tag_id=None):
@@ -178,6 +193,7 @@ class GatedUwbKalman:
         if self.at is not None and now_ms < self.at:
             self.axes = None; self.at = None; self.last_accepted_at = None
             self.raw_window=[]
+            self.angular_filter.reset()
             return self.reject(now_ms, 'measurement_clock_reset', heading_deg)
         if not finite(distance_m) or not self.minimum_distance_m <= distance_m <= self.maximum_distance_m:
             return self.reject(now_ms, 'distance_out_of_range', heading_deg)
@@ -194,6 +210,7 @@ class GatedUwbKalman:
         if tag_id and self.tag_id and tag_id != self.tag_id:
             self.axes = None; self.at = None; self.last_accepted_at = None; self.tag_id = tag_id
             self.raw_window=[]
+            self.angular_filter.reset()
             return self.reject(now_ms, 'target_identity_changed', heading_deg)
         if tag_id: self.tag_id = tag_id
         angle = math.radians(wrap((azimuth_deg + self.mount) * self.sign * self.scale + self.offset + heading_deg))
@@ -222,6 +239,7 @@ class GatedUwbKalman:
         self.last_accepted_at = now_ms
         self.accepted_count += 1
         self.status, self.reason = 'trusted', 'kalman_updated'
+        self._update_angular_filter(measurement, now_ms)
         return {**self.result(now_ms, heading_deg), 'accepted': True, 'duplicate': False}
 
     def result(self, now_ms, heading_deg=None):
@@ -234,9 +252,20 @@ class GatedUwbKalman:
         dt = min(10.0, max(0, (now_ms - self.at) / 1000.0))
         predicted = [axis.predicted(dt, self.config['acceleration_std_mps2'] ** 2) for axis in self.axes]
         output['uncertainty_m'] = 2 * math.sqrt(max(0, predicted[0][1] + predicted[1][1]))
+        x, y = predicted[0][0], predicted[1][0]
+        distance = math.hypot(x, y)
+        world_angle = math.degrees(math.atan2(y, x))
+        smooth_angle = self.angular_filter.angle if self.config['adaptive_enabled'] and self.angular_filter.angle is not None else world_angle
+        displacement = 2 * distance * abs(math.sin(math.radians(wrap(smooth_angle - world_angle)) / 2))
+        output['base_uncertainty_m'] = output['uncertainty_m']
+        output['uncertainty_m'] += displacement
+        output.update(angular_filter_mode=self.angular_filter.mode if self.config['adaptive_enabled'] else 'disabled',
+                      angular_filter_rate_deg_s=self.angular_filter.rate / self.scale,
+                      smoothing_displacement_m=displacement)
         if finite(heading_deg):
-            x, y = predicted[0][0], predicted[1][0]
-            output['distance_m'] = math.hypot(x, y)
-            physical_angle = wrap(math.degrees(math.atan2(y, x)) - heading_deg - self.offset)
+            output['distance_m'] = distance
+            original_angle = wrap(world_angle - heading_deg - self.offset)
+            output['unsmoothed_azimuth_deg'] = wrap(original_angle / (self.sign * self.scale) - self.mount)
+            physical_angle = wrap(smooth_angle - heading_deg - self.offset)
             output['azimuth_deg'] = wrap(physical_angle / (self.sign * self.scale) - self.mount)
         return output

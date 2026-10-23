@@ -61,6 +61,9 @@ class UwbReceiver:
     filter_nis: Optional[float] = None
     filter_innovation_m: Optional[float] = None
     filter_uncertainty_m: Optional[float] = None
+    unsmoothed_azimuth_deg: Optional[float] = None
+    angular_filter_mode: Optional[str] = None
+    smoothing_displacement_m: Optional[float] = None
     filter_recovery_count: int = 0
     filter_admission_version: int = 0
     filter_recovery_diagnostics: Optional[dict] = None
@@ -131,6 +134,9 @@ class UwbReceiver:
             "filterNis": self.filter_nis,
             "filterInnovationM": self.filter_innovation_m,
             "filterUncertaintyM": self.filter_uncertainty_m,
+            "unsmoothedAzimuthDeg": self.unsmoothed_azimuth_deg,
+            "angularFilterMode": self.angular_filter_mode,
+            "smoothingDisplacementM": self.smoothing_displacement_m,
             "filterRecoveryCount": self.filter_recovery_count,
             "filterAdmissionVersion": self.filter_admission_version,
             "filterRecoveryDiagnostics": self.filter_recovery_diagnostics,
@@ -430,6 +436,9 @@ class DualUwbFusion:
         receiver.filter_nis = result.get('nis')
         receiver.filter_innovation_m = result.get('innovation_m')
         receiver.filter_uncertainty_m = result.get('uncertainty_m')
+        receiver.unsmoothed_azimuth_deg = result.get('unsmoothed_azimuth_deg')
+        receiver.angular_filter_mode = result.get('angular_filter_mode')
+        receiver.smoothing_displacement_m = result.get('smoothing_displacement_m')
         receiver.filter_recovery_count = result.get('recovery_count', 0)
         receiver.filter_admission_version = result.get('admission_version', 0)
         receiver.filter_recovery_diagnostics = result.get('recovery_diagnostics')

@@ -259,3 +259,11 @@ Lua 回归测试使用可选 `lupa` 的 Lua 5.3 解释器执行实际脚本并�
 过程噪声改为按时间积分的连续白噪声模型，沿用原加速度参数，以 100 ms 的调参基准转换为噪声密度。相同时间的预测分成四次 25 ms 或一次 100 ms 时，协方差一致，避免频率提高后滤波器变得过度自信。矩阵形式参见 [FilterPy 连续白噪声文档](https://filterpy.readthedocs.io/en/latest/common/common.html#filterpy.common.Q_continuous_white_noise)。原创新阈值、绝对距离门限及最大速度门限保留。
 
 视野外观测在修正滤波和进入恢复窗口前被拒绝；有效视野仍由 `uwb_dual.receiver_fov_half_deg` 决定（当前 70°），不通过扩大视野凑频率。启用门控的接收器按本次原始观测角判断天线覆盖，避免滤波预测角的滞后/过冲造成重复拒绝；船体控制自身的转向、距离与推进器保护继续执行。接收器遥测新增 `withinFov`、`fovHalfDeg`、`fusionExclusionReason`，便于区分视野、滤波和过期原因。无效、重复或仅有诊断的数据不会刷新被接受的测量时间。
+
+### UWB 自适应角度滤波与显示平滑
+
+完整观测仍逐帧接收、判定、发布（40 Hz 输入不降采样）。`uwb_measurement_filter.adaptive_enabled` 默认为 true；`stationary_time_constant_s=0.4`、`moving_time_constant_s=0.06`。先运行原有原始观测/航向/创新门控，再在世界坐标系平滑已接纳角度；距离和接纳时间保持原值。500 ms 原始角度趋势及连续偏移触发运动模式，稳定 600 ms 后转入静止模式。标签切换、时钟回退或观测间隔超过 250 ms 清除平滑历史。
+
+控制侧不确定度增加平滑方向相对原卡尔曼后验的弦长偏移，继续供已有预测、净空与制动保护使用。`unsmoothedAzimuthDeg`、`angularFilterMode`、`smoothingDisplacementM` 可用于同帧比较；有效帧计数不会因平滑增加。显示层另用 120 ms 圆周平滑，仅作用于显示副本；失效、过期、断线立即撤销实测点，不改变控制指令和测量时间。静止平滑会增加运动初期的延迟，需结合本机实际响应评估，不能视为测角精度标定。
+
+安信可 BU04 的 PDOA 上位机和标定/安装测试资料可参考：https://docs.ai-thinker.com/uwb_1/ 。其公开上位机 ZIP 是可执行程序及运行库，不能据此认定有可直接移植的滤波源码；距离标定模板也不是角度抖动滤波。当前实现不写入该厂商固件或标定参数。
