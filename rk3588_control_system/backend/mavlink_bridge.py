@@ -31,8 +31,9 @@ except ImportError:
     sys.exit(1)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = Path(os.environ.get('MANTA_CONFIG_PATH', str(BASE_DIR / 'config' / 'system.config.json')))
-LOGS_DIR = BASE_DIR / 'logs'
+CONFIG_PATH = Path(os.environ.get('MANTA_CONFIG_FILE') or os.environ.get('MANTA_CONFIG_PATH')
+                   or BASE_DIR / 'config' / 'system.config.json')
+LOGS_DIR = Path(os.environ.get('MANTA_LOGS_DIR', BASE_DIR / 'logs'))
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 MAVLINK_LOG_PATH = LOGS_DIR / 'mavlink.log'
 

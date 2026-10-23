@@ -45,7 +45,9 @@ import { SiyiGimbal, decodeSiyiPackets } from './siyi_gimbal.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const SYSTEM_CONFIG_FILE = path.resolve(process.env.MANTA_CONFIG_PATH || path.join(PROJECT_ROOT, 'config', 'system.config.json'));
+const SYSTEM_CONFIG_FILE = path.resolve(process.env.MANTA_CONFIG_FILE || process.env.MANTA_CONFIG_PATH
+  || path.join(PROJECT_ROOT, 'config', 'system.config.json'));
+const SIMULATION_MODE = process.env.MANTA_SIMULATION === '1';
 
 function readJsonFile(relativePath, fallback, options = {}) {
   const filePath = path.isAbsolute(relativePath) ? relativePath : path.join(PROJECT_ROOT, relativePath);
@@ -252,6 +254,20 @@ if (!enabledChannels.has(ROVER_LEFT_CHANNEL) || !enabledChannels.has(ROVER_RIGHT
 }
 
 const app = express();
+if (SIMULATION_MODE) {
+  if (WEB_HOST !== '127.0.0.1' || BRIDGE_HOST !== '127.0.0.1'
+      || BRIDGE_COMMAND_PORT !== 15551 || BRIDGE_TELEMETRY_PORT !== 15552
+      || config.serial_port !== '/dev/manta-sitl-virtual') {
+    throw new Error('Simulation requires the isolated local transport configuration');
+  }
+  app.use((req, res, next) => {
+    res.setHeader('X-Manta-Mode', 'Local-PC-SITL');
+    if (/^\/api\/(gimbal|camera|vision|calibration|system|network|bluetooth|wifi|hotspot)(\/|$)/.test(req.path)) {
+      return res.status(501).json({success:false, message:'Hardware API disabled in local simulation.'});
+    }
+    next();
+  });
+}
 app.disable('x-powered-by');
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -311,7 +327,7 @@ const GIMBAL_TRACK_HOLD_ENTER_Y_PX = Math.max(2, Number(GIMBAL_AXIS.track_hold_e
 const GIMBAL_TRACK_HOLD_EXIT_X_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_X_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_x_px || GIMBAL_TRACK_HOLD_EXIT_PX));
 const GIMBAL_TRACK_HOLD_EXIT_Y_PX = Math.max(GIMBAL_TRACK_HOLD_ENTER_Y_PX + 1, Number(GIMBAL_AXIS.track_hold_exit_y_px || GIMBAL_TRACK_HOLD_EXIT_PX));
 const GIMBAL_FACE_TRACK = gimbalConfig.face || {};
-const GIMBAL_FACE_KEEP_WARM = GIMBAL_FACE_TRACK.keep_warm !== false;
+const GIMBAL_FACE_KEEP_WARM = !SIMULATION_MODE && GIMBAL_FACE_TRACK.keep_warm !== false;
 const GIMBAL_FACE_PREWARM = GIMBAL_FACE_TRACK.prewarm !== false;
 const GIMBAL_FACE_PROFILE_NAME = String(GIMBAL_FACE_TRACK.active_profile || 'balanced').trim().toLowerCase();
 const GIMBAL_FACE_PROFILE_DEFAULTS = { quality: 512, balanced: 384, fast: 320 };
@@ -2655,6 +2671,7 @@ function isGimbalTrackingActive() {
 }
 
 function cleanupStaleGimbalTrackWorkers(reason = 'cleanup') {
+  if (SIMULATION_MODE) return;
   const scriptMarkers = [
     path.join(PROJECT_ROOT, 'scripts', 'infer_video.py'),
     path.join(PROJECT_ROOT, 'scripts', 'face_track.py')
