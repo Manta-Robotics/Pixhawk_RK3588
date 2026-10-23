@@ -1,5 +1,6 @@
 // Shared vessel UWB recovery. Runtime inputs are vessel telemetry only.
 // Simulation truth and local-computer state are never estimator inputs.
+import {uwbObservationQuarantined} from './uwb_quality.js';
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const fresh = (at, now, timeout) => finite(at) && at > 0 && at <= now && now-at <= timeout;
 
@@ -19,6 +20,9 @@ export class RawWindowRecovery {
     const sensors=(uwb.sensors || []).filter(s=>finite(s.receivedMeasurementAt) || finite(s.rawRejectedAt));
     if (!anchor || !estimator.lastPose || sensors.length!==1) return diagnostic('raw_receiver_or_pose_unavailable');
     const sensor=sensors[0],at=Math.max(sensor.receivedMeasurementAt || 0,sensor.rawRejectedAt || 0);
+    if(uwbObservationQuarantined(sensor)){
+      this.reset();return diagnostic('occlusion_quarantine');
+    }
     if (!fresh(at,now,c.measurement_gap_ms)) return diagnostic('raw_stale');
     // Window age is measured at the newest *observation*, not receipt of this
     // HTTP/control snapshot; transport latency must not delete good old hits.

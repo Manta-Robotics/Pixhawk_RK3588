@@ -10,6 +10,7 @@
     packet = packet || {};
     var clock = packet.measurementUpdatedAt;
     var valid = packet.online === true && packet.fresh === true
+      && (!packet.measurementStatus || packet.measurementStatus === 'trusted')
       && finite(packet.distanceM) && packet.distanceM > 0 && finite(packet.azimuthDeg);
     if (finite(clock) && (now - clock > 700 || now < clock)) valid = false;
     if (!valid) { this.reset(); return { valid: false }; }

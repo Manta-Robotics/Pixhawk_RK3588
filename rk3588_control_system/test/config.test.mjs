@@ -103,6 +103,16 @@ test('UDP gimbal control does not require a UART overlay', () => {
   assert.deepEqual(validateSystemConfig(candidate), []);
 });
 
+test('UWB occlusion guard accepts old configs and requires boolean when specified', () => {
+  const candidate = structuredClone(config);
+  delete candidate.uwb_measurement_filter.occlusion_enabled;
+  assert.deepEqual(validateSystemConfig(candidate), []);
+  candidate.uwb_measurement_filter.occlusion_enabled = 'true';
+  assert.ok(validateSystemConfig(candidate).some(e => e.includes('occlusion_enabled')));
+  candidate.uwb_measurement_filter.occlusion_enabled = true;
+  assert.deepEqual(validateSystemConfig(candidate), []);
+});
+
 test('UDP gimbal control requires a destination and valid port', () => {
   const missingHost = structuredClone(config);
   delete missingHost.gimbal.udp_host;

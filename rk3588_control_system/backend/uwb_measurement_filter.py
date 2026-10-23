@@ -7,6 +7,7 @@ Without reliable heading, a frame is rejected instead of inventing a pose.
 import math
 import itertools
 from uwb_angular_filter import AdaptiveAngularFilter
+from uwb_occlusion_guard import UwbOcclusionGuard
 
 DEFAULTS = {
     'enabled': True, 'distance_std_m': 0.12, 'angle_std_deg': 2.0,
@@ -14,6 +15,7 @@ DEFAULTS = {
     'nis_threshold': 9.21, 'absolute_gate_m': 0.6,
     'max_relative_speed_mps': 6.0, 'rejection_covariance_scale': 1.25,
     'adaptive_enabled': True, 'stationary_time_constant_s': .4, 'moving_time_constant_s': .06,
+    'occlusion_enabled': True,
 }
 
 
@@ -70,10 +72,12 @@ class GatedUwbKalman:
                  bearing_sign=1.0, bearing_scale=1.0, bearing_offset_deg=0.0, mount_yaw_deg=0.0):
         self.config = {**DEFAULTS, **(config or {})}
         for key in DEFAULTS:
-            if key not in ('enabled', 'adaptive_enabled') and (not finite(self.config[key]) or self.config[key] <= 0):
+            if key not in ('enabled', 'adaptive_enabled', 'occlusion_enabled') and (not finite(self.config[key]) or self.config[key] <= 0):
                 raise ValueError('invalid UWB measurement filter parameter: ' + key)
         if not isinstance(self.config['adaptive_enabled'], bool):
             raise ValueError('adaptive_enabled must be boolean')
+        if not isinstance(self.config['occlusion_enabled'], bool):
+            raise ValueError('occlusion_enabled must be boolean')
         if not .01 <= self.config['moving_time_constant_s'] <= self.config['stationary_time_constant_s'] <= 2:
             raise ValueError('invalid adaptive angular time constants')
         if self.config['rejection_covariance_scale'] < 1:
@@ -97,6 +101,8 @@ class GatedUwbKalman:
         self.recovery_count = 0
         self.recovery_diagnostics = {'reason': 'warming_up', 'hits': 0}
         self.angular_filter = AdaptiveAngularFilter(self.config['stationary_time_constant_s'], self.config['moving_time_constant_s'])
+        self.occlusion_guard = UwbOcclusionGuard(self.config['max_relative_speed_mps'],
+            self.config['distance_std_m'], self.config['angle_std_deg'] * self.scale)
 
     def _predict(self, now_ms):
         if self.axes is None: return
@@ -108,6 +114,10 @@ class GatedUwbKalman:
         self.at = now_ms
 
     def reject(self, now_ms, reason, heading_deg=None):
+        if self.config['occlusion_enabled'] and reason in ('radio_invalid', 'distance_out_of_range'):
+            self.occlusion_guard.radio_loss()
+        if reason not in ('innovation_outlier', 'occlusion_suspected'):
+            self.occlusion_guard.interrupt_confirmation()
         self._predict(now_ms)
         # Time propagation already grows covariance during loss. Rejection
         # frequency must not itself make an arbitrary new cluster trusted.
@@ -168,13 +178,14 @@ class GatedUwbKalman:
         # not fresh admitted positions. Reset may therefore remain uncertain.
         return best
 
-    def recover_candidate(self, candidate, now_ms, heading_deg):
+    def recover_candidate(self, candidate, now_ms, heading_deg, measurement):
         _,_,position,velocity,p00,p11,_=candidate
         self.axes=[Axis(z,p00,p11) for z in position]
         for axis,v in zip(self.axes,velocity): axis.velocity=v
         self.at=self.last_accepted_at=now_ms
         self.accepted_count+=1;self.recovery_count+=1
         self.status,self.reason='trusted','raw_window_reacquired'
+        self.occlusion_guard.accept(measurement, now_ms)
         self.angular_filter.reset()
         self._update_angular_filter(position, now_ms)
         return {**self.result(now_ms,heading_deg),'accepted':True,'duplicate':False}
@@ -194,6 +205,7 @@ class GatedUwbKalman:
             self.axes = None; self.at = None; self.last_accepted_at = None
             self.raw_window=[]
             self.angular_filter.reset()
+            self.occlusion_guard.reset()
             return self.reject(now_ms, 'measurement_clock_reset', heading_deg)
         if not finite(distance_m) or not self.minimum_distance_m <= distance_m <= self.maximum_distance_m:
             return self.reject(now_ms, 'distance_out_of_range', heading_deg)
@@ -211,26 +223,36 @@ class GatedUwbKalman:
             self.axes = None; self.at = None; self.last_accepted_at = None; self.tag_id = tag_id
             self.raw_window=[]
             self.angular_filter.reset()
+            self.occlusion_guard.reset()
             return self.reject(now_ms, 'target_identity_changed', heading_deg)
         if tag_id: self.tag_id = tag_id
         angle = math.radians(wrap((azimuth_deg + self.mount) * self.sign * self.scale + self.offset + heading_deg))
         measurement = (distance_m * math.cos(angle), distance_m * math.sin(angle))
         # Isotropic R conservatively covers radial and transverse sensor noise.
         variance = self.config['distance_std_m'] ** 2 + (distance_m * math.radians(self.config['angle_std_deg'])) ** 2
-        candidate=self.raw_candidate(measurement,variance,now_ms)
-        if self.axes is None:
-            self.axes = [Axis(z, variance, self.config['initial_velocity_std_mps'] ** 2) for z in measurement]
-            self.at = now_ms
-        else:
+        outlier = False
+        if self.axes is not None:
             self._predict(now_ms)
             residual = [z - axis.position for z, axis in zip(measurement, self.axes)]
             self.nis = sum(r * r / (axis.p00 + variance) for r, axis in zip(residual, self.axes))
             self.innovation_m = math.hypot(*residual)
             age = max(0, (now_ms - self.last_accepted_at) / 1000.0)
             absolute_limit = self.config['absolute_gate_m'] + self.config['max_relative_speed_mps'] * age
-            if self.nis > self.config['nis_threshold'] or self.innovation_m > absolute_limit:
+            outlier = self.nis > self.config['nis_threshold'] or self.innovation_m > absolute_limit
+        if self.config['occlusion_enabled'] and not self.occlusion_guard.check(measurement, now_ms):
+            # Exclude suspect raw data from BOTH correction and independent
+            # recovery. A coherent reflected path must not bypass this guard.
+            self.raw_window = []
+            self.recovery_diagnostics = {'reason': 'occlusion_quarantine', 'hits': 0}
+            return self.reject(now_ms, 'innovation_outlier' if outlier else 'occlusion_suspected', heading_deg)
+        candidate=self.raw_candidate(measurement,variance,now_ms)
+        if self.axes is None:
+            self.axes = [Axis(z, variance, self.config['initial_velocity_std_mps'] ** 2) for z in measurement]
+            self.at = now_ms
+        else:
+            if outlier:
                 if candidate and now_ms-self.last_accepted_at>=200:
-                    return self.recover_candidate(candidate,now_ms,heading_deg)
+                    return self.recover_candidate(candidate,now_ms,heading_deg,measurement)
                 return self.reject(now_ms, 'innovation_outlier', heading_deg)
             for axis, z in zip(self.axes, measurement): axis.correct(z, variance)
         speed = math.hypot(*(axis.velocity for axis in self.axes))
@@ -239,6 +261,7 @@ class GatedUwbKalman:
         self.last_accepted_at = now_ms
         self.accepted_count += 1
         self.status, self.reason = 'trusted', 'kalman_updated'
+        self.occlusion_guard.accept(measurement, now_ms)
         self._update_angular_filter(measurement, now_ms)
         return {**self.result(now_ms, heading_deg), 'accepted': True, 'duplicate': False}
 
@@ -248,6 +271,8 @@ class GatedUwbKalman:
                   'rejected_count': self.rejected_count, 'nis': self.nis, 'innovation_m': self.innovation_m,
                   'uncertainty_m': None, 'distance_m': None, 'azimuth_deg': None}
         output.update(recovery_count=self.recovery_count,recovery_diagnostics=self.recovery_diagnostics.copy())
+        output['occlusion_diagnostics'] = (self.occlusion_guard.diagnostics.copy()
+            if self.config['occlusion_enabled'] else {'state': 'disabled', 'reason': None})
         if not self.axes: return output
         dt = min(10.0, max(0, (now_ms - self.at) / 1000.0))
         predicted = [axis.predicted(dt, self.config['acceleration_std_mps2'] ** 2) for axis in self.axes]

@@ -38,3 +38,11 @@ test('display step reaches 90 percent within 325 ms without synthetic source upd
   assert.ok(view.azimuthDeg >= 18 && view.azimuthDeg < 20);
   assert.equal(f.clock, 1025); assert.equal(f.target, 20);
 });
+
+test('declared suspect position cannot be displayed even if fresh flag is inconsistent', () => {
+  const f = new Smoother(); f.view(packet(1000), 1000);
+  const p = { ...packet(1025, 60), measurementStatus: 'suspect' }, before = structuredClone(p);
+  assert.equal(f.view(p, 1025).valid, false);
+  assert.equal(f.angle, null);
+  assert.deepEqual(p, before);
+});

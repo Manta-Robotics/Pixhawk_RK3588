@@ -1,6 +1,7 @@
 // GPS/IMU waiting assistance, with independently confirmed live UWB heading.
 // No simulator truth, flight-controller parameter or motor PWM access.
 import {UwbRejectNmpc} from './uwb_reject_nmpc.js';
+import {uwbObservationQuarantined} from './uwb_quality.js';
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const wrap=x=>((x+180)%360+360)%360-180;
 const rad=Math.PI/180;
@@ -34,6 +35,7 @@ export class UwbGpsDriftHold {
   const sensors=(u.sensors||[]).filter(s=>finite(s.receivedMeasurementAt)||finite(s.rawRejectedAt));
   if(sensors.length!==1)return no('one_raw_receiver_required');
   const s=sensors[0],at=Math.max(s.receivedMeasurementAt||0,s.rawRejectedAt||0);
+  if(uwbObservationQuarantined(s)){this.bearings=[];return no('occlusion_quarantine');}
   if(!fresh(at,now,gap)||s.valid===false||at!==s.receivedMeasurementAt)return no('raw_invalid_or_stale');
   // A position-KF innovation rejection is not evidence of a bad bearing.
   // Evaluate raw heading in an IMU-stabilized frame, independently of range.
@@ -78,7 +80,7 @@ export class UwbGpsDriftHold {
  }
  refreshRangeCertificate(now,telemetry){
   const u=telemetry.uwb||{},s=(u.sensors||[])[0],at=u.measurementUpdatedAt,p=this.c.prediction||{};
-  if(!s||u.measurementStatus!=='trusted'||s.measurementStatus!=='trusted'||!u.fresh
+  if(!s||uwbObservationQuarantined(s)||u.measurementStatus!=='trusted'||s.measurementStatus!=='trusted'||!u.fresh
     ||!fresh(at,now,p.measurement_gap_ms??450)||s.receivedMeasurementAt!==at
     ||!finite(u.distanceM)||!finite(s.filterUncertaintyM)||s.filterUncertaintyM<0
     ||this.rangeCertificate?.measurementAt===at)return;

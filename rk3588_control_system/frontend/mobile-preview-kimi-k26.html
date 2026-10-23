@@ -1288,7 +1288,7 @@ function renderUwbFollow(){
   if(follow.active&&follow.relativeImuControl&&!follow.pausePropulsion)status.textContent=(follow.planner==="nmpc"?(follow.gpsSpeedControlActive?localize("GPS 闭环预测 · ","GPS predictive control · "):localize("UWB 相对预测 · ","UWB relative predictive control · ")):(follow.gpsSpeedControlActive?localize("GPS 速度闭环 · ","GPS speed feedback · "):localize("UWB 角度跟随 · ","UWB bearing follow · ")))+status.textContent;
   if(follow.active&&follow.planner==="nmpc"&&follow.pausePropulsion)status.textContent=follow.reason==="nmpc_relative_motion_warming_up"?localize("建立相对运动估计","Estimating relative motion"):localize("预测约束未满足，推进暂停","Prediction constraints unmet; propulsion paused");
   if(searching&&follow.waitingReason&&follow.waitingReason!=="uwb_stale")status.textContent=localize("搜索 UWB · ","Searching for UWB · ")+(labels[follow.waitingReason]||follow.waitingReason);
-  if(follow.active&&["innovation_outlier","distance_out_of_range","azimuth_out_of_range","elevation_out_of_range","non_finite_measurement"].includes(state.uwb&&state.uwb.rejectionReason))status.textContent=localize("拒绝异常值 · ","Outlier rejected · ")+status.textContent;
+  if(follow.active&&["innovation_outlier","occlusion_suspected","distance_out_of_range","azimuth_out_of_range","elevation_out_of_range","non_finite_measurement"].includes(state.uwb&&state.uwb.rejectionReason))status.textContent=localize("拒绝异常值 · ","Outlier rejected · ")+status.textContent;
   if(follow.active&&estimate.source==="predicted"&&Number.isFinite(estimate.predictionAgeMs))status.textContent+=" · "+(estimate.predictionAgeMs/1000).toFixed(1)+"s · "+localize("误差界 ","Error bound ")+Number(estimate.uncertaintyM||0).toFixed(2)+"m";
   renderRelativePosition();
   if(state.driveMode==="auto"){
@@ -1563,7 +1563,8 @@ function renderRelativePosition(){
   if(!valid){
     relativeDisplaySmoother.reset();
     point.setAttribute("cx","90");point.setAttribute("cy","56");vector.setAttribute("x2","90");vector.setAttribute("y2","56");
-    $("#relativeFusionMode").textContent=localize("等待 UWB","WAITING UWB");
+    var quarantine=(uwb.sensors||[]).some(function(s){return s.occlusionDiagnostics&&["suspect","quarantined","recovering"].includes(s.occlusionDiagnostics.state)});
+    $("#relativeFusionMode").textContent=quarantine?localize("定位异常，等待恢复","POSITION SUSPECT"):localize("等待 UWB","WAITING UWB");
     $("#relativePositionValue").textContent=localize("前 -- · 左 --","FWD -- · LEFT --");
     $("#relativeRangeValue").textContent="-- m / --°";$("#relativeRingLabel").textContent="5 m";return;
   }

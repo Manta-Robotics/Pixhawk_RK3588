@@ -37,6 +37,11 @@ test('lost raw UWB still renders an explicitly labelled dashed predicted target'
   vm.runInContext('renderRelativePosition()', context);
   assert.equal($('#relativePositionPanel').dataset.state, 'online');
   assert.deepEqual(state.uwb, before);
+  state.uwb = { online: true, fresh: false, measurementStatus: 'suspect', sensors: [
+    { receiverId: 1, occlusionDiagnostics: { state: 'quarantined' } } ] };
+  vm.runInContext('renderRelativePosition()', context);
+  assert.equal($('#relativePositionPanel').dataset.state, 'offline');
+  assert.equal($('#relativeFusionMode').textContent, '定位异常，等待恢复');
   state.connected = false;
   vm.runInContext('renderRelativePosition()', context);
   assert.equal($('#relativePositionPanel').dataset.state, 'offline');

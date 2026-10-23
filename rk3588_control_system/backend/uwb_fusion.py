@@ -67,6 +67,7 @@ class UwbReceiver:
     filter_recovery_count: int = 0
     filter_admission_version: int = 0
     filter_recovery_diagnostics: Optional[dict] = None
+    occlusion_diagnostics: Optional[dict] = None
     pending_distance: bool = False
     pending_azimuth: bool = False
     distance_sample_at: Optional[int] = None
@@ -140,6 +141,7 @@ class UwbReceiver:
             "filterRecoveryCount": self.filter_recovery_count,
             "filterAdmissionVersion": self.filter_admission_version,
             "filterRecoveryDiagnostics": self.filter_recovery_diagnostics,
+            "occlusionDiagnostics": self.occlusion_diagnostics,
             "fresh": self.fresh(now_ms, timeout_ms),
             "rejectedCount": self.rejected_count,
             "invalidReason": self.invalid_reason,
@@ -442,6 +444,7 @@ class DualUwbFusion:
         receiver.filter_recovery_count = result.get('recovery_count', 0)
         receiver.filter_admission_version = result.get('admission_version', 0)
         receiver.filter_recovery_diagnostics = result.get('recovery_diagnostics')
+        receiver.occlusion_diagnostics = result.get('occlusion_diagnostics')
         receiver.rejected_count = max(receiver.rejected_count, result.get('rejected_count', 0))
         if result.get('accepted'):
             self.set_filtered(receiver_id, 'DIST', result['distance_m'])

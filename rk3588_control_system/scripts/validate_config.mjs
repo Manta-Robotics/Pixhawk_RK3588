@@ -199,6 +199,8 @@ export function validateSystemConfig(config) {
     if (!isObject(measurementFilter)) errors.push('uwb_measurement_filter must be an object');
     else {
       if (typeof measurementFilter.enabled !== 'boolean') errors.push('uwb_measurement_filter.enabled must be boolean');
+      if (measurementFilter.occlusion_enabled !== undefined && typeof measurementFilter.occlusion_enabled !== 'boolean')
+        errors.push('uwb_measurement_filter.occlusion_enabled must be boolean');
       if (measurementFilter.adaptive_enabled !== undefined && typeof measurementFilter.adaptive_enabled !== 'boolean')
         errors.push('uwb_measurement_filter.adaptive_enabled must be boolean');
       for (const [key, fallback, min, max] of [['stationary_time_constant_s', .4, .1, 2], ['moving_time_constant_s', .06, .01, .3]]) {
