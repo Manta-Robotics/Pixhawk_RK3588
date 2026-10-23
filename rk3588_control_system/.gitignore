@@ -53,3 +53,8 @@ config/system.config.json.bak
 temp/
 tmp/
 .tmp/
+
+# Local hardware profiles and recovery snapshots
+backups/
+recordings/
+config/windows.config.json

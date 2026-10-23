@@ -2,18 +2,21 @@
 
 ## 开发分支与提交
 
-1. 主板仓库默认在 `main` 开发。一次可以修改多个相关文件，但应先完成对应检查，再把一个可解释的维护单元提交并直接 Push 到 `origin/main`。
-2. 一个提交只处理一个可解释的问题；提交信息使用动词开头，并说明影响的子系统。未验证的中间状态不要 Push 到 `main`。
-3. 涉及电机输出、失联保护、急停、网络维护链路、systemd 启动链或大范围重构时，使用临时 `codex/...` 或功能分支，通过 Pull Request 审核后再合并。
-4. `main` 上的直接提交以 commit 和 GitHub Actions 作为记录；只有走分支评审时才会产生 Pull Request 记录。
+1. 在 `codex/manta-new-board-migration` 或独立功能分支开发，不直接在运行中的 `main` 上堆叠未验证改动。
+2. 一个提交只处理一个可解释的问题；提交信息使用动词开头，并说明影响的子系统。
+3. Push 后通过 Pull Request 合并到 `main`，在 PR 中记录验证结果和回滚方式。
 
 ## 提交前检查
 
 ```bash
 cd rk3588_control_system
+python3 -m pip install -r requirements-test.txt
 npm ci
 npm run maintenance
 ```
+
+自动检查使用 Python 3.11 和上述测试依赖，包含 MAVLink 与 Lua 5.3 脚本测试；
+无需安装完整相机/机器学习运行环境，也不会连接硬件。
 
 `npm run maintenance` 只执行无硬件副作用的测试和静态检查。涉及硬件时，还需要按改动范围完成板端验证：
 
@@ -31,7 +34,7 @@ npm run maintenance
 - 不提交热点密码、SSH 密钥、飞控参数备份、录像、日志、临时 bundle 或设备专属凭据。
 - 模型文件变更必须记录来源、许可证、输入输出、类别定义、目标硬件和性能基线。
 
-## 提交或 PR 的最小记录内容
+## PR 描述最小内容
 
 - 变更目的和范围。
 - 影响的目录、服务和接口。

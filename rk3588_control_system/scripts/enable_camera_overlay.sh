@@ -13,6 +13,7 @@ import sys
 cfg = json.load(open(sys.argv[1], 'r', encoding='utf-8'))
 camera = cfg.get('camera', {})
 values = {
+	'CAMERA_ENABLED': '1' if camera.get('enabled', True) else '0',
 	'BOOT_CONFIG': camera.get('boot_config', '/boot/firmware/ubuntuEnv.txt'),
 	'CAMERA_OVERLAY': camera.get('overlay', ''),
 	'CAMERA_SENSOR': camera.get('sensor', 'camera'),
@@ -23,6 +24,11 @@ for key, value in values.items():
 	print(f"{key}={shlex.quote(str(value))}")
 PY
 )"
+
+if [[ "$CAMERA_ENABLED" != "1" ]]; then
+	echo "[enable-camera] Camera is disabled in config; skipping overlay."
+	exit 0
+fi
 
 if [[ ! -f "$BOOT_CONFIG" ]]; then
 	echo "[enable-camera] Boot config not found: $BOOT_CONFIG" >&2
@@ -54,6 +60,11 @@ if [[ -z "$OVERLAY_DTBO" ]]; then
 	echo "[enable-camera] Expected it under /boot/firmware/dtbs/rockchip/overlay, /boot/dtbs/rockchip/overlay, or /lib/firmware." >&2
 	echo "[enable-camera] The current kernel image does not appear to ship this sensor profile yet. Install a matching dtbo first, then rerun this script." >&2
 	exit 1
+fi
+
+if grep -E '^overlays=' "$BOOT_CONFIG" | grep -Eq "(^| )${CAMERA_OVERLAY}( |$)"; then
+	echo "[enable-camera] Camera overlay already enabled: $CAMERA_OVERLAY"
+	exit 0
 fi
 
 backup_path="${BOOT_CONFIG}.bak_$(date +%Y%m%d_%H%M%S)"
