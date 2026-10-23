@@ -29,10 +29,14 @@ class Axis:
         self.p00, self.p01, self.p11 = position_variance, 0.0, velocity_variance
 
     def predicted(self, dt, q):
+        # Integrate continuous acceleration noise over elapsed time. Keep the
+        # existing acceleration-variance tuning anchored to a 100 ms interval;
+        # splitting that interval into four 25 ms polls must not reduce Q.
+        density = q * 0.1
         return (self.position + self.velocity * dt,
-                self.p00 + 2 * dt * self.p01 + dt * dt * self.p11 + q * dt ** 4 / 4,
-                self.p01 + dt * self.p11 + q * dt ** 3 / 2,
-                self.p11 + q * dt * dt)
+                self.p00 + 2 * dt * self.p01 + dt * dt * self.p11 + density * dt ** 3 / 3,
+                self.p01 + dt * self.p11 + density * dt * dt / 2,
+                self.p11 + density * dt)
 
     def predict(self, dt, q):
         self.position, self.p00, self.p01, self.p11 = self.predicted(dt, q)
@@ -106,7 +110,15 @@ class GatedUwbKalman:
 
     def raw_candidate(self, measurement, variance, at):
         self.raw_window = [p for p in self.raw_window if 0 <= at-p['at'] <= 500]
-        self.raw_window.append(dict(at=at, z=measurement, variance=variance))
+        point = dict(at=at, z=measurement, variance=variance)
+        # At 40 Hz, the last five consecutive samples span only 100 ms and
+        # can never meet the 180 ms consensus requirement below. Keep the
+        # newest sample in each 75 ms time bucket instead. Five buckets bound
+        # fit cost while retaining enough elapsed-time evidence at any rate.
+        if self.raw_window and self.raw_window[-1]['at'] // 75 == at // 75:
+            self.raw_window[-1] = point
+        else:
+            self.raw_window.append(point)
         self.raw_window = self.raw_window[-5:]
         self.recovery_diagnostics = {'reason': 'insufficient_hits', 'hits': len(self.raw_window)}
         if len(self.raw_window) < 3: return None

@@ -251,3 +251,11 @@ npm run maintenance
 实测工具：`python scripts/measure_uwb_forwarding.py --seconds 30`。它只读取已运行桥接的 `/api/telemetry`，不打开串口、不发送命令。分别报告每路飞控有效帧计数增长率、转发尝试计数增长率、桥接收到和滤波接受的新位置观察频率。旧 Lua 无 `SENT` 时该项为 null；计数重置会重新建立窗口，HTTP 轮询偏慢时位置观察频率可能低估。应比较每个接收器的 `sensors[].goodCount`，顶层融合计数会因接收器失效或切换而变化。
 
 Lua 回归测试使用可选 `lupa` 的 Lua 5.3 解释器执行实际脚本并模拟 UART：`python -m unittest discover -s test -p test_pixhawk_uwb_lua.py -v`。模拟结果不能替代飞控硬件上的执行耗时、串口和 MAVLink 丢包实测。
+
+### 40 Hz 滤波恢复与视野判定
+
+可信位置没有固定的 19.53 Hz 限制；该数值包含当时异常观测被拒收及目标超出配置视野的时段。稳定、视野内的输入可逐帧通过。40 Hz 还暴露出原恢复窗口的错误：最近 5 帧约覆盖 100 ms，无法满足至少 180 ms 的一致观测要求。恢复窗口现按 75 ms 时间桶保留最新样本，最多 5 桶、最久 500 ms；仍需至少 3 个一致点、180 ms 跨度、原残差和速度限制，重复包不增加证据。
+
+过程噪声改为按时间积分的连续白噪声模型，沿用原加速度参数，以 100 ms 的调参基准转换为噪声密度。相同时间的预测分成四次 25 ms 或一次 100 ms 时，协方差一致，避免频率提高后滤波器变得过度自信。矩阵形式参见 [FilterPy 连续白噪声文档](https://filterpy.readthedocs.io/en/latest/common/common.html#filterpy.common.Q_continuous_white_noise)。原创新阈值、绝对距离门限及最大速度门限保留。
+
+视野外观测在修正滤波和进入恢复窗口前被拒绝；有效视野仍由 `uwb_dual.receiver_fov_half_deg` 决定（当前 70°），不通过扩大视野凑频率。启用门控的接收器按本次原始观测角判断天线覆盖，避免滤波预测角的滞后/过冲造成重复拒绝；船体控制自身的转向、距离与推进器保护继续执行。接收器遥测新增 `withinFov`、`fovHalfDeg`、`fusionExclusionReason`，便于区分视野、滤波和过期原因。无效、重复或仅有诊断的数据不会刷新被接受的测量时间。

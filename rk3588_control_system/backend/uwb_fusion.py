@@ -243,9 +243,12 @@ class DualUwbFusion:
         return max(0.01, min(1.0, distance_score * azimuth_score))
 
     def _coverage_weight(self, receiver: UwbReceiver) -> float:
-        if receiver.azimuth_deg is None:
+        # Antenna coverage describes the observation angle, not a predicted
+        # posterior which may lag or overshoot a turn at the field boundary.
+        angle = receiver.raw_azimuth_deg if receiver.require_gate else receiver.azimuth_deg
+        if angle is None:
             return 0.0
-        off_axis_deg = abs(wrap_angle_deg(receiver.azimuth_deg))
+        off_axis_deg = abs(wrap_angle_deg(angle))
         if off_axis_deg > self.receiver_fov_half_deg:
             return 0.0
         normalized = off_axis_deg / self.receiver_fov_half_deg
@@ -468,6 +471,14 @@ class DualUwbFusion:
         ]
         for sensor in sensors:
             receiver = self.receivers[sensor["receiverId"]]
+            angle = receiver.raw_azimuth_deg if receiver.require_gate else receiver.azimuth_deg
+            sensor['withinFov'] = None if angle is None else abs(wrap_angle_deg(angle)) <= self.receiver_fov_half_deg
+            sensor['fovHalfDeg'] = self.receiver_fov_half_deg
+            sensor['fusionExclusionReason'] = (
+                'no_complete_measurement' if angle is None else
+                'outside_receiver_fov' if not sensor['withinFov'] else
+                receiver.filter_reason if not receiver.complete() else
+                'stale_measurement' if not receiver.fresh(now_ms, self.freshness_ms) else None)
             sensor["stabilityWeight"] = self._stability_weight(receiver)
             sensor["fusionWeight"] = self._coverage_weight(receiver) * sensor["stabilityWeight"]
         if not candidates:

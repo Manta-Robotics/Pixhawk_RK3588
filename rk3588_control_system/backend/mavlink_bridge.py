@@ -416,13 +416,18 @@ class MAVLinkBridge:
             elif field_name == 'VALID' and receiver.valid is False:
                 self.uwb_fusion.apply_measurement_result(receiver_id, kalman.reject(now_ms, 'radio_invalid', heading))
             elif field_name in ('DIST', 'AZ') and receiver.received_measurement_at == now_ms and not receiver.pending_distance and not receiver.pending_azimuth:
-                result = kalman.update(receiver.raw_distance_m, receiver.raw_azimuth_deg, now_ms, heading,
-                                       valid=receiver.valid,
-                                       # SEQ is low-rate diagnostic metadata. The sender's
-                                       # measurement timestamp identifies each complete pair
-                                       # without treating new observations as diagnostic replays.
-                                       sequence_id=sample_time_boot_ms if sample_time_boot_ms is not None else receiver.sequence_id,
-                                       tag_id=receiver.tag_id)
+                if abs(receiver.raw_azimuth_deg) > self.uwb_fusion.receiver_fov_half_deg:
+                    # Reject out-of-coverage observations before they move the
+                    # posterior or enter its raw-consensus recovery history.
+                    result = kalman.reject(now_ms, 'outside_receiver_fov', heading)
+                else:
+                    result = kalman.update(
+                        receiver.raw_distance_m, receiver.raw_azimuth_deg, now_ms, heading,
+                        valid=receiver.valid,
+                        # SEQ is low-rate diagnostic metadata. The sender's
+                        # timestamp identifies each complete observation.
+                        sequence_id=sample_time_boot_ms if sample_time_boot_ms is not None else receiver.sequence_id,
+                        tag_id=receiver.tag_id)
                 self.uwb_fusion.apply_measurement_result(receiver_id, result)
             elif field_name == 'EL' and abs(value) <= 90:
                 # Elevation is separate from the horizontal Cartesian state.
