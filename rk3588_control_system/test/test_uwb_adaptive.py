@@ -47,6 +47,18 @@ class AdaptiveBearingTests(unittest.TestCase):
         self.assertEqual(f.observe(30, 30, 1400, 2), 30)
         self.assertEqual(f.mode, 'acquiring')
 
+    def test_moving_mode_does_not_add_large_delay_to_an_already_delayed_posterior(self):
+        f = AdaptiveAngularFilter()
+        for at in range(1000, 3000, 25):
+            f.observe(0, 0, at, 2)
+        for i in range(81):
+            raw = i * .75
+            posterior = max(0, raw - 2)  # Existing position filter has its own lag.
+            value = f.observe(raw, posterior, 3000 + i * 25, 2)
+            if i >= 20:
+                self.assertEqual(f.mode, 'moving')
+                self.assertLess(abs(wrap(value-posterior)), .2)
+
     def test_gate_covariance_range_and_clocks_identical_with_adaptive_on_or_off(self):
         filters = [GatedUwbKalman({'adaptive_enabled': enabled}) for enabled in (False, True)]
         rng = random.Random(73)
