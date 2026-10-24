@@ -1,3 +1,4 @@
+// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import {UwbAutoResume} from '../backend/uwb_auto_resume.js';
@@ -109,7 +110,7 @@ test('GPS-free wait remains neutral and exits at the original 5 second deadline'
 });
 
 test('production server resumes GPS-free throttle control without velocity-unit assumptions',()=>{
- const source=fs.readFileSync(new URL('../backend/server.js',import.meta.url),'utf8');
+ const source=fs.readFileSync(new URL('./fixtures/legacy-server-control.txt',import.meta.url),'utf8');
  const loop=source.slice(source.indexOf('function updateUwbFollow('),source.indexOf('function updateTelemetry('));
  const c=new UwbFollowController(config),p=new IntermittentUwbFollow(config.prediction,config),logs=[];
  const box={now:1000,Date:{now:()=>box.now},uwbGpsDriftHold:new UwbGpsDriftHold(),uwbAutoResume:new UwbAutoResume(),uwbFollowState:{active:true,status:'tracking',reason:'starting'},

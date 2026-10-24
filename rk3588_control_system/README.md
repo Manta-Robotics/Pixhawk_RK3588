@@ -2,6 +2,8 @@
 
 本目录包含 Manta 机器人在 RK3588 上运行的完整上位机：MAVLink 桥接、云台控制、视觉跟踪、摄像头代理、录像管理、Web 控制台、Wi-Fi 热点和蓝牙 PAN。
 
+主控制台已迁移至 React + TypeScript，保持原界面和交互。首次启动前执行 `npm ci && npm run build`；开发、部署和验证说明见 [React 迁移说明](docs/react-migration.md)。
+
 ## 1. 运行架构
 
 ```text
@@ -10,7 +12,7 @@
         | HTTP + Socket.IO :3000
         v
 backend/server.js
-  |-- UDP :14551/:14552 <-> backend/mavlink_bridge.py <-> /dev/ttyS1 <-> Pixhawk TELEM2
+  |-- UDP :14551/:14552 <-> control/bin/manta-control <-> /dev/ttyS1 <-> Pixhawk TELEM2
   |-- UART /dev/ttyS3 <-> 云台控制器
   |-- HTTP 127.0.0.1:8091 <-> 云台 RTSP 代理
   |-- HTTP 127.0.0.1:8090 <-> OV8858 本地摄像头
@@ -119,7 +121,7 @@ npm run check
 npm run maintenance
 ```
 
-`npm run check:config` 只校验主配置。`npm run check` 会在对应解释器可用时检查 JavaScript、Python、Shell、JSON 和 systemd 服务模板；跳过项会明确输出。`npm run maintenance` 会先运行自动化测试，再运行全部静态检查。配置校验覆盖串口、端口、热点密码占位符、RTSP 地址、手机预览参数、录像编码器和跟踪保持区。
+`npm run check:config` 只校验主配置。`npm run check` 会在对应解释器可用时检查 JavaScript、Python、Shell、JSON 和 systemd 服务模板；跳过项会明确输出。`npm run maintenance` 会先运行自动化测试，再运行全部静态检查和 React 生产构建。配置校验覆盖串口、端口、热点密码占位符、RTSP 地址、手机预览参数、录像编码器和跟踪保持区。
 
 ## 9. 目录职责
 
@@ -129,7 +131,7 @@ npm run maintenance
 
 | 目录 | 职责与边界 | 关键入口 | 变更后的主要验证 |
 | --- | --- | --- | --- |
-| `backend/` | 控制面的服务端实现。`server.js` 提供 HTTP API、Socket.IO、静态页面、录像管理与云台/跟踪进程编排；`mavlink_bridge.py` 负责 Pixhawk UART 与本机 UDP 命令/遥测之间的桥接。这里不存放网页布局，也不应写入运行日志或录像。 | `backend/server.js`、`backend/mavlink_bridge.py` | `npm run maintenance`；按改动重启 `manta-backend.service` 或 `manta-bridge.service`，再检查 API、遥测和日志。 |
+| `backend/` | 控制面的服务端实现。`server.js` 提供 HTTP API、Socket.IO、静态页面、录像管理与云台/跟踪进程编排；`mavlink_bridge.py` 保留为测试基线；独立 C++ 服务负责 MAVLink、UWB 融合与跟随控制。这里不存放网页布局，也不应写入运行日志或录像。 | `backend/server.js`、`backend/mavlink_bridge.py` | `npm run maintenance`；按改动重启 `manta-backend.service` 或 `manta-bridge.service`，再检查 API、遥测和日志。 |
 | `config/` | 可审查的运行参数源。`system.config.json` 管理串口、端口、热点、相机、云台、录像和跟踪；`motor_config.json` 管理电机通道与限制；`bluetooth.config.json` 管理蓝牙 PAN。代码应读取配置，不应在多个脚本中重复硬编码同一参数。 | `config/system.config.json`、`config/motor_config.json`、`config/bluetooth.config.json` | `npm run check:config` 和 `npm run maintenance`；根据参数消费者重启对应服务。 |
 | `frontend/` | 浏览器控制台的静态资源。HTML 文件定义页面入口，`frontend/js/` 处理 API、Socket.IO、状态和交互，`frontend/css/` 管理样式。前端不得直接访问串口或设备文件，硬件操作必须经过后端接口。 | `frontend/index.html`、`frontend/gimbal.html`、`frontend/videos.html`、`frontend/map.html` | `npm run check`，浏览器强制刷新并验证连接、断线、加载中、错误和禁用状态；通常无需重启服务。 |
 | `scripts/` | 板级集成与独立进程。包含安装、systemd 部署、热点/蓝牙、相机、云台流、模型转换、诊断、跟踪与状态报告。带硬件副作用的脚本必须显式执行，不能被静态检查或测试自动触发。 | `install.sh`、`install_boot_services.sh`、`status_report.sh`、`camera_snapshot_server.py`、`gimbal_rtsp_stream_server.py`、`face_track.py`、`infer_video.py` | `npm run maintenance`；再运行对应诊断脚本，并只重启受影响的服务。 |
@@ -175,7 +177,7 @@ npm run maintenance
 | 改动范围 | 最小验证 | 通常需要的运行操作 |
 | --- | --- | --- |
 | `backend/server.js` | `npm run maintenance`、HTTP/Socket.IO 冒烟检查 | 重启 `manta-backend.service` |
-| `backend/mavlink_bridge.py` | `npm run maintenance`、飞控链路检查 | 重启 `manta-bridge.service` |
+| `control/` | 原生差分与进程集成检查、飞控链路检查 | 编译安装后重启 `manta-bridge.service` |
 | `frontend/` | `npm run check`、桌面和移动浏览器交互检查 | 浏览器刷新；通常不重启服务 |
 | `config/system.config.json` | `npm run check:config`、配置差异复核 | 仅重启读取了相关字段的服务 |
 | 相机/云台媒体脚本 | `npm run maintenance`、对应 health/stream 端点 | 重启 `manta-camera.service` 或 `manta-gimbal-stream.service` |
@@ -262,11 +264,19 @@ Lua 回归测试使用可选 `lupa` 的 Lua 5.3 解释器执行实际脚本并�
 
 ### UWB 自适应角度滤波与显示平滑
 
-完整观测仍逐帧接收、判定、发布（40 Hz 输入不降采样）。`uwb_measurement_filter.adaptive_enabled` 默认为 true；`stationary_time_constant_s=0.4`、`moving_time_constant_s=0.06`。先运行原有原始观测/航向/创新门控，再在世界坐标系平滑已接纳角度；距离和接纳时间保持原值。500 ms 原始角度趋势及连续偏移触发运动模式，稳定 600 ms 后转入静止模式。标签切换、时钟回退或观测间隔超过 250 ms 清除平滑历史。
+完整观测仍逐帧接收、判定、发布（40 Hz 输入不降采样）。`uwb_measurement_filter.adaptive_enabled` 默认为 true；`stationary_time_constant_s=0.4`、`moving_time_constant_s=0.01`。先运行原有原始观测/航向/创新门控，再在世界坐标系平滑已接纳角度；距离和接纳时间保持原值。500 ms 原始角度趋势及连续偏移触发运动模式；斜率证据使用 3.5 倍标准误差以避免快速运动输出放大偶发噪声趋势，稳定 600 ms 后转入静止模式。标签切换、时钟回退或观测间隔超过 250 ms 清除平滑历史。
 
-控制侧不确定度增加平滑方向相对原卡尔曼后验的弦长偏移，继续供已有预测、净空与制动保护使用。`unsmoothedAzimuthDeg`、`angularFilterMode`、`smoothingDisplacementM` 可用于同帧比较；有效帧计数不会因平滑增加。显示层另用 120 ms 圆周平滑，仅作用于显示副本；失效、过期、断线立即撤销实测点，不改变控制指令和测量时间。静止平滑会增加运动初期的延迟，需结合本机实际响应评估，不能视为测角精度标定。
+控制侧不确定度增加平滑方向相对原卡尔曼后验的弦长偏移，继续供已有预测、净空与制动保护使用。`unsmoothedAzimuthDeg`、`angularFilterMode`、`smoothingDisplacementM` 可用于同帧比较；有效帧计数不会因平滑增加。显示层在静止时使用 120 ms 圆周平滑，所选接收器进入运动模式后直接显示最新已接纳角度，避免重复叠加延迟。目标角度与模式均只在新的接纳时钟更新，重复快照或未被选中的接收器不能开启快速路径；失效、过期、断线立即撤销实测点，不改变控制指令和测量时间。
+
+运动响应优化不等于角度精度标定或遮挡识别：模块内部滤波与主位置卡尔曼的迟滞仍然存在，连续偏移也可能被当作运动。移除重复平滑可能使主滤波的瞬态过冲更明显；静止/运动切换仍需短时证据。运动参数由原 60 ms 降至 10 ms，需更新已有部署配置；仅依靠默认值无法覆盖配置内已有的 0.06。
 
 安信可 BU04 的 PDOA 上位机和标定/安装测试资料可参考：https://docs.ai-thinker.com/uwb_1/ 。其公开上位机 ZIP 是可执行程序及运行库，不能据此认定有可直接移植的滤波源码；距离标定模板也不是角度抖动滤波。当前实现不写入该厂商固件或标定参数。
+
+### 原始位置与可信位置对照
+
+目标相对位置面板同时画橙色空心原始点与绿色实心可信点，并分别显示距离/方位。原始行注明基站，数值保留模块原始角度，绘图按安装偏航和基站偏移换算到船体坐标。多基站时显示最新完整原始帧的来源，不构造未经门控的“原始融合”。两点重合时仍可看到橙色外圈。
+
+原始点仅供诊断：即使突跳隔离、创新拒绝或视野拒绝导致没有可信位置，只要仍有新鲜完整帧，它就继续显示，页面同时标注未接纳原因；原始点不会进入控制。无线无效、断线、完整帧过期 700 ms 后隐藏原始点，诊断包、重复快照及下一帧尚未配齐的距离不会刷新它。过期的已接纳位置不会作为当前可信点显示；原有受限预测仍明确标为“预测，非实测”。没有增加显示限速，也去掉了点坐标额外的 CSS 过渡延迟。
 
 ### 遮挡突跳隔离
 
@@ -284,3 +294,5 @@ Lua 回归测试使用可选 `lupa` 的 Lua 5.3 解释器执行实际脚本并�
 python3 -m unittest discover -s test -p 'test_*.py'
 node --test --test-concurrency=1
 ```
+
+独立 C++ 服务构建、部署与验证：[docs/native-control.md](docs/native-control.md)。

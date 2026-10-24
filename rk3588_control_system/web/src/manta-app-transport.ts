@@ -1,0 +1,731 @@
+// Behavior-preserving TypeScript port; original remains a parity fixture.
+export {};
+(function (this: any,window?: any): any  {
+    "use strict";
+
+    var DEFAULT_DEVICE: any = { name: "MANTA ROBOTIC", model: "MANTA", serial: "2407" };
+    var MOCK_DEVICES: any = [
+        { name: "MANTA ROBOTIC", model: "MANTA", serial: "2407", rssi: -43 },
+        { name: "MANTA ROBOTIC", model: "MANTA", serial: "1842", rssi: -59 },
+        { name: "MANTA ROBOTIC", model: "MANTA", serial: "0931", rssi: -73 }
+    ];
+
+    function clamp(this: any,value?: any, min?: any, max?: any): any  {
+        return Math.max(min, Math.min(max, Number(value) || 0));
+    }
+
+    function speedFromTelemetry(this: any,telemetry?: any): any  {
+        var velocity: any = telemetry && telemetry.velocity ? telemetry.velocity : {};
+        return Math.hypot(Number(velocity.vx) || 0, Number(velocity.vy) || 0);
+    }
+
+    function temperatureFromTelemetry(this: any,telemetry?: any): any  {
+        var temperature: any = telemetry && telemetry.temperature ? telemetry.temperature : {};
+        return Number(temperature.flightController || temperature.hostBoard || 0);
+    }
+
+    function postJson(this: any,url?: any, body?: any): any  {
+        return fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {})
+        }).then(function (this: any,response?: any): any  {
+            return response.json().catch(function (this: any): any  { return {}; }).then(function (this: any,payload?: any): any  {
+                if (!response.ok || payload.success === false || payload.ok === false) {
+                    var error: any = new Error(payload.message || ("HTTP " + response.status));
+                    error.payload = payload;
+                    throw error;
+                }
+                return payload;
+            });
+        });
+    }
+
+    class TransportBase {
+[key:string]:any;
+constructor() {
+        this.listeners = {};
+        this.connected = false;
+        this.device = DEFAULT_DEVICE;
+        this.mode = "base";
+        this.motionLocked = false;
+        this.driveEnabled = true;
+        this.alertLogKeys = {};
+    }
+}
+
+    TransportBase.prototype.on = function (this: any,event?: any, handler?: any): any  {
+        if (!this.listeners[event]) this.listeners[event] = [];
+        this.listeners[event].push(handler);
+        return function (this: any): any  {
+            var list: any = this.listeners[event] || [];
+            this.listeners[event] = list.filter(function (this: any,item?: any): any  { return item !== handler; });
+        }.bind(this);
+    };
+
+    TransportBase.prototype.emit = function (this: any,event?: any, payload?: any): any  {
+        (this.listeners[event] || []).forEach(function (this: any,handler?: any): any  {
+            try { handler(payload); } catch (error: any) { console.error(error); }
+        });
+    };
+
+    TransportBase.prototype.log = function (this: any,level?: any, source?: any, message?: any, category?: any, messageEn?: any): any  {
+        var normalizedLevel: any = String(level || "INFO").toUpperCase();
+        var normalizedSource: any = String(source || "APP").toUpperCase();
+        var normalizedMessage: any = String(message || "");
+        var isAlert: any = normalizedLevel === "WARNING" || normalizedLevel === "ERROR" || normalizedLevel === "CRITICAL";
+        var alertKey: any = /\bUWB:\s*no frame\b/i.test(normalizedMessage) ? normalizedLevel + ":FCU_UWB_NO_FRAME" : normalizedLevel + ":" + normalizedSource + ":" + normalizedMessage;
+        if (isAlert && this.alertLogKeys[alertKey]) return;
+        if (isAlert) this.alertLogKeys[alertKey] = true;
+        this.emit("log", {
+            timestamp: new Date().toISOString(),
+            level: normalizedLevel,
+            source: normalizedSource,
+            message: normalizedMessage,
+            messageEn: messageEn || "",
+            category: category || "system"
+        });
+    };
+
+    TransportBase.prototype.setMotionLocked = function (this: any,locked?: any): any  {
+        this.motionLocked = Boolean(locked);
+        return this.motionLocked;
+    };
+
+    TransportBase.prototype.setDriveEnabled = function (this: any,enabled?: any): any  {
+        this.driveEnabled = Boolean(enabled);
+        return this.driveEnabled;
+    };
+
+    class MockTransport extends TransportBase {
+[key:string]:any;
+constructor() {
+        super();
+        this.mode = "mock";
+        this.telemetryTimer = null;
+        this.vector = { x: 0, y: 0 };
+        this.startedAt = Date.now();
+    }
+}
+
+
+
+    MockTransport.prototype.discover = function (this: any): any  {
+        this.log("INFO", "BLE", "正在扫描附近的 Manta", "hardware", "Scanning for a nearby Manta");
+        return new Promise(function (this: any,resolve?: any): any  {
+            setTimeout(function (this: any): any  { resolve(MOCK_DEVICES.map(function (this: any,device?: any): any  { return Object.assign({}, device); })); }, 650);
+        });
+    };
+
+    MockTransport.prototype.pair = function (this: any,pin?: any): any  {
+        return new Promise(function (this: any,resolve?: any, reject?: any): any  {
+            setTimeout(function (this: any): any  {
+                if (String(pin) !== "240724") reject(new Error("配对码不正确"));
+                else resolve({ token: "preview-session", wifi: "MANTA-2407" });
+            }, 550);
+        });
+    };
+
+    MockTransport.prototype.connect = function (this: any): any  {
+        this.connected = true;
+        this.emit("hardwareStatus", { boardOnline: true, pixhawkOnline: true, imuOnline: true, motorsOnline: true, gimbalOnline: true, gimbalOutputAvailable: true });
+        this.startedAt = Date.now();
+        this.log("INFO", "LINK", "BLE 控制链路已建立", "hardware", "BLE control link established");
+        this.log("INFO", "WIFI", "5 GHz 影像链路已建立，互联网保持在线", "hardware", "5 GHz video link established; internet remains online");
+        this.log("INFO", "PIXHAWK", "飞控状态在线", "hardware", "Flight controller online");
+        this.startTelemetry();
+        return Promise.resolve({ device: DEFAULT_DEVICE });
+    };
+
+    MockTransport.prototype.startTelemetry = function (this: any): any  {
+        clearInterval(this.telemetryTimer);
+        var tick: any = function (this: any): any  {
+            if (!this.connected) return;
+            var elapsed: any = (Date.now() - this.startedAt) / 1000;
+            this.emit("telemetry", {
+                latency: 14 + Math.round(Math.sin(elapsed / 3) * 4 + Math.random() * 3),
+                speed: Math.hypot(this.vector.x, this.vector.y) * 2.2,
+                temperature: 45 + Math.sin(elapsed / 18) * 2,
+                attitude: {
+                    roll: Math.sin(elapsed / 4) * 2.2,
+                    pitch: Math.cos(elapsed / 5) * 1.4,
+                    yaw: (184 + elapsed * 0.7) % 360
+                },
+                gps: { satellites: 9, hdop: 1.2, fixType: 3, estimated: true },
+                vector: this.vector
+            });
+        }.bind(this);
+        tick();
+        this.telemetryTimer = setInterval(tick, 500);
+    };
+
+    MockTransport.prototype.drive = function (this: any,vector?: any): any  {
+        var nextVector: any = { x: clamp(vector.x, -1, 1), y: clamp(vector.y, -1, 1) };
+        if ((!this.driveEnabled || this.motionLocked) && Math.hypot(nextVector.x, nextVector.y) > 0.001) return;
+        this.vector = nextVector;
+        var throttle: any = Math.round(-this.vector.y * 100);
+        var steering: any = Math.round(this.vector.x * 45);
+        this.emit("driveAck", {
+            throttle: throttle,
+            steering: steering,
+            leftPwm: clamp(1500 + throttle * 4 + steering * 5, 1000, 2000),
+            rightPwm: clamp(1500 + throttle * 4 - steering * 5, 1000, 2000)
+        });
+    };
+
+    MockTransport.prototype.emergencyStop = function (this: any): any  {
+        this.drive({ x: 0, y: 0 });
+        this.log("CRITICAL", "SAFETY", "紧急停止已触发，推进输出归零", "command", "Emergency stop triggered; thrust output is zero");
+        this.emit("emergency", { active: true });
+        return Promise.resolve({ success: true });
+    };
+
+    MockTransport.prototype.startUwbFollow = function (this: any): any  {
+        var state: any = { active: true, status: "tracking", reason: "tracking", desiredSpeedMps: 0.6, speedLimitMps: 0.8 };
+        this.emit("uwbFollow", state);
+        return Promise.resolve({ success: true, state: state });
+    };
+
+    MockTransport.prototype.stopUwbFollow = function (this: any): any  {
+        var state: any = { active: false, status: "stopped", reason: "manual_stop", desiredSpeedMps: 0 };
+        this.emit("uwbFollow", state);
+        return Promise.resolve({ success: true, state: state });
+    };
+
+    MockTransport.prototype.setUwbFollowMethod = function (this: any,method?: any): any  {
+        var selected: any = method === "neural" ? "neural" : "traditional";
+        var state: any = { active: false, status: "stopped", reason: "method_selected", trackingMethod: selected, desiredSpeedMps: 0 };
+        this.emit("uwbFollow", state);
+        return Promise.resolve({ success: true, trackingMethod: selected, state: state });
+    };
+
+    MockTransport.prototype.arm = function (this: any): any  {
+        this.log("COMMAND", "SAFETY", "推进武装已确认", "command", "Propulsion arm confirmed");
+        this.emit("armed", { armed: true });
+        return Promise.resolve({ success: true, armed: true });
+    };
+
+    MockTransport.prototype.gimbal = function (this: any,action?: any, payload?: any): any  {
+        var labels: any = { home: "云台回中", stop: "停止云台", recordStart: "开始录像", recordStop: "停止录像", click: "点击居中", face: "人脸跟踪", swimmer: "泳者跟踪", beacon: "UWB 信标" };
+        var labelsEn: any = { home: "Center gimbal", stop: "Stop gimbal", recordStart: "Start recording", recordStop: "Stop recording", click: "Click to center", face: "Face tracking", swimmer: "Swimmer tracking", beacon: "UWB Beacon" };
+        this.log("COMMAND", "GIMBAL", labels[action] || action, "command", labelsEn[action] || action);
+        var state: any = Object.assign({ connected: true, action: action, ok: true, trackingActive: action === "face" || action === "swimmer" || action === "beacon", trackMode: action === "beacon" ? "beacon" : action === "swimmer" ? "swimmer" : "face" }, payload || {});
+        if (state.trackingActive) {
+            state.trackStatus = { locked: true, status: "locked", frame_w: 1920, frame_h: 1080, x: 720, y: 220, w: 330, h: 520 };
+            state.lastTarget = state.trackStatus;
+        }
+        this.emit("gimbalState", state);
+        return Promise.resolve({ success: true });
+    };
+
+    MockTransport.prototype.gimbalClick = function (this: any,dx?: any, dy?: any): any  {
+        this.log("COMMAND", "GIMBAL", "点击目标 X " + dx + " / Y " + dy, "command", "Click target X " + dx + " / Y " + dy);
+        return Promise.resolve({ success: true, delta: { dx: dx, dy: dy } });
+    };
+
+    MockTransport.prototype.setGimbalOsd = function (this: any,enabled?: any): any  {
+        this.log("COMMAND", "GIMBAL", enabled ? "显示云台 OSD" : "隐藏云台 OSD", "command", enabled ? "Gimbal OSD enabled" : "Gimbal OSD hidden");
+        return Promise.resolve({ success: true, mode: enabled ? 2 : 0 });
+    };
+
+    MockTransport.prototype.recoverGimbal = function (this: any): any  {
+        this.emit("gimbalState", { connected: true, trackingActive: false, trackMode: "face", trackStatus: { locked: false, status: "idle", message: "idle" } });
+        return Promise.resolve({ connected: true });
+    };
+
+    MockTransport.prototype.startImuCalibration = function (this: any): any  {
+        this.log("COMMAND", "PIXHAWK", "开始 IMU 六面校准", "command", "Started six-position IMU calibration");
+        return Promise.resolve({ success: true, status: "STARTED" });
+    };
+
+    MockTransport.prototype.confirmImuCalibration = function (this: any,positionCode?: any): any  {
+        this.log("COMMAND", "PIXHAWK", "确认 IMU 校准姿态 " + Number(positionCode), "command", "Confirmed IMU calibration pose " + Number(positionCode));
+        return Promise.resolve({ success: true, positionCode: Number(positionCode), status: "CONFIRMED" });
+    };
+
+    // Unlike six-face IMU preview, the original mock has no nine-point samples.
+    // Reject through the normal UI error path instead of throwing synchronously
+    // and leaving the calibration button permanently disabled.
+    MockTransport.prototype.startBeaconCalibration = function (): Promise<never> {
+        return Promise.reject(new Error("九点校准需要连接实机；演示模式不生成标定结果。"));
+    };
+    MockTransport.prototype.captureBeaconCalibration = MockTransport.prototype.startBeaconCalibration;
+    MockTransport.prototype.cancelBeaconCalibration = function (): Promise<void> {
+        return Promise.resolve();
+    };
+
+    MockTransport.prototype.disconnect = function (this: any): any  {
+        this.connected = false;
+        clearInterval(this.telemetryTimer);
+        this.drive({ x: 0, y: 0 });
+        this.log("INFO", "LINK", "设备连接已断开", "hardware", "Device connection closed");
+        return Promise.resolve();
+    };
+
+    class LiveTransport extends TransportBase {
+[key:string]:any;
+constructor() {
+        super();
+        this.mode = "live";
+        this.socket = null;
+        this.pollTimer = null;
+        this.lastDriveAt = 0;
+        this.pendingDrive = null;
+        this.driveTimer = null;
+        this.driveKeepaliveTimer = null;
+        this.driveVector = { x: 0, y: 0 };
+        this.lastLatency = 0;
+        this.pollFailures = 0;
+        this.gimbalTrackingActive = false;
+        this.gimbalTrackMode = null;
+        this.gimbalModePromise = Promise.resolve();
+        this.driveLimits = { throttle: 100, steering: 45 };
+    }
+}
+
+
+
+    LiveTransport.prototype.discover = function (this: any): any  {
+        return fetch("/health", { cache: "no-store" }).then(function (this: any,response?: any): any  {
+            if (!response.ok) throw new Error("未找到 Manta 控制服务");
+            return [DEFAULT_DEVICE];
+        });
+    };
+
+    LiveTransport.prototype.pair = function (this: any,pin?: any): any  {
+        if (!/^\d{6}$/.test(String(pin))) return Promise.reject(new Error("请输入六位配对码"));
+        // 当前后端尚未提供配对端点；只在 UI 层验证格式，真实令牌端点上线后替换这里。
+        return Promise.resolve({ token: "local-preview" });
+    };
+
+    LiveTransport.prototype.connect = function (this: any): any  {
+        var requestStartedAt: any = performance.now();
+        return fetch("/api/status", { cache: "no-store" }).then(function (this: any,response?: any): any  {
+            if (!response.ok) throw new Error("Manta 状态接口不可用");
+            return response.json();
+        }).then(function (this: any,payload?: any): any  {
+            if (!payload || payload.success === false) throw new Error(payload.message || "Manta 返回无效状态");
+            this.lastLatency = performance.now() - requestStartedAt;
+            this.connected = true;
+            this.connectSocket();
+            this.applyStatus(payload);
+            this.startPolling();
+            this.startDriveKeepalive();
+            this.log("INFO", "LINK", "已连接 Manta 真实控制服务", "hardware");
+            return this.openGimbalLink().then(function (this: any): any  { return { device: DEFAULT_DEVICE }; });
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.connectSocket = function (this: any): any  {
+        if (!window.io) return;
+        this.socket = window.io({ transports: ["websocket", "polling"], timeout: 5000 });
+        this.socket.on("connect", function (this: any): any  { this.emit("connection", { connected: true, degraded: false }); }.bind(this));
+        this.socket.on("telemetry_update", function (this: any,telemetry?: any): any  { this.applyTelemetry(telemetry); }.bind(this));
+        this.socket.on("uwb_update", function (this: any,uwb?: any): any  { this.emit("telemetry", { uwb: uwb || {} }); }.bind(this));
+        this.socket.on("system_state", function (this: any,state?: any): any  { if (state) this.applyStatus({ data: state }); }.bind(this));
+        this.socket.on("motor_output_update", function (this: any,motors?: any): any  {
+            motors = motors || {};
+            var leftMotor: any = motors.left || { online: false, outputOnline: false, status: "offline" };
+            var rightMotor: any = motors.right || { online: false, outputOnline: false, status: "offline" };
+            this.emit("hardwareStatus", {
+                motorsOnline: Boolean((leftMotor.online || leftMotor.outputOnline) && (rightMotor.online || rightMotor.outputOnline)),
+                leftMotor: leftMotor,
+                rightMotor: rightMotor
+            });
+        }.bind(this));
+        this.socket.on("rover_drive_ack", function (this: any,payload?: any): any  { this.emit("driveAck", payload || {}); }.bind(this));
+        this.socket.on("gimbal_state", function (this: any,state?: any): any  { this.applyGimbalTrackingState(state); this.emit("gimbalState", state || {}); }.bind(this));
+        this.socket.on("gimbal_target", function (this: any,target?: any): any  { this.emit("gimbalTarget", target || {}); }.bind(this));
+        this.socket.on("gimbal_track_status", function (this: any,status?: any): any  { this.emit("gimbalTrackStatus", status || {}); }.bind(this));
+        this.socket.on("uwb_follow_update", function (this: any,state?: any): any  { this.emit("uwbFollow", state || {}); }.bind(this));
+        this.socket.on("aircraft_armed", function (this: any): any  { this.emit("armed", { armed: true }); }.bind(this));
+        this.socket.on("aircraft_disarmed", function (this: any): any  { this.emit("armed", { armed: false }); }.bind(this));
+        this.socket.on("log_entry", function (this: any,entry?: any): any  {
+            this.log(entry.level, entry.source || "BOARD", entry.message, /motor|gimbal|pixhawk/i.test(entry.source || "") ? "hardware" : "system");
+        }.bind(this));
+        this.socket.on("disconnect", function (this: any): any  { this.emit("connection", { connected: false, degraded: true }); }.bind(this));
+    };
+
+    LiveTransport.prototype.startPolling = function (this: any): any  {
+        clearInterval(this.pollTimer);
+        this.pollTimer = setInterval(function (this: any): any  {
+            if (!this.connected) return;
+            var startedAt: any = performance.now();
+            fetch("/api/status", { cache: "no-store" }).then(function (this: any,response?: any): any  { if (!response.ok) throw new Error("HTTP " + response.status); return response.json(); }).then(function (this: any,payload?: any): any  {
+                this.lastLatency = performance.now() - startedAt;
+                this.pollFailures = 0;
+                this.applyStatus(payload);
+                this.refreshGimbalState();
+                this.emit("connection", { connected: true, degraded: false, hardwareOnline: this.pixhawkOnline });
+            }.bind(this)).catch(function (this: any,error?: any): any  {
+                this.pollFailures += 1;
+                this.log("WARNING", "LINK", "状态轮询失败：" + error.message, "hardware");
+                if (this.pollFailures >= 2) this.emit("connection", { connected: false, degraded: true });
+            }.bind(this));
+        }.bind(this), 2000);
+    };
+
+    LiveTransport.prototype.applyStatus = function (this: any,payload?: any): any  {
+        var data: any = payload && payload.data ? payload.data : {};
+        var hardware: any = data.hardware || {};
+        var pixhawk: any = hardware.pixhawk || {};
+        var motors: any = hardware.motors || {};
+        var leftMotor: any = motors.left || { online: false, outputOnline: false, status: "offline" };
+        var rightMotor: any = motors.right || { online: false, outputOnline: false, status: "offline" };
+        var gimbal: any = hardware.gimbal || {};
+        var limits: any = payload && payload.limits ? payload.limits : {};
+        var throttleLimits: any = limits.throttle || {};
+        var steeringLimits: any = limits.steering || {};
+        var throttleLimit: any = Math.max(Math.abs(Number(throttleLimits.min) || 0), Math.abs(Number(throttleLimits.max) || 0));
+        var steeringLimit: any = Math.max(Math.abs(Number(steeringLimits.min) || 0), Math.abs(Number(steeringLimits.max) || 0));
+        if (throttleLimit > 0) this.driveLimits.throttle = throttleLimit;
+        if (steeringLimit > 0) this.driveLimits.steering = steeringLimit;
+        this.pixhawkOnline = Boolean(pixhawk.online) && Boolean(data.isConnected) && String(data.pixhawkStatus || "").toLowerCase() !== "disconnected";
+        this.emit("hardwareStatus", {
+            boardOnline: true,
+            pixhawkOnline: this.pixhawkOnline,
+            imuOnline: this.pixhawkOnline,
+            motorsOnline: Boolean((leftMotor.online || leftMotor.outputOnline) && (rightMotor.online || rightMotor.outputOnline)),
+            leftMotor: leftMotor,
+            rightMotor: rightMotor,
+            gimbalOnline: Boolean(gimbal.online),
+            gimbalOutputAvailable: Boolean(gimbal.online || gimbal.portOpen)
+        });
+        if (data.telemetry) this.applyTelemetry(data.telemetry);
+        if (data.gimbal) { this.applyGimbalTrackingState(data.gimbal); this.emit("gimbalState", data.gimbal); }
+        if (data.uwbFollow) this.emit("uwbFollow", data.uwbFollow);
+    };
+
+    LiveTransport.prototype.refreshGimbalState = function (this: any): any  {
+        return fetch("/api/gimbal/state", { cache: "no-store" }).then(function (this: any,response?: any): any  { if (!response.ok) throw new Error("HTTP " + response.status); return response.json(); }).then(function (this: any,payload?: any): any  {
+            var state: any = payload && payload.state ? payload.state : {};
+            this.applyGimbalTrackingState(state);
+            this.emit("gimbalState", state);
+            this.emit("hardwareStatus", { gimbalOnline: Boolean(state.connected), gimbalOutputAvailable: Boolean(state.connected || state.portOpen) });
+            return state;
+        }.bind(this)).catch(function (this: any): any  {
+            this.emit("hardwareStatus", { gimbalOnline: false, gimbalOutputAvailable: false });
+            return {};
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.applyGimbalTrackingState = function (this: any,state?: any): any  {
+        state = state || {};
+        this.gimbalTrackingActive = Boolean(state.trackingActive);
+        if (state.trackMode === "face" || state.trackMode === "swimmer" || state.trackMode === "beacon") this.gimbalTrackMode = state.trackMode;
+        if (!this.gimbalTrackingActive) this.gimbalTrackMode = null;
+    };
+
+    LiveTransport.prototype.openGimbalLink = function (this: any): any  {
+        return postJson("/api/gimbal/connect", {}).then(function (this: any): any  {
+            return new Promise(function (this: any,resolve?: any): any  { setTimeout(resolve, 180); });
+        }).then(function (this: any): any  {
+            return this.refreshGimbalState();
+        }.bind(this)).catch(function (this: any,error?: any): any  {
+            this.emit("hardwareStatus", { gimbalOnline: false, gimbalOutputAvailable: false });
+            this.log("WARNING", "GIMBAL", "云台串口连接失败：" + error.message, "hardware", "Gimbal serial connection failed: " + error.message);
+            return {};
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.recoverGimbal = function (this: any): any  {
+        return postJson("/api/gimbal/stop", {}).catch(function (this: any): any  {}).then(function (this: any): any  {
+            return postJson("/api/gimbal/connect", {});
+        }).then(function (this: any): any  {
+            return new Promise(function (this: any,resolve?: any): any  { setTimeout(resolve, 220); });
+        }).then(function (this: any): any  {
+            return this.refreshGimbalState();
+        }.bind(this)).then(function (this: any,state?: any): any  {
+            if (!state || !state.connected || !state.feedback || state.feedback.checksumValid === false) throw new Error("云台尚未返回有效状态，请检查供电与串口");
+            return state;
+        });
+    };
+
+    LiveTransport.prototype.applyTelemetry = function (this: any,telemetry?: any): any  {
+        this.emit("telemetry", {
+            latency: this.lastLatency,
+            speed: speedFromTelemetry(telemetry),
+            temperature: temperatureFromTelemetry(telemetry),
+            attitude: telemetry.attitude || { roll: 0, pitch: 0, yaw: 0 },
+            battery: telemetry.battery || {},
+            imuCalibration: telemetry.imuCalibration || {},
+            gps: telemetry.gps || {},
+            uwb: telemetry.uwb || {},
+            ekf: telemetry.ekf || {},
+            armed: Boolean(telemetry.armed),
+            flightMode: telemetry.flightMode || "MANUAL"
+        });
+    };
+
+    LiveTransport.prototype.startDriveKeepalive = function (this: any): any  {
+        clearInterval(this.driveKeepaliveTimer);
+        this.driveKeepaliveTimer = setInterval(function (this: any): any  {
+            if (!this.connected || !this.driveEnabled || this.motionLocked) return;
+            var vector: any = this.driveVector || { x: 0, y: 0 };
+            if (Math.hypot(vector.x, vector.y) <= 0.001) return;
+            this.drive(vector);
+        }.bind(this), 100);
+    };
+
+    LiveTransport.prototype.drive = function (this: any,vector?: any): any  {
+        var nextVector: any = { x: clamp(vector.x, -1, 1), y: clamp(vector.y, -1, 1) };
+        var payload: any = {
+            throttle: Math.round(-nextVector.y * this.driveLimits.throttle * 10) / 10,
+            steering: Math.round(nextVector.x * this.driveLimits.steering * 10) / 10
+        };
+        if ((!this.driveEnabled || this.motionLocked) && (payload.throttle !== 0 || payload.steering !== 0)) return;
+        this.driveVector = nextVector;
+        var send: any = function (this: any): any  {
+            this.lastDriveAt = Date.now();
+            this.pendingDrive = null;
+            if (this.socket && this.socket.connected) {
+                this.socket.emit("rover_drive", payload);
+                return;
+            }
+            postJson("/api/control/rover", payload).then(function (this: any,ack?: any): any  { this.emit("driveAck", ack && ack.data ? ack.data : ack); }.bind(this)).catch(function (this: any,error?: any): any  {
+                this.log("ERROR", "CONTROL", "移动指令失败：" + error.message, "command");
+            }.bind(this));
+        }.bind(this);
+        var remaining: any = 50 - (Date.now() - this.lastDriveAt);
+        clearTimeout(this.driveTimer);
+        if (remaining <= 0 || (payload.throttle === 0 && payload.steering === 0)) send();
+        else this.driveTimer = setTimeout(send, remaining);
+    };
+
+    LiveTransport.prototype.emergencyStop = function (this: any): any  {
+        this.drive({ x: 0, y: 0 });
+        return postJson("/api/emergency/stop", {}).then(function (this: any,result?: any): any  {
+            this.log("CRITICAL", "SAFETY", "紧急停止已执行", "command");
+            this.emit("emergency", { active: true });
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.startUwbFollow = function (this: any): any  {
+        return postJson("/api/uwb-follow/start", {}).then(function (this: any,result?: any): any  {
+            if (result && result.state) this.emit("uwbFollow", result.state);
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.stopUwbFollow = function (this: any): any  {
+        return postJson("/api/uwb-follow/stop", {}).then(function (this: any,result?: any): any  {
+            if (result && result.state) this.emit("uwbFollow", result.state);
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.setUwbFollowMethod = function (this: any,method?: any): any  {
+        return postJson("/api/uwb-follow/method", { method: method }).then(function (this: any,result?: any): any  {
+            if (result && result.state) this.emit("uwbFollow", result.state);
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.arm = function (this: any): any  {
+        if (!this.socket || !this.socket.connected) return Promise.reject(new Error("实时控制链路未连接，拒绝武装"));
+        return new Promise(function (this: any,resolve?: any, reject?: any): any  {
+            var settled: any = false;
+            var onArmed: any = function (this: any): any  { finish(null, { success: true, armed: true }); };
+            var finish: any = function (this: any,error?: any, result?: any): any  {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                this.socket.off("aircraft_armed", onArmed);
+                if (error) reject(error); else resolve(result);
+            }.bind(this);
+            var timer: any = setTimeout(function (this: any): any  { finish(new Error("飞控未在时限内确认武装")); }, 3000);
+            this.socket.once("aircraft_armed", onArmed);
+            this.socket.emit("arm");
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.gimbal = function (this: any,action?: any, payload?: any): any  {
+        if (action === "face" || action === "swimmer" || action === "beacon" || action === "click") {
+            var requestedMode: any = action;
+            var switchMode: any = function (this: any): any  {
+                if (requestedMode === "click") {
+                    return postJson("/api/gimbal/track/stop", {}).then(function (this: any,result?: any): any  {
+                        this.applyGimbalTrackingState(result && result.state);
+                        if (result && result.state) this.emit("gimbalState", result.state);
+                        return result;
+                    }.bind(this));
+                }
+                if (this.gimbalTrackingActive && this.gimbalTrackMode === requestedMode) {
+                    return Promise.resolve({ success: true, active: true, alreadyRunning: true, mode: requestedMode });
+                }
+                var startRequestedMode: any = function (this: any): any  {
+                    return postJson("/api/gimbal/track/start", { mode: requestedMode });
+                };
+                var request: any = this.gimbalTrackingActive ? postJson("/api/gimbal/track/stop", {}).then(startRequestedMode) : startRequestedMode();
+                return request.then(function (this: any,result?: any): any  {
+                    this.applyGimbalTrackingState(result && result.state);
+                    if (result && result.state) this.emit("gimbalState", result.state);
+                    return result;
+                }.bind(this));
+            }.bind(this);
+            this.gimbalModePromise = this.gimbalModePromise.catch(function (this: any): any  {}).then(switchMode);
+            return this.gimbalModePromise;
+        }
+        var endpoint: any = null;
+        var body: any = payload || {};
+        if (action === "home") endpoint = "/api/gimbal/home";
+        if (action === "stop") endpoint = "/api/gimbal/stop";
+        if (action === "recordStart") endpoint = "/api/gimbal/recording/start";
+        if (action === "recordStop") endpoint = "/api/gimbal/recording/stop";
+        if (!endpoint) return Promise.reject(new Error("不支持的云台指令"));
+        return postJson(endpoint, body).then(function (this: any,result?: any): any  {
+            this.log("COMMAND", "GIMBAL", "云台指令：" + action, "command");
+            if (result && result.state) this.emit("gimbalState", result.state);
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.gimbalClick = function (this: any,dx?: any, dy?: any): any  {
+        return postJson("/api/gimbal/click", { dx: Math.round(Number(dx) || 0), dy: Math.round(Number(dy) || 0) }).then(function (this: any,result?: any): any  {
+            this.log("COMMAND", "GIMBAL", "点击目标 X " + dx + " / Y " + dy, "command", "Click target X " + dx + " / Y " + dy);
+            if (result && result.state) this.emit("gimbalState", result.state);
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.setGimbalOsd = function (this: any,enabled?: any): any  {
+        return postJson("/api/gimbal/osd", { mode: enabled ? 2 : 0 }).then(function (this: any,result?: any): any  {
+            this.log("COMMAND", "GIMBAL", enabled ? "显示云台 OSD" : "隐藏云台 OSD", "command", enabled ? "Gimbal OSD enabled" : "Gimbal OSD hidden");
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.startBeaconCalibration = function (this: any): any  {
+        return postJson("/api/gimbal/beacon/calibration/start", {});
+    };
+
+    LiveTransport.prototype.captureBeaconCalibration = function (this: any): any  {
+        return postJson("/api/gimbal/beacon/calibration/capture", {});
+    };
+
+    LiveTransport.prototype.cancelBeaconCalibration = function (this: any): any  {
+        return postJson("/api/gimbal/beacon/calibration/cancel", {});
+    };
+
+    LiveTransport.prototype.getBeaconCalibration = function (this: any): any  {
+        return fetch("/api/gimbal/beacon/calibration", { cache: "no-store" }).then(function (this: any,response?: any): any  {
+            return response.json();
+        });
+    };
+
+    LiveTransport.prototype.startImuCalibration = function (this: any,type?: any): any  {
+        return postJson("/api/calibration/imu/start", { type: String(type || "ACCEL").toUpperCase() });
+    };
+
+    LiveTransport.prototype.confirmImuCalibration = function (this: any,positionCode?: any): any  {
+        return postJson("/api/calibration/imu/confirm", { positionCode: Number(positionCode) });
+    };
+
+    LiveTransport.prototype.getRecordings = function (this: any): any  {
+        return fetch("/api/gimbal/recordings", { cache: "no-store" }).then(function (this: any,response?: any): any  { return response.json(); }).then(function (this: any,payload?: any): any  {
+            if (!payload.success) throw new Error(payload.message || "录像列表不可用");
+            return payload.recordings || [];
+        });
+    };
+
+    LiveTransport.prototype.disconnect = function (this: any): any  {
+        this.drive({ x: 0, y: 0 });
+        this.connected = false;
+        clearInterval(this.pollTimer);
+        clearInterval(this.driveKeepaliveTimer);
+        this.driveKeepaliveTimer = null;
+        clearTimeout(this.driveTimer);
+        if (this.socket) this.socket.disconnect();
+        this.socket = null;
+        return Promise.resolve();
+    };
+
+    class GimbalHealthMonitor {
+[key:string]:any;
+constructor(options?: any) {
+        options = options || {};
+        this.onFault = options.onFault || function (this: any): any  {};
+        this.angleThreshold = Number(options.angleThreshold || 0.8);
+        this.windowMs = Number(options.windowMs || 1800);
+        this.requiredWindows = Number(options.requiredWindows || 3);
+        this.minCommandRate = Number(options.minCommandRate || 8);
+        this.maxStillGyro = Number(options.maxStillGyro || 1);
+        this.feedbackTimeoutMs = Number(options.feedbackTimeoutMs || 5000);
+        this.history = [];
+        this.consecutiveStalls = 0;
+        this.latched = false;
+        this.armed = false;
+        this.lastSampleAt = 0;
+        this.watchdogTimer = setInterval(function (this: any): any  {
+            if (!this.armed || this.latched || Date.now() - this.lastSampleAt <= this.feedbackTimeoutMs) return;
+            this.armed = false;
+            this.history = [];
+            this.consecutiveStalls = 0;
+        }.bind(this), 500);
+    }
+}
+
+    GimbalHealthMonitor.prototype.reset = function (this: any): any  {
+        this.history = [];
+        this.consecutiveStalls = 0;
+        this.latched = false;
+        this.armed = false;
+        this.lastSampleAt = 0;
+    };
+
+    GimbalHealthMonitor.prototype.sample = function (this: any,state?: any): any  {
+        if (!state || this.latched) return null;
+        var feedback: any = state.feedback || {};
+        var now: any = Date.now();
+        var sample: any = {
+            at: now,
+            yaw: Number(feedback.yawDeg),
+            pitch: Number(feedback.pitchDeg),
+            gyro: Math.hypot(Number(feedback.gyroYawDps) || 0, Number(feedback.gyroPitchDps) || 0),
+            command: String(state.lastCommand || ""),
+            error: String(state.lastError || ""),
+            connected: state.connected !== false
+        };
+        if (sample.error) return this.fault("GMB-DEVICE-ERROR", sample.error, state);
+        if (!sample.connected) return this.fault("GMB-LINK-LOST", "云台通信已断开", state);
+        if (!Number.isFinite(sample.yaw) || !Number.isFinite(sample.pitch)) return null;
+        this.lastSampleAt = now;
+        this.history.push(sample);
+        this.history = this.history.filter(function (this: any,item?: any): any  { return now - item.at <= this.windowMs * 1.4; }.bind(this));
+        var first: any = this.history[0];
+        if (!first || now - first.at < this.windowMs) return null;
+        var delta: any = Math.hypot(sample.yaw - first.yaw, sample.pitch - first.pitch);
+        var target: any = state.lastTarget || {};
+        var targetAt: any = Number(target.timestamp || target.updatedAt || 0);
+        var commandRate: any = Math.hypot(
+            Number(target.desiredRateX || target.rateX || 0),
+            Number(target.desiredRateY || target.rateY || 0)
+        );
+        var targetFresh: any = targetAt > 0 && now - targetAt <= this.windowMs * 1.5;
+        var expectsMotion: any = Boolean(state.trackingActive) && targetFresh && commandRate >= this.minCommandRate && !target.gated && !target.limited;
+        this.armed = expectsMotion;
+        if (expectsMotion && delta < this.angleThreshold && sample.gyro < this.maxStillGyro) this.consecutiveStalls += 1;
+        else this.consecutiveStalls = 0;
+        this.history = [sample];
+        if (this.consecutiveStalls >= this.requiredWindows) {
+            return this.fault("GMB-MOTION-STALL", "云台收到非零运动目标，但角度与陀螺仪均无响应", { state: state, delta: delta, gyro: sample.gyro, commandRate: commandRate, windows: this.consecutiveStalls, inferredNotHardwareConfirmed: true });
+        }
+        return { healthy: true, delta: delta, gyro: sample.gyro, commandRate: commandRate, consecutiveStalls: this.consecutiveStalls };
+    };
+
+    GimbalHealthMonitor.prototype.fault = function (this: any,code?: any, message?: any, evidence?: any): any  {
+        this.latched = true;
+        var report: any = { healthy: false, code: code, message: message, evidence: evidence, detectedAt: new Date().toISOString(), action: "STOP_GIMBAL" };
+        this.onFault(report);
+        return report;
+    };
+
+    window.MantaAppTransport = {
+        create: function (this: any,mode?: any): any  { return mode === "live" ? new LiveTransport() : new MockTransport(); },
+        MockTransport: MockTransport,
+        LiveTransport: LiveTransport,
+        GimbalHealthMonitor: GimbalHealthMonitor,
+        defaults: { device: DEFAULT_DEVICE }
+    };
+})(window);

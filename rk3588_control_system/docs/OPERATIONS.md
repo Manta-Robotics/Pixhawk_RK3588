@@ -27,7 +27,7 @@ sudo journalctl -u manta-backend.service -n 100 --no-pager
 curl -fsS http://127.0.0.1:3000/health
 curl -fsS http://127.0.0.1:8091/health
 curl -I http://10.42.0.1/generate_204
-python3 backend/mavlink_bridge.py --help
+control/bin/manta-control --help
 ```
 
 ## 云台网络

@@ -1,3 +1,4 @@
+// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +8,7 @@ import { IntermittentUwbFollow } from '../backend/uwb_target_prediction.js';
 import { UwbFollowController } from '../backend/uwb_follow.js';
 import { UwbAutoResume } from '../backend/uwb_auto_resume.js';
 
-const source = fs.readFileSync(new URL('../backend/server.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('./fixtures/legacy-server-control.txt', import.meta.url), 'utf8');
 const update = source.slice(source.indexOf('function updateUwbFollow('), source.indexOf('function updateTelemetry('));
 const calibration = { bearing_sign: 1, bearing_scale: 1, bearing_offset_deg: 0 };
 function t(now, valid = true) {

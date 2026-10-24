@@ -90,7 +90,8 @@ def load_config(report):
 def check_source(report, config):
     required = (
         "backend/server.js",
-        "backend/mavlink_bridge.py",
+        "control/bin/manta-control",
+        "scripts/native_control_service.sh",
         "frontend/mobile-preview-kimi-k26.html",
         "frontend/assets/manta-app/manta-hero.jpg",
         "frontend/js/gps-map-core.js",

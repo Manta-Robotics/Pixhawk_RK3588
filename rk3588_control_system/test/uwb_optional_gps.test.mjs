@@ -1,3 +1,4 @@
+// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -150,7 +151,7 @@ test('neural execution shares GPS fallback without claiming GPS inputs reached t
 });
 
 test('production stopped-follow branch never dispatches propulsion or begins a follow request', () => {
-  const source = fs.readFileSync(new URL('../backend/server.js', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('./fixtures/legacy-server-control.txt', import.meta.url), 'utf8');
   const loop = source.slice(source.indexOf('function updateUwbFollow('), source.indexOf('function updateTelemetry('));
   const c = new UwbFollowController(config);
   const sandbox = { Date: { now: () => 1000 }, uwbFollowState: { active: false },

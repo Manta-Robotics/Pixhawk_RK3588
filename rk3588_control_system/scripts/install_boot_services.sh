@@ -17,6 +17,11 @@ if [[ -d /opt/node20/bin ]]; then
 fi
 
 node "$PROJECT_DIR/scripts/validate_config.mjs" "$CONFIG_FILE"
+if [[ ! -x "$PROJECT_DIR/control/bin/manta-control" ]]; then
+    echo '[install-boot] Build the native service first: bash scripts/build_native_control.sh' >&2
+    exit 1
+fi
+"$PROJECT_DIR/control/bin/manta-control" --config "$CONFIG_FILE" --check-config
 
 if ! id "$RUN_USER" >/dev/null 2>&1; then
     echo "[install-boot] Unknown run user: $RUN_USER" >&2

@@ -1,3 +1,4 @@
+// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bridge = fs.readFileSync(path.join(projectRoot, 'backend', 'mavlink_bridge.py'), 'utf8');
-const server = fs.readFileSync(path.join(projectRoot, 'backend', 'server.js'), 'utf8');
+const server = fs.readFileSync(path.join(projectRoot, 'test', 'fixtures', 'legacy-server-control.txt'), 'utf8');
 const transport = fs.readFileSync(path.join(projectRoot, 'frontend', 'js', 'manta-app-transport.js'), 'utf8');
 const motorConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'config', 'motor_config.json'), 'utf8'));
 

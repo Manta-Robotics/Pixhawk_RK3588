@@ -36,7 +36,10 @@ test('raw-window fallback clears isolated evidence and never samples quarantined
   assert.equal(recovery.reacquisitionDiagnostic.reason, 'occlusion_quarantine');
   assert.deepEqual(recovery.reacquisition, []);
 });
-test('NMPC keeps old admitted position and ignores raw direction during quarantine', () => {
+test('NMPC keeps old admitted position and ignores raw direction during quarantine', (t) => {
+  // This checks admission geometry, not host scheduling. Deadline rejection is
+  // covered separately in uwb_reject_nmpc.test.mjs with an advancing test clock.
+  t.mock.method(performance, 'now', () => 0);
   const controller = new UwbRejectNmpc(config);
   const accepted = (at, range) => ({ safe: true, forwardSpeedMps: 0, yawRateDegS: 0,
     targetEstimate: { admissionVersion: 1, measurementConfirmed: true, referenceFrame: 'local_ned',

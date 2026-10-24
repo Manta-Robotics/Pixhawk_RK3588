@@ -203,12 +203,12 @@ export function validateSystemConfig(config) {
         errors.push('uwb_measurement_filter.occlusion_enabled must be boolean');
       if (measurementFilter.adaptive_enabled !== undefined && typeof measurementFilter.adaptive_enabled !== 'boolean')
         errors.push('uwb_measurement_filter.adaptive_enabled must be boolean');
-      for (const [key, fallback, min, max] of [['stationary_time_constant_s', .4, .1, 2], ['moving_time_constant_s', .06, .01, .3]]) {
+      for (const [key, fallback, min, max] of [['stationary_time_constant_s', .4, .1, 2], ['moving_time_constant_s', .01, .01, .3]]) {
         const value = measurementFilter[key] === undefined ? fallback : measurementFilter[key];
         if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max)
           errors.push(`uwb_measurement_filter.${key} must be between ${min} and ${max}`);
       }
-      if ((measurementFilter.moving_time_constant_s ?? .06) > (measurementFilter.stationary_time_constant_s ?? .4))
+      if ((measurementFilter.moving_time_constant_s ?? .01) > (measurementFilter.stationary_time_constant_s ?? .4))
         errors.push('uwb_measurement_filter.moving_time_constant_s must not exceed stationary_time_constant_s');
       for (const [key, min, max] of [
         ['distance_std_m', 0.02, 1], ['angle_std_deg', 0.2, 15], ['acceleration_std_mps2', 0.1, 10],
