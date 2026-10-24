@@ -47,3 +47,12 @@ jobs:
 
       - name: Run maintenance checks
         run: npm run maintenance
+
+      - name: Install native control build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake nlohmann-json3-dev
+
+      - name: Build and compare native UWB algorithms with the Python baseline
+        run: |
+          cmake -S control -B control/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build control/build --parallel 2
+          python scripts/check_native_parity.py control/build/manta-replay

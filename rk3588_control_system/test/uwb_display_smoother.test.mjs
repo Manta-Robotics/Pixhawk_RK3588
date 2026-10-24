@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {loadTypeScript} from './helpers/load-typescript.mjs';
 import '../frontend/js/uwb-display-smoother.js';
-const Smoother = globalThis.MantaUwbDisplaySmoother;
+const migrated = loadTypeScript('web/src/uwb-display-smoother.ts').UwbDisplaySmoother;
+for (const Smoother of [globalThis.MantaUwbDisplaySmoother, migrated]) {
 const packet = (at, azimuthDeg = 0) => ({ online: true, fresh: true, distanceM: 3, azimuthDeg,
   measurementUpdatedAt: at, activeReceiverIds: [1], sensors: [{ receiverId: 1, tagId: 'a' }] });
 
@@ -73,3 +75,5 @@ test('an unselected moving receiver cannot disable stationary display smoothing'
   assert.equal(f.moving, false);
   assert.equal(f.view({...p, fresh:false}, 1050).valid, false);
 });
+
+}

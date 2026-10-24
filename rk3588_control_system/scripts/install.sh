@@ -45,13 +45,15 @@ else
     echo "[install] Offline mode: skipping apt repositories"
 fi
 
-node_major=0
+node_compatible=0
 if command -v node >/dev/null 2>&1; then
-    node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
+    if node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22 ? 0 : 1)'; then
+        node_compatible=1
+    fi
 fi
-if [[ ! "$node_major" =~ ^[0-9]+$ || $node_major -lt 20 ]]; then
+if [[ $node_compatible -ne 1 ]]; then
     if [[ $OFFLINE -eq 1 ]]; then
-        echo "[install] Node.js 20+ is required in offline mode." >&2
+        echo "[install] Node.js 20.19+ or 22.12+ is required in offline mode." >&2
         exit 1
     fi
     echo "[install] Installing Node.js 20 LTS"
@@ -61,6 +63,7 @@ fi
 
 echo "[install] Installing deterministic Node dependencies"
 npm ci
+npm run build
 
 echo "[install] Creating project Python environment"
 if [[ ! -x "$PROJECT_DIR/.venv/bin/python" ]]; then

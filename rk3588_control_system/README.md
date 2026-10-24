@@ -2,6 +2,8 @@
 
 本目录包含 Manta 机器人在 RK3588 上运行的完整上位机：MAVLink 桥接、云台控制、视觉跟踪、摄像头代理、录像管理、Web 控制台、Wi-Fi 热点和蓝牙 PAN。
 
+主控制台已迁移至 React + TypeScript，保持原界面和交互。首次启动前执行 `npm ci && npm run build`；开发、部署和验证说明见 [React 迁移说明](docs/react-migration.md)。
+
 ## 1. 运行架构
 
 ```text
@@ -119,7 +121,7 @@ npm run check
 npm run maintenance
 ```
 
-`npm run check:config` 只校验主配置。`npm run check` 会在对应解释器可用时检查 JavaScript、Python、Shell、JSON 和 systemd 服务模板；跳过项会明确输出。`npm run maintenance` 会先运行自动化测试，再运行全部静态检查。配置校验覆盖串口、端口、热点密码占位符、RTSP 地址、手机预览参数、录像编码器和跟踪保持区。
+`npm run check:config` 只校验主配置。`npm run check` 会在对应解释器可用时检查 JavaScript、Python、Shell、JSON 和 systemd 服务模板；跳过项会明确输出。`npm run maintenance` 会先运行自动化测试，再运行全部静态检查和 React 生产构建。配置校验覆盖串口、端口、热点密码占位符、RTSP 地址、手机预览参数、录像编码器和跟踪保持区。
 
 ## 9. 目录职责
 

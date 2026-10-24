@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {loadTypeScript} from './helpers/load-typescript.mjs';
 import '../frontend/js/uwb-raw-display.js';
-const Raw = globalThis.MantaUwbRawDisplay;
+const migrated = loadTypeScript('web/src/uwb-raw-display.ts').RawDisplay;
+for (const Raw of [globalThis.MantaUwbRawDisplay, migrated]) {
 const sensor = (at, overrides = {}) => ({ receiverId: 1, tagId: 5313, valid: true,
   rawDistanceM: 1.11, rawAzimuthDeg: 11, rawDistanceUpdatedAt: at,
   receivedMeasurementAt: at, ...overrides });
@@ -55,3 +57,5 @@ test('raw values keep module angles, apply mount geometry only to plot and ident
   assert.equal(changed.distanceM, 3); assert.equal(changed.tagId, 22);
   assert.equal(display.samples.size, 1);
 });
+
+}

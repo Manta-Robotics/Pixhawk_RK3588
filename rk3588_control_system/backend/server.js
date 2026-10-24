@@ -926,10 +926,17 @@ app.use((_req, res, next) => {
 });
 app.use(bodyParser.json({ limit: '1mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
+const webRoot = path.join(PROJECT_ROOT, 'dist', 'web');
 app.get(['/', '/index.html'], (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
+  if (!fs.existsSync(path.join(webRoot, 'index.html'))) {
+    res.status(503).type('text').send('Web build missing. Run npm run build, then reload.');
+    return;
+  }
+  res.sendFile(path.join(webRoot, 'index.html'));
 });
+app.use(express.static(webRoot, { index: false }));
+// Keep existing standalone tools and their URLs available during migration.
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
 
 const telemetryCsvBuffer = [];
