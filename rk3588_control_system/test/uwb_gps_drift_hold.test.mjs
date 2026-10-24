@@ -1,3 +1,4 @@
+// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -57,7 +58,7 @@ test('single angular spike, rejected data and duplicate snapshots cannot unlock 
  }
 });
 test('production waiting branch sends GPS assistance over ROVER_ACRO and records diagnostics',()=>{
- const source=fs.readFileSync(new URL('../backend/server.js',import.meta.url),'utf8');
+ const source=fs.readFileSync(new URL('./fixtures/legacy-server-control.txt',import.meta.url),'utf8');
  const holding=source.slice(source.indexOf('function maintainUwbHoldingMode('),source.indexOf('function maintainUwbResumeTransition('));
  const commands=[],p=packet();p.velocity.vx=-.5;
  const box={Date:{now:()=>1000},systemState:{telemetry:p},uwbGpsDriftHold:new UwbGpsDriftHold(config),

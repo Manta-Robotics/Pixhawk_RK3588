@@ -55,10 +55,6 @@ http://127.0.0.1:4173/mobile-preview-kimi-k26.html。
 
 ## C++ 迁移状态
 
-`control/` 当前包含 UWB 量测准入、滤波、双接收器融合及离线 JSONL 回放程序。
-`scripts/check_native_parity.py` 对照 Python 基线，已覆盖 14,248 帧及全部输出字段。
-CI 会编译并运行这项对照。
-
-**当前尚未切换线上控制链路。** MAVLink 串口服务、跟随控制及独立进程部署仍需完成；
-现有 Node.js / Python 控制路径继续工作。不得将离线 UWB 对照通过解释为整个 C++ 控制服务已完成，
-也不得在切换前删除原控制算法或降低现有看门狗与准入要求。
+`control/` 已包含独立 MAVLink/UWB/跟随控制服务，`manta-bridge.service` 启动 C++ 可执行程序。
+Node.js 保留 Web 与媒体管理，通过本机 IPC 发送操作请求；旧控制算法作为测试基线保留。
+构建、服务部署、进程边界和无硬件验证见 [独立 C++ 控制服务](native-control.md)。

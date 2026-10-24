@@ -1,9 +1,10 @@
 /**
  * RK3588 + Pixhawk Rover Control System - Node.js Backend Server
- * Direct web access + Socket.io + UDP bridge for Python MAVLink process.
+ * Web access, video and Socket.io; operator intents go to the native control service.
  */
 
 import express from 'express';
+import { NativeControlClient } from './native_control.js';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
 import path from 'path';
@@ -22,15 +23,10 @@ import { validateSystemConfig } from '../scripts/validate_config.mjs';
 import { isSameOriginRequest, rejectCrossOrigin } from './origin_policy.js';
 import { computeBeaconControl, normalizeAngleDeg } from './gimbal_beacon.js';
 import { fitBeaconCalibration, generateBeaconCalibrationPoints } from './gimbal_beacon_calibration.js';
-import { shapeRoverAxis } from './rover_slew.js';
 import { DualThrustRoverLimiter } from './dual_thrust_rover.js';
-import { TraditionalManualPropulsion } from './traditional_manual_propulsion.js';
 import { UwbFollowController } from './uwb_follow.js';
 import { IntermittentUwbFollow } from './uwb_target_prediction.js';
-import { UwbAutoResume } from './uwb_auto_resume.js';
-import { UwbGpsDriftHold } from './uwb_gps_drift_hold.js';
 import { NeuralUwbFollowController } from './neural_uwb_follow.js';
-import { NeuralManualPropulsion } from './neural_manual_propulsion.js';
 import { UwbTestLogger } from './uwb_test_logger.js';
 import {
   acceptGimbalFeedback,
@@ -103,10 +99,8 @@ const uwbControllerConfig = {
   bearing_offset_deg: GIMBAL_BEACON_CONFIG.yaw_offset_deg ?? UWB_FOLLOW_CONFIG.bearing_offset_deg,
   neural_model_path: path.resolve(PROJECT_ROOT, UWB_FOLLOW_CONFIG.neural_model_path || 'models/smart_usv_uwb_policy.json')
 };
+// Configuration metadata only; no JS controller is ticked in this process.
 const intermittentUwbFollow = new IntermittentUwbFollow(UWB_FOLLOW_CONFIG.prediction, uwbControllerConfig);
-const uwbAutoResume = new UwbAutoResume(uwbControllerConfig);
-const uwbGpsDriftHold = new UwbGpsDriftHold(uwbControllerConfig);
-let startUwbFollowRequest = null;
 const traditionalUwbFollowController = new UwbFollowController({ ...uwbControllerConfig, manual_propulsion: 'single_side' });
 let neuralUwbFollowController = null;
 let neuralUwbFollowLoadError = null;
@@ -140,13 +134,7 @@ let uwbFollowState = {
   updatedAt: Date.now()
 };
 let uwbFollowTransitionBusy = false;
-let uwbFollowTransitionId = 0;
 let uwbFollowControlMode = 'auto';
-let uwbHoldingEnteredAt = 0;
-let uwbHoldingManualConfirmedAt = 0;
-let uwbHoldingModeRequestedAt = 0;
-let uwbResumeStartedAt = 0;
-let uwbResumeModeRequestedAt = 0;
 
 const PWM_MIN = Number(config.min_motor_pwm || 1000);
 const PWM_MAX = Number(config.max_motor_pwm || 2000);
@@ -172,10 +160,6 @@ const ROVER_LEFT_CHANNEL = Number(config.rover_left_channel ?? 1);
 const ROVER_RIGHT_CHANNEL = Number(config.rover_right_channel ?? 3);
 const ROVER_CONTROL_PROTOCOL = String(config.rover_control_protocol || 'manual_control').trim().toLowerCase();
 const ROVER_COMMAND_TIMEOUT_MS = Math.max(200, Number(config.rover_command_timeout_ms || 350));
-const UWB_HOLD_MODE_RETRY_MS = 500;
-const UWB_HOLD_NEUTRAL_TIMEOUT_MS = 1500;
-const UWB_RESUME_MODE_TIMEOUT_MS = 5000;
-const UWB_HOLD_PWM_TOLERANCE = 20;
 const ROVER_MANUAL_THROTTLE_DEADBAND = Math.max(0, Number(config.rover_manual_throttle_deadband_percent ?? 4));
 const ROVER_MANUAL_STEERING_DEADBAND = Math.max(0, Number(config.rover_manual_steering_deadband_deg ?? 2));
 const ROVER_MANUAL_INPUT_EXPO = Math.max(1, Number(config.rover_manual_input_expo ?? 1.4));
@@ -195,18 +179,6 @@ const manualPropulsionConfig = {
   input_expo: ROVER_MANUAL_INPUT_EXPO
 };
 const manualRoverSlew = new DualThrustRoverLimiter(manualPropulsionConfig);
-const neuralManualPropulsion = new NeuralManualPropulsion(manualPropulsionConfig);
-const traditionalManualPropulsion = new TraditionalManualPropulsion({
-  throttle_limit: Math.min(ROVER_MANUAL_THROTTLE_LIMIT, traditionalUwbFollowController.config.relativeThrottleLimitPercent),
-  steering_limit: Math.min(ROVER_MANUAL_STEERING_LIMIT, traditionalUwbFollowController.config.relativeSteeringLimitDeg),
-  throttle_span: Math.max(Math.abs(ROVER_THROTTLE_MIN), Math.abs(ROVER_THROTTLE_MAX)),
-  steering_span: Math.max(Math.abs(ROVER_STEERING_MIN), Math.abs(ROVER_STEERING_MAX)),
-  throttle_accel_percent_s: traditionalUwbFollowController.config.throttleAccelPercentS,
-  throttle_decel_percent_s: traditionalUwbFollowController.config.throttleDecelPercentS,
-  reverse_neutral_ms: config.rover_manual_reverse_neutral_ms,
-  side_switch_neutral_ms: config.rover_manual_side_switch_neutral_ms,
-  maximum_dt_s: 2 / UWB_FOLLOW_RATE_HZ
-});
 const HARDWARE_FEEDBACK_TIMEOUT_MS = Math.max(1000, Number(config.hardware_feedback_timeout_ms || 3000));
 const IMU_CALIBRATION_POSITIONS = {
   1: 'LEVEL',
@@ -276,7 +248,7 @@ const io = new Server(httpServer, {
   perMessageDeflate: false
 });
 
-const commandSocket = dgram.createSocket('udp4');
+const nativeControl = new NativeControlClient({ host: BRIDGE_HOST, port: BRIDGE_COMMAND_PORT });
 const telemetrySocket = dgram.createSocket('udp4');
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
 
@@ -1157,12 +1129,8 @@ function appendTelemetryCsv(telemetry) {
 }
 
 function sendMavlinkCommand(command, params = {}) {
-  const payload = { command, params, timestamp: Date.now() };
-  const buffer = Buffer.from(JSON.stringify(payload));
-  commandSocket.send(buffer, BRIDGE_COMMAND_PORT, BRIDGE_HOST, (error) => {
-    if (error) {
-      addLog('ERROR', `Failed to send bridge command ${command}: ${error.message}`);
-    }
+  void nativeControl.command(command, params).then(result => {
+    if (!result.ok) addLog('ERROR', 'Native control ' + command + ': ' + result.error);
   });
 }
 
@@ -1579,7 +1547,9 @@ function limitGimbalTrackRates(rateX, rateY) {
   return { x, y, limited: x !== rateX || y !== rateY };
 }
 
+let nativeGuardedUwb = null;
 function stabilizeBeaconUwb(now, uwb) {
+  if (nativeGuardedUwb && now - nativeGuardedUwb.receivedAt <= 250) return nativeGuardedUwb.value;
   if (!uwb || !uwb.online || !uwb.fresh || !Number.isFinite(Number(uwb.azimuthDeg)) || !Number.isFinite(Number(uwb.elevationDeg))) {
     gimbalBeaconSourceGuard = null;
     return uwb;
@@ -1600,16 +1570,6 @@ function stabilizeBeaconUwb(now, uwb) {
     updatedAt: now
   };
   return { ...uwb, azimuthDeg: gimbalBeaconSourceGuard.azimuthDeg, elevationDeg: gimbalBeaconSourceGuard.elevationDeg };
-}
-
-// Keep vessel following and gimbal beacon tracking on the same guarded UWB
-// solution.  This prevents one path from accepting a fused target while the
-// other path still reports a stale/invalid raw sample.
-function sharedUwbControlTelemetry(now = Date.now()) {
-  return {
-    ...systemState.telemetry,
-    uwb: stabilizeBeaconUwb(now, systemState.telemetry.uwb)
-  };
 }
 
 function setBeaconAbsoluteCommand(yawDeg, pitchDeg, now = Date.now()) {
@@ -3315,7 +3275,7 @@ function pwmToSignedRange(pwm, minimum, maximum) {
   return delta * Math.abs(Number(minimum)) / Math.max(1, PWM_CENTER - PWM_MIN);
 }
 
-function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
+async function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
   const validation = validateChannelAndPwm(channel, pwm);
   if (!validation.ok) {
     return validation;
@@ -3337,7 +3297,7 @@ function handleMotorControl(channel, pwm, sourceLabel = 'UNKNOWN') {
   const rightPwm = toPwm(systemState.motorStatus[rightKey] ?? PWM_CENTER);
   const throttlePwm = toPwm((leftPwm + rightPwm) / 2);
   const steeringPwm = toPwm(PWM_CENTER + (leftPwm - rightPwm) / 2);
-  const result = applyRoverControl({
+  const result = await applyRoverControl({
     throttle: pwmToSignedRange(throttlePwm, ROVER_THROTTLE_MIN, ROVER_THROTTLE_MAX),
     steering: pwmToSignedRange(steeringPwm, ROVER_STEERING_MIN, ROVER_STEERING_MAX)
   }, sourceLabel);
@@ -3386,82 +3346,15 @@ function normalizeRoverControl(input = {}) {
   };
 }
 
-let lastRoverCommandAt = 0;
-let manualRoverSource = 'WEB';
 
-function sendManualRoverOutput(controlInput = {}, sourceLabel = manualRoverSource) {
-  const normalized = normalizeRoverControl(controlInput);
-  sendMavlinkCommand('ROVER_DRIVE', {
-    throttle: normalized.throttle,
-    steering: normalized.steering,
-    protocol: ROVER_CONTROL_PROTOCOL,
-    motorTargetSemantics: true
-  });
-
-  systemState.roverControl = {
-    throttle: normalized.throttle,
-    steering: normalized.steering,
-    leftPwm: normalized.leftPwm,
-    rightPwm: normalized.rightPwm
-  };
-  systemState.motorStatus[`ch${ROVER_LEFT_CHANNEL}`] = normalized.leftPwm;
-  systemState.motorStatus[`ch${ROVER_RIGHT_CHANNEL}`] = normalized.rightPwm;
-
-  io.emit('rover_control_update', {
-    ...systemState.roverControl,
-    source: sourceLabel,
-    timestamp: new Date().toISOString()
-  });
-  return normalized;
-}
-
-function applyRoverControl(controlInput = {}, sourceLabel = 'WEB') {
+async function applyRoverControl(controlInput = {}, sourceLabel = 'WEB') {
   const requested = normalizeRoverControl(controlInput);
-  if ((uwbFollowState.active || uwbFollowTransitionBusy || uwbFollowState.autoResumePending) && (requested.throttle !== 0 || requested.steering !== 0)) {
-    stopUwbFollow('manual_override', { disarm: uwbFollowTransitionBusy });
-  }
-  refreshHardwareState();
-  const neutralCommand = requested.throttle === 0 && requested.steering === 0;
-  if (!systemState.isConnected && !neutralCommand) {
-    addLog('ERROR', `${sourceLabel} non-neutral drive command rejected: Pixhawk heartbeat offline`);
-    return { ok: false, error: 'Pixhawk heartbeat is offline; drive command rejected' };
-  }
-  if (!neutralCommand && systemState.telemetry.pilotSteering?.ready !== true) {
-    return { ok: false, error: 'Waiting for Pixhawk PILOT_STEER_TYPE; manual propulsion held neutral' };
-  }
-  const target = normalizeRoverControl({
-    throttle: shapeRoverAxis(requested.throttle, {
-      limit: ROVER_MANUAL_THROTTLE_LIMIT,
-      deadband: ROVER_MANUAL_THROTTLE_DEADBAND,
-      expo: ROVER_MANUAL_INPUT_EXPO
-    }),
-    steering: shapeRoverAxis(requested.steering, {
-      limit: ROVER_MANUAL_STEERING_LIMIT,
-      deadband: ROVER_MANUAL_STEERING_DEADBAND,
-      expo: ROVER_MANUAL_INPUT_EXPO
-    })
+  return nativeControl.command('MANUAL_TARGET', {
+    throttle: requested.throttle, steering: requested.steering, source: sourceLabel
   });
-  manualRoverSlew.setTarget({ ...target, rawThrottle: requested.throttle, rawSteering: requested.steering });
-  manualRoverSource = sourceLabel;
-  lastRoverCommandAt = Date.now();
-
-  if (requested.clamped) {
-    addLog('SAFETY', `${sourceLabel} command clamped to throttle=${requested.throttle}, steering=${requested.steering}`);
-  }
-
-  return {
-    ok: true,
-    ...systemState.roverControl,
-    targetThrottle: target.throttle,
-    targetSteering: target.steering,
-    clamped: requested.clamped
-  };
 }
 
 function publishNeutralRoverControl(source = 'SAFETY') {
-  traditionalManualPropulsion.reset(Date.now());
-  neuralManualPropulsion.reset(Date.now());
-  manualRoverSlew.reset(Date.now());
   systemState.roverControl = {
     throttle: 0,
     steering: 0,
@@ -3470,7 +3363,6 @@ function publishNeutralRoverControl(source = 'SAFETY') {
   };
   systemState.motorStatus[`ch${ROVER_LEFT_CHANNEL}`] = PWM_CENTER;
   systemState.motorStatus[`ch${ROVER_RIGHT_CHANNEL}`] = PWM_CENTER;
-  lastRoverCommandAt = Date.now();
   io.emit('rover_control_update', {
     ...systemState.roverControl,
     source,
@@ -3479,42 +3371,8 @@ function publishNeutralRoverControl(source = 'SAFETY') {
 }
 
 function forceNeutralRoverControl(source = 'SAFETY', reason = source) {
-  sendMavlinkCommand('ROVER_DRIVE', {
-    throttle: 0,
-    steering: 0,
-    protocol: ROVER_CONTROL_PROTOCOL,
-    reason
-  });
+  sendMavlinkCommand('CONTROL_NEUTRAL', { reason });
   publishNeutralRoverControl(source);
-}
-
-function updateManualRoverSlew() {
-  const now = Date.now();
-  if (uwbFollowState.active && (uwbFollowState.controlMode === 'relative_acro' || uwbFollowState.relativeImuControl)) {
-    if (now - lastRoverCommandAt > ROVER_COMMAND_TIMEOUT_MS) stopUwbFollow('command_lease_expired', { disarm: true });
-    return;
-  }
-  if (uwbFollowState.active && uwbTrackingMethod === 'neural') {
-    const output = neuralManualPropulsion.limiter.output;
-    if ((output.throttle !== 0 || output.steering !== 0) && now - lastRoverCommandAt > ROVER_COMMAND_TIMEOUT_MS) {
-      stopUwbFollow('command_lease_expired', { disarm: true });
-    }
-    return;
-  }
-  if (uwbFollowState.active || uwbFollowTransitionBusy) return;
-  const target = manualRoverSlew.target || {};
-  const targetNonNeutral = Number(target.throttle) !== 0 || Number(target.steering) !== 0;
-  if (targetNonNeutral && now - lastRoverCommandAt > ROVER_COMMAND_TIMEOUT_MS) {
-    addLog('SAFETY', `Rover command lease expired after ${ROVER_COMMAND_TIMEOUT_MS}ms; MANUAL_CONTROL neutralized`);
-    forceNeutralRoverControl('ROVER_WATCHDOG', 'command_lease_expired');
-    return;
-  }
-
-  const previous = { ...(manualRoverSlew.output || {}) };
-  const output = manualRoverSlew.step(now);
-  const changed = output.throttle !== previous.throttle || output.steering !== previous.steering;
-  const nonNeutral = output.throttle !== 0 || output.steering !== 0;
-  if (changed || nonNeutral) sendManualRoverOutput(output, `SLEW:${manualRoverSource}`);
 }
 
 function disarmAndReturnManual(reason = 'disarmed') {
@@ -3522,46 +3380,31 @@ function disarmAndReturnManual(reason = 'disarmed') {
   sendMavlinkCommand('SET_MODE', { mode: 'MANUAL', reason });
 }
 
-function sendUwbFollowStop(reason = 'stopped') {
-  neuralManualPropulsion.reset(Date.now());
-  forceNeutralRoverControl('UWB_STOP', reason);
+function acceptNativeFollowState(next) {
+  if (!next || typeof next !== 'object') return;
+  const wasActive = uwbFollowState.active;
+  uwbFollowState = next;
+  uwbTrackingMethod = next.trackingMethod || uwbTrackingMethod;
+  uwbFollowTransitionBusy = next.transitionBusy === true;
+  uwbFollowControlMode = next.controlMode || 'auto';
+  uwbFollowController = uwbTrackingMethod === 'neural' && neuralUwbFollowController
+    ? neuralUwbFollowController : traditionalUwbFollowController;
+  systemState.uwbFollow = next;
+  io.emit('uwb_follow_update', next);
+  if (next.active && !wasActive) startUwbTestLog(next);
+  else if (!next.active && wasActive) finishUwbTestLog(next.reason, next);
+  else if (next.active) recordUwbTestSample(next, next.status || 'sample');
 }
 
-function idleUwbFollowResult(reason, status = null, preflight = {}) {
-  const controlMode = preflight.controlMode || uwbFollowControlMode;
-  const guided = controlMode === 'guided_velocity';
-  return {
-    safe: false,
-    status: status || undefined,
-    reason,
-    trackingMethod: uwbTrackingMethod,
-    controlMode,
-    requiredFlightMode: preflight.requiredFlightMode || (guided ? 'GUIDED' : controlMode === 'relative_manual' ? 'MANUAL' : controlMode === 'relative_acro' ? 'ACRO' : null),
-    navigationAvailable: preflight.navigationAvailable === true,
-    navigationReason: preflight.navigationReason || null,
-    commandFrame: guided ? 'BODY_NED' : 'BODY_RELATIVE',
-    relativeBodyM: { x: 0, y: 0 },
-    forwardSpeedMps: 0,
-    yawRateDegS: 0,
-    yawRateRadS: 0,
-    throttlePercent: 0,
-    steeringDegrees: 0,
-    velocityNed: { x: 0, y: 0 },
-    desiredSpeedMps: 0
+function acceptNativeRoverControl(output) {
+  if (!output || typeof output !== 'object') return;
+  systemState.roverControl = {
+    throttle: output.throttle, steering: output.steering,
+    leftPwm: output.leftPwm, rightPwm: output.rightPwm
   };
-}
-
-function publishUwbFollowState(result, active = uwbFollowState.active) {
-  uwbFollowState = {
-    ...result,
-    ...uwbAutoResume.snapshot(),
-    trackingMethod: result.trackingMethod || uwbTrackingMethod,
-    active,
-    status: result.status || (active && result.safe ? 'tracking' : (result.reason === 'safety_distance' ? 'safety_stop' : 'stopped')),
-    updatedAt: Date.now()
-  };
-  systemState.uwbFollow = uwbFollowState;
-  io.emit('uwb_follow_update', uwbFollowState);
+  systemState.motorStatus['ch' + ROVER_LEFT_CHANNEL] = output.leftPwm;
+  systemState.motorStatus['ch' + ROVER_RIGHT_CHANNEL] = output.rightPwm;
+  io.emit('rover_control_update', output);
 }
 
 function buildUwbTestSample(result = uwbFollowState, event = 'sample', reason = null) {
@@ -3658,434 +3501,8 @@ function finishUwbTestLog(reason = 'stopped', result = uwbFollowState) {
   }
 }
 
-function resetUwbHoldTransition() {
-  uwbHoldingEnteredAt = 0;
-  uwbHoldingManualConfirmedAt = 0;
-  uwbHoldingModeRequestedAt = 0;
-  uwbResumeStartedAt = 0;
-  uwbResumeModeRequestedAt = 0;
-}
-
 function stopUwbFollow(reason = 'manual_stop', { disarm = false } = {}) {
-  uwbAutoResume.cancel();
-  uwbGpsDriftHold.reset();
-  const wasRunning = uwbFollowState.active || uwbFollowTransitionBusy;
-  const stoppedControlMode = uwbFollowControlMode;
-  intermittentUwbFollow.reset();
-  uwbFollowTransitionId += 1;
-  uwbFollowTransitionBusy = false;
-  uwbFollowController.reset();
-  resetUwbHoldTransition();
-  sendUwbFollowStop(reason);
-  if (disarm) disarmAndReturnManual(reason);
-  publishUwbFollowState({
-    safe: false,
-    reason,
-    trackingMethod: uwbTrackingMethod,
-    controlMode: stoppedControlMode,
-    requiredFlightMode: stoppedControlMode === 'guided_velocity' ? 'GUIDED' : stoppedControlMode === 'relative_manual' ? 'MANUAL' : stoppedControlMode === 'relative_acro' ? 'ACRO' : null,
-    navigationAvailable: false,
-    commandFrame: stoppedControlMode === 'guided_velocity' ? 'BODY_NED' : 'BODY_RELATIVE',
-    relativeBodyM: { x: 0, y: 0 },
-    forwardSpeedMps: 0,
-    yawRateDegS: 0,
-    yawRateRadS: 0,
-    throttlePercent: 0,
-    steeringDegrees: 0,
-    velocityNed: { x: 0, y: 0 },
-    desiredSpeedMps: 0
-  }, false);
-  finishUwbTestLog(reason, uwbFollowState);
-  uwbFollowControlMode = 'auto';
-  if (wasRunning) addLog('UWB_FOLLOW', `Stopped: ${reason}${disarm ? ' and disarmed' : ''}`);
-}
-
-function selectUwbTrackingMethod(requestedMethod) {
-  const method = String(requestedMethod || '').trim().toLowerCase();
-  if (!['traditional', 'neural'].includes(method)) {
-    return { ok: false, error: 'tracking_method_must_be_traditional_or_neural' };
-  }
-  if (method === 'neural' && !neuralUwbFollowController) {
-    return { ok: false, error: `neural_policy_unavailable:${neuralUwbFollowLoadError || 'load_failed'}` };
-  }
-  if (uwbFollowState.active || uwbFollowTransitionBusy || uwbAutoResume.pending) {
-    return { ok: false, error: 'stop_tracking_before_switching_method' };
-  }
-  intermittentUwbFollow.reset();
-  sendUwbFollowStop('tracking_method_switch');
-  uwbAutoResume.cancel();
-  traditionalUwbFollowController.reset();
-  if (neuralUwbFollowController) neuralUwbFollowController.reset();
-  uwbTrackingMethod = method;
-  uwbFollowController = method === 'neural' ? neuralUwbFollowController : traditionalUwbFollowController;
-  publishUwbFollowState(idleUwbFollowResult('method_selected'), false);
-  addLog('UWB_FOLLOW', `Tracking method selected: ${method}`);
-  return { ok: true, method };
-}
-
-function requireUwbFollowStartClearance(controlMode = uwbFollowControlMode) {
-  const now = Date.now();
-  return uwbFollowController.preflight({
-    now,
-    telemetry: sharedUwbControlTelemetry(now),
-    connected: systemState.isConnected,
-    controlMode
-  });
-}
-
-async function waitForFollowTelemetry(description, predicate, transitionId, { timeoutMs = 5000, guardSensors = true, resumeDeadline = null } = {}) {
-  const deadline = resumeDeadline ?? (Date.now() + timeoutMs);
-  while (Date.now() < deadline) {
-    if (transitionId !== uwbFollowTransitionId) throw new Error('start_cancelled');
-    if (guardSensors) {
-      const preflight = requireUwbFollowStartClearance();
-      if (resumeDeadline !== null) {
-        const failure = uwbAutoResume.transitionFailure(Date.now(), sharedUwbControlTelemetry(Date.now()), preflight);
-        if (failure) throw new Error(failure);
-        sendUwbFollowStop('auto_resume_waiting_fresh_measurement');
-        if (!preflight.safe) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          continue;
-        }
-      } else if (!preflight.safe) throw new Error(preflight.reason);
-    }
-    if (predicate(systemState.telemetry)) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  if (resumeDeadline !== null && requireUwbFollowStartClearance().reason === 'uwb_stale') {
-    throw new Error('auto_resume_signal_timeout');
-  }
-  throw new Error(`${description}_timeout`);
-}
-
-function sendUwbRelativeDrive(result) {
-  if(result.relativeImuControl) {
-    const governed=intermittentUwbFollow.governDrive({throttle:result.throttlePercent||0,steering:result.steeringDegrees||0},result);
-    // Limit the FINAL normalized command, after prediction/startup/braking
-    // caps. Independent yaw slew must never overpower the current surge and
-    // turn one propeller backwards. Reuse the traditional motor turn share.
-    const requested=normalizeRoverControl(governed);
-    const throttle=Math.max(0,requested.throttle);
-    const throttleSpan=Math.max(Math.abs(ROVER_THROTTLE_MIN),Math.abs(ROVER_THROTTLE_MAX),1);
-    const steeringSpan=Math.max(Math.abs(ROVER_STEERING_MIN),Math.abs(ROVER_STEERING_MAX),1);
-    const sameDirectionSteeringLimit=throttle*steeringSpan/throttleSpan
-      *traditionalManualPropulsion.limiter.config.steeringShare;
-    const steering=clamp(requested.steering,-sameDirectionSteeringLimit,sameDirectionSteeringLimit);
-    const output=sendManualRoverOutput({throttle,steering},'UWB_IMU_RELATIVE');
-    uwbFollowController.relativeImuControl?.trackApplied?.(output.throttle,output.steering);
-    lastRoverCommandAt=Date.now();
-    Object.assign(result,{throttlePercent:output.throttle,steeringDegrees:output.steering});
-    return {...output,safe:true,sameDirectionSteeringLimit,
-      sameDirectionLimited:Math.abs(requested.steering)>sameDirectionSteeringLimit+1e-9,
-      propulsion:result.planner==='nmpc'?'optional_gps_relative_nmpc':result.gpsSpeedControlActive?'uwb_gps_speed':'relative_rate_throttle',absoluteSpeedObservable:result.gpsSpeedControlActive===true};
-  }
-  if (result.controlMode === 'relative_acro') {
-    const command = intermittentUwbFollow.governAcro({ ...result,
-      pausePropulsion: result.pausePropulsion || result.reason === 'holding_distance' },
-      Math.min(2, result.speedLimitMps || 2), uwbFollowController.config.maxYawRateDegS,
-      uwbFollowController.config.relativeSteeringLimitDeg, uwbFollowController.config.relativeThrottleLimitPercent);
-    sendMavlinkCommand('ROVER_ACRO', command);
-    Object.assign(result, command, { commandedForwardSpeedMps: command.forwardSpeedMps,
-      yawRateRadS: command.yawRateDegS * Math.PI / 180 });
-    lastRoverCommandAt = Date.now();
-    return { safe: true, throttle: result.throttlePercent || 0, steering: result.steeringDegrees || 0,
-      ...command, propulsion: 'acro_velocity', sameDirectionLimited: false, sameDirectionSteeringLimit: null };
-  }
-  if (result.trackingMethod === 'neural') {
-    const output = neuralManualPropulsion.update({
-      now: Date.now(), result, telemetry: systemState.telemetry, connected: systemState.isConnected
-    });
-    if (!output.safe) {
-      forceNeutralRoverControl('UWB_NEURAL', output.reason);
-      return output;
-    }
-    const normalized = sendManualRoverOutput(intermittentUwbFollow.governDrive(output, result), 'UWB_NEURAL');
-    lastRoverCommandAt = Date.now();
-    return { ...normalized, safe: true, propulsion: 'dual_thrust', sameDirectionLimited: false,
-      sameDirectionSteeringLimit: Math.abs(normalized.throttle) * neuralManualPropulsion.limiter.steeringSpan / neuralManualPropulsion.limiter.throttleSpan };
-  }
-  if (result.controlMode === 'relative_manual') {
-    const output = traditionalManualPropulsion.update({
-      now: Date.now(), result, telemetry: systemState.telemetry, connected: systemState.isConnected
-    });
-    if (!output.safe) {
-      forceNeutralRoverControl('UWB_TRADITIONAL', output.reason);
-      return output;
-    }
-    const normalized = sendManualRoverOutput(intermittentUwbFollow.governDrive(output, result), 'UWB_TRADITIONAL');
-    lastRoverCommandAt = Date.now();
-    return { ...normalized, safe: true, propulsion: 'dual_motor',
-      sameDirectionSteeringLimit: Math.abs(normalized.throttle) * traditionalManualPropulsion.limiter.steeringSpan / traditionalManualPropulsion.limiter.throttleSpan * traditionalManualPropulsion.limiter.config.steeringShare,
-      sameDirectionLimited: false };
-  }
-  const requested = normalizeRoverControl({
-    throttle: result.throttlePercent,
-    steering: result.steeringDegrees
-  });
-  const throttleSpan = Math.max(Math.abs(ROVER_THROTTLE_MIN), Math.abs(ROVER_THROTTLE_MAX), 1);
-  const steeringSpan = Math.max(Math.abs(ROVER_STEERING_MIN), Math.abs(ROVER_STEERING_MAX), 1);
-  const sameDirectionSteeringLimit = Math.abs(requested.throttle) * steeringSpan / throttleSpan;
-  const normalized = normalizeRoverControl({
-    throttle: requested.throttle,
-    steering: clamp(requested.steering, -sameDirectionSteeringLimit, sameDirectionSteeringLimit)
-  });
-  sendMavlinkCommand('ROVER_DRIVE', {
-    throttle: normalized.throttle,
-    steering: normalized.steering,
-    protocol: ROVER_CONTROL_PROTOCOL,
-    reason: 'uwb_relative_follow'
-  });
-  lastRoverCommandAt = Date.now();
-  systemState.roverControl = {
-    throttle: normalized.throttle,
-    steering: normalized.steering,
-    leftPwm: normalized.leftPwm,
-    rightPwm: normalized.rightPwm
-  };
-  systemState.motorStatus[`ch${ROVER_LEFT_CHANNEL}`] = normalized.leftPwm;
-  systemState.motorStatus[`ch${ROVER_RIGHT_CHANNEL}`] = normalized.rightPwm;
-  io.emit('rover_control_update', {
-    ...systemState.roverControl,
-    source: 'UWB_RELATIVE',
-    timestamp: new Date().toISOString()
-  });
-  return {
-    ...normalized,
-    sameDirectionSteeringLimit,
-    sameDirectionLimited: Math.abs(requested.steering) > sameDirectionSteeringLimit + 1e-9
-  };
-}
-
-function holdOutputsAreNeutral() {
-  const outputs = systemState.telemetry.servoOutputs || {};
-  const left = Number(outputs[`ch${ROVER_LEFT_CHANNEL}`]);
-  const right = Number(outputs[`ch${ROVER_RIGHT_CHANNEL}`]);
-  return Number.isFinite(left)
-    && Number.isFinite(right)
-    && left > 0
-    && right > 0
-    && Math.abs(left - PWM_CENTER) <= UWB_HOLD_PWM_TOLERANCE
-    && Math.abs(right - PWM_CENTER) <= UWB_HOLD_PWM_TOLERANCE;
-}
-
-function maintainUwbHoldingMode(result) {
-  const now = Date.now();
-  const flightMode = String(systemState.telemetry.flightMode || '').toUpperCase();
-  if (result.controlMode === 'relative_acro') {
-    const hold=uwbGpsDriftHold.update(now,systemState.telemetry,result);
-    sendMavlinkCommand('ROVER_ACRO', { forwardSpeedMps: hold.forwardSpeedMps, yawRateDegS: hold.yawRateDegS });
-    result.gpsDriftHold=hold;
-    result.forwardSpeedMps=hold.forwardSpeedMps;result.yawRateDegS=hold.yawRateDegS;
-    result.yawRateRadS=hold.yawRateDegS*Math.PI/180;
-    lastRoverCommandAt = now;
-    result.holdFlightMode = 'ACRO';
-    result.outputNeutralVerified = holdOutputsAreNeutral();
-    return true;
-  }
-  if (uwbHoldingEnteredAt === 0) {
-    uwbHoldingEnteredAt = now;
-    uwbHoldingManualConfirmedAt = 0;
-    uwbHoldingModeRequestedAt = 0;
-    uwbResumeStartedAt = 0;
-    uwbResumeModeRequestedAt = 0;
-  }
-
-  if (flightMode !== 'MANUAL' && now - uwbHoldingModeRequestedAt >= UWB_HOLD_MODE_RETRY_MS) {
-    sendMavlinkCommand('SET_MODE', { mode: 'MANUAL', reason: 'uwb_holding_distance' });
-    uwbHoldingModeRequestedAt = now;
-  }
-  if (flightMode === 'MANUAL' && uwbHoldingManualConfirmedAt === 0) {
-    uwbHoldingManualConfirmedAt = now;
-  }
-
-  const outputNeutralVerified = holdOutputsAreNeutral();
-  result.holdFlightMode = 'MANUAL';
-  result.outputNeutralVerified = outputNeutralVerified;
-  result.leftPwm = Number(systemState.telemetry.servoOutputs?.[`ch${ROVER_LEFT_CHANNEL}`]) || null;
-  result.rightPwm = Number(systemState.telemetry.servoOutputs?.[`ch${ROVER_RIGHT_CHANNEL}`]) || null;
-
-  const neutralTimedOut = systemState.telemetry.armed === true
-    && flightMode === 'MANUAL'
-    && uwbHoldingManualConfirmedAt > 0
-    && now - uwbHoldingManualConfirmedAt > UWB_HOLD_NEUTRAL_TIMEOUT_MS
-    && !outputNeutralVerified;
-  if (neutralTimedOut) {
-    addLog('SAFETY', 'Holding output failed to return to 1500/1500; emergency disarm executed');
-    sendMavlinkCommand('EMERGENCY_STOP', { reason: 'holding_output_not_neutral' });
-    stopUwbFollow('holding_output_not_neutral', { disarm: true });
-    return false;
-  }
-  return true;
-}
-
-function maintainUwbResumeTransition(result) {
-  const now = Date.now();
-  const requiredFlightMode = result.requiredFlightMode
-    || (uwbFollowControlMode === 'relative_manual' ? 'MANUAL' : uwbFollowControlMode === 'guided_velocity' ? 'GUIDED' : 'ACRO');
-  if (uwbResumeStartedAt === 0) {
-    uwbResumeStartedAt = now;
-    uwbResumeModeRequestedAt = 0;
-    uwbFollowController.reset();
-    addLog('UWB_FOLLOW', `Target left holding zone; restoring ${requiredFlightMode} before propulsion resumes`);
-  }
-
-  sendUwbFollowStop('resume_mode_transition');
-  if (now - uwbResumeModeRequestedAt >= UWB_HOLD_MODE_RETRY_MS) {
-    sendMavlinkCommand('SET_MODE', { mode: requiredFlightMode, reason: 'uwb_resume_tracking' });
-    uwbResumeModeRequestedAt = now;
-  }
-
-  if (now - uwbResumeStartedAt > UWB_RESUME_MODE_TIMEOUT_MS) {
-    addLog('SAFETY', `UWB follow could not restore ${requiredFlightMode}; stopping and disarming`);
-    stopUwbFollow('resume_mode_timeout', { disarm: true });
-    return;
-  }
-
-  publishUwbFollowState({
-    ...uwbFollowState,
-    safe: true,
-    status: 'resuming',
-    reason: 'resume_mode_transition',
-    requiredFlightMode,
-    forwardSpeedMps: 0,
-    yawRateDegS: 0,
-    yawRateRadS: 0,
-    throttlePercent: 0,
-    steeringDegrees: 0,
-    velocityNed: { x: 0, y: 0 },
-    desiredSpeedMps: 0,
-    leftPwm: PWM_CENTER,
-    rightPwm: PWM_CENTER
-  }, true);
-  recordUwbTestSample(uwbFollowState, 'resuming');
-}
-
-function maintainUwbAutoResume() {
-  const now = Date.now();
-  const telemetry = sharedUwbControlTelemetry(now);
-  const preflight = requireUwbFollowStartClearance('auto');
-  const ready = uwbAutoResume.observe(now, telemetry, preflight);
-  publishUwbFollowState({ ...idleUwbFollowResult(ready ? 'auto_resume_ready' : 'awaiting_trusted_uwb'),
-    status: 'awaiting_signal', waitingReason: preflight.safe ? null : preflight.reason,
-    lastStopReason: uwbAutoResume.lastStopReason }, false);
-  if (!ready || !uwbAutoResume.beginAttempt()) return;
-  addLog('UWB_FOLLOW', 'Trusted UWB recovered; automatically restoring mode and arming');
-  const response = { status() { return this; }, json(value) { return value; } };
-  Promise.resolve(startUwbFollowRequest({ body: {}, uwbAutoResume: true }, response)).catch((error) => {
-    stopUwbFollow('auto_resume_internal_error', { disarm: true });
-    addLog('SAFETY', `Automatic UWB resume failed: ${error.message}`);
-  });
-}
-
-function updateUwbFollow() {
-  if (!uwbFollowState.active) {
-    if (!uwbFollowTransitionBusy) {
-      if (uwbAutoResume.pending) { maintainUwbAutoResume(); return; }
-      const preflight = requireUwbFollowStartClearance('auto');
-      const reason = preflight.safe ? 'method_selected' : preflight.reason;
-      if (uwbFollowState.reason !== reason) {
-        publishUwbFollowState(
-          preflight.safe
-            ? { ...idleUwbFollowResult('method_selected'), controlMode: preflight.controlMode, navigationAvailable: preflight.navigationAvailable }
-            : preflight,
-          false
-        );
-      }
-    }
-    return;
-  }
-
-  const now = Date.now();
-  let result = intermittentUwbFollow.update({
-    controller: uwbFollowController,
-    now,
-    telemetry: sharedUwbControlTelemetry(now),
-    connected: systemState.isConnected,
-    controlMode: uwbFollowControlMode
-  });
-  if (result.safe && !result.pausePropulsion) result = uwbAutoResume.ramp(result, now);
-  const previousReason = uwbFollowState.reason;
-  const previousStatus = uwbFollowState.status;
-  if (!result.safe) {
-    const waitingToResume = uwbFollowControlMode !== 'relative_acro' && (previousStatus === 'holding' || previousStatus === 'resuming');
-    const expectedModeTransition = result.reason === 'manual_required' || result.reason === 'acro_required' || result.reason === 'guided_required';
-    if (waitingToResume && expectedModeTransition) {
-      maintainUwbResumeTransition(result);
-      return;
-    }
-    sendUwbFollowStop(result.reason);
-    disarmAndReturnManual(result.reason);
-    uwbFollowTransitionId += 1;
-    uwbFollowTransitionBusy = false;
-    uwbAutoResume.stopped(result.reason);
-    uwbGpsDriftHold.reset();
-    publishUwbFollowState(result, false);
-    finishUwbTestLog(result.reason, result);
-    intermittentUwbFollow.reset();
-    if (previousReason !== result.reason) addLog('SAFETY', `UWB follow stopped: ${result.reason}`);
-    uwbFollowController.reset();
-    uwbFollowControlMode = 'auto';
-    return;
-  }
-
-  if (result.pausePropulsion) {
-    if (result.controlMode !== 'relative_acro') sendUwbFollowStop(result.reason);
-    if (!maintainUwbHoldingMode(result)) return;
-    publishUwbFollowState(result, true);
-    recordUwbTestSample(result, 'waiting_target');
-    return;
-  }
-  uwbGpsDriftHold.track(now,systemState.telemetry,result);
-
-  if (result.reason === 'holding_distance') {
-    if (result.controlMode === 'relative_acro' || result.controlMode === 'relative_manual') {
-      const drive = sendUwbRelativeDrive(result);
-      if (drive.safe === false) { stopUwbFollow(drive.reason, { disarm: true }); return; }
-      result.throttlePercent = drive.throttle;
-      result.steeringDegrees = drive.steering;
-      result.sameDirectionSteeringLimitDeg = drive.sameDirectionSteeringLimit;
-      result.sameDirectionLimited = drive.sameDirectionLimited;
-    } else {
-      sendMavlinkCommand('ROVER_BODY_VELOCITY', {
-        forwardSpeedMps: 0,
-        yawRateRadS: 0,
-        speedLimitMps: result.speedLimitMps
-      });
-      forceNeutralRoverControl('UWB_HOLD', 'holding_distance');
-    }
-    if (!maintainUwbHoldingMode(result)) return;
-    publishUwbFollowState(result, true);
-    recordUwbTestSample(result, 'holding');
-    if (previousReason !== result.reason) {
-      addLog('UWB_FOLLOW', `Target within ${result.holdingDistanceM.toFixed(2)}m; switching to MANUAL until outputs verify 1500/1500`);
-    }
-    return;
-  }
-
-  if (uwbHoldingEnteredAt > 0 || uwbResumeStartedAt > 0) resetUwbHoldTransition();
-  if (result.controlMode === 'relative_acro' || result.controlMode === 'relative_manual') {
-    const drive = sendUwbRelativeDrive(result);
-    if (drive.safe === false) { stopUwbFollow(drive.reason, { disarm: true }); return; }
-    result.throttlePercent = drive.throttle;
-    result.steeringDegrees = drive.steering;
-    result.leftPwm = drive.leftPwm;
-    result.rightPwm = drive.rightPwm;
-    result.sameDirectionSteeringLimitDeg = drive.sameDirectionSteeringLimit;
-    result.sameDirectionLimited = drive.sameDirectionLimited;
-  } else {
-    sendMavlinkCommand('ROVER_BODY_VELOCITY', {
-      forwardSpeedMps: result.forwardSpeedMps,
-      yawRateRadS: result.yawRateRadS,
-      speedLimitMps: result.speedLimitMps
-    });
-  }
-  publishUwbFollowState(result, true);
-  recordUwbTestSample(result, 'sample');
-  if (previousReason !== result.reason) {
-    addLog('UWB_FOLLOW', result.relativeImuControl
-      ? `Relative UWB/IMU tracking; throttle ${Number(result.throttlePercent||0).toFixed(1)}%`
-      : `Tracking started at limit ${result.speedLimitMps.toFixed(2)}m/s`);
-  }
+  sendMavlinkCommand('FOLLOW_STOP', { reason, disarm });
 }
 
 function mergeUwbTelemetry(previous, incomingUwb) {
@@ -4394,6 +3811,13 @@ telemetrySocket.on('message', (rawMessage) => {
   try {
     const packet = JSON.parse(rawMessage.toString('utf8'));
 
+    if (packet.type === 'uwb_follow') { acceptNativeFollowState(packet.payload); return; }
+    if (packet.type === 'control_uwb') { nativeGuardedUwb = { value: packet.payload, receivedAt: Date.now() }; return; }
+    if (packet.type === 'rover_control') { acceptNativeRoverControl(packet.payload); return; }
+    if (packet.type === 'control_status') {
+      if (packet.payload?.state?.updatedAt !== uwbFollowState.updatedAt) acceptNativeFollowState(packet.payload.state);
+      return;
+    }
     if (packet.type === 'uwb') {
       // This path does not refresh any other sensor or wait for the full telemetry timer.
       systemState.telemetry = { ...systemState.telemetry,
@@ -4404,9 +3828,9 @@ telemetrySocket.on('message', (rawMessage) => {
 
     if (packet.type === 'telemetry') {
       updateTelemetry(packet.payload || {});
-      if (!systemState.isConnected) {
-        updateConnectionStatus(true);
-      }
+      // Offline telemetry is still published for sensor age/status. Only the
+      // FCU heartbeat recorded by the native service establishes connection.
+      updateConnectionStatus(packet.payload?.hardware?.pixhawk?.online === true);
       return;
     }
 
@@ -4435,9 +3859,14 @@ refreshHostBoardTemperature();
 setInterval(refreshHostBoardTemperature, 5000);
 setInterval(refreshPeripheralState, 5000);
 setInterval(refreshHardwareState, 1000);
-const uwbFollowTimer = setInterval(updateUwbFollow, Math.round(1000 / UWB_FOLLOW_RATE_HZ));
-const manualRoverSlewTimer = setInterval(updateManualRoverSlew, Math.round(1000 / ROVER_MANUAL_SLEW_RATE_HZ));
-manualRoverSlewTimer.unref();
+// Read-only reconciliation recovers status after Web restarts or UDP loss.
+const nativeStatusTimer = setInterval(async () => {
+  const status = await nativeControl.command('CONTROL_STATUS');
+  if (!status.ok) return;
+  if (status.state?.updatedAt !== uwbFollowState.updatedAt) acceptNativeFollowState(status.state);
+  if (status.roverControl) acceptNativeRoverControl(status.roverControl);
+}, 1000);
+nativeStatusTimer.unref();
 if (GIMBAL_AUTO_CONNECT) {
   startGimbalLoop();
   openGimbalPort();
@@ -4575,8 +4004,9 @@ app.get('/api/uwb-follow/state', (_req, res) => {
   });
 });
 
-app.post('/api/uwb-follow/method', (req, res) => {
-  const result = selectUwbTrackingMethod(req.body?.method);
+app.post('/api/uwb-follow/method', async (req, res) => {
+  const result = await nativeControl.command('FOLLOW_METHOD', { method: req.body?.method });
+  if (result.state) acceptNativeFollowState(result.state);
   if (!result.ok) return res.status(409).json({ success: false, message: result.error, state: uwbFollowState });
   return res.json({ success: true, trackingMethod: result.method, state: uwbFollowState });
 });
@@ -4617,134 +4047,18 @@ app.get('/api/uwb-follow/logs/:fileName/download', (req, res) => {
   return res.download(filePath, fileName);
 });
 
-app.post('/api/uwb-follow/start', startUwbFollowRequest = async (req, res) => {
-  const automatic = req.uwbAutoResume === true;
-  if (automatic && (!uwbAutoResume.pending || !uwbAutoResume.attempting)) {
-    return res.status(409).json({ success: false, message: 'auto_resume_cancelled' });
-  }
-  if (!UWB_FOLLOW_ENABLED) {
-    return res.status(409).json({ success: false, message: 'UWB follow is disabled in config' });
-  }
-  if (uwbFollowTransitionBusy) {
-    return res.status(409).json({ success: false, message: 'start_in_progress', state: uwbFollowState });
-  }
-  if (uwbFollowState.active) {
-    return res.json({ success: true, alreadyActive: true, state: uwbFollowState });
-  }
-  if (!automatic && uwbAutoResume.pending && !req.body?.trackingMethod) {
-    return res.status(202).json({ success: true, searching: true, alreadySearching: true, state: uwbFollowState });
-  }
-  if (!automatic) uwbAutoResume.cancel();
-
-  if (req.body?.trackingMethod) {
-    const selected = selectUwbTrackingMethod(req.body.trackingMethod);
-    if (!selected.ok) return res.status(409).json({ success: false, message: selected.error, state: uwbFollowState });
-  }
-
-  intermittentUwbFollow.reset();
-  uwbFollowController.reset();
-  uwbGpsDriftHold.reset();
-  const initialPreflight = requireUwbFollowStartClearance('auto');
-  if (!initialPreflight.safe) {
-    if (!automatic && initialPreflight.reason === 'uwb_stale') {
-      // Retain the explicit follow request, without entering mode/arm startup.
-      uwbFollowTransitionId += 1;
-      sendUwbFollowStop('awaiting_trusted_uwb');
-      disarmAndReturnManual('uwb_search');
-      uwbFollowControlMode = 'auto';
-      uwbAutoResume.search();
-      publishUwbFollowState({ ...idleUwbFollowResult('awaiting_trusted_uwb', 'awaiting_signal'),
-        waitingReason: 'uwb_stale' }, false);
-      addLog('UWB_FOLLOW', 'Operator requested follow; searching for trusted UWB with neutral propulsion');
-      return res.status(202).json({ success: true, searching: true, state: uwbFollowState });
-    }
-    if (automatic) uwbAutoResume.attemptFailed(initialPreflight.reason);
-    sendUwbFollowStop(initialPreflight.reason);
-    disarmAndReturnManual(initialPreflight.reason);
-    publishUwbFollowState(initialPreflight, false);
-    return res.status(409).json({ success: false, message: initialPreflight.reason, state: uwbFollowState });
-  }
-
-  uwbFollowControlMode = initialPreflight.controlMode;
-  const requiredFlightMode = initialPreflight.requiredFlightMode;
-
-  const transitionId = ++uwbFollowTransitionId;
-  // One bounded transaction, not a new timeout for each mode/arm stage.
-  const resumeDeadline = automatic ? Date.now() + (uwbAutoResume.p.wait_timeout_ms ?? 5000) : null;
-  uwbFollowTransitionBusy = true;
-  sendUwbFollowStop('start_sequence');
-
-  try {
-    if (systemState.telemetry.armed === true) {
-      publishUwbFollowState(idleUwbFollowResult('disarming', 'disarming', initialPreflight), false);
-      sendMavlinkCommand('DISARM', { reason: 'uwb_follow_start' });
-      await waitForFollowTelemetry('disarm', (telemetry) => telemetry.armed !== true, transitionId, { guardSensors: false, resumeDeadline });
-    }
-
-    publishUwbFollowState(idleUwbFollowResult('switching_mode', 'switching_mode', initialPreflight), false);
-    sendMavlinkCommand('SET_MODE', { mode: requiredFlightMode, reason: 'uwb_follow_start' });
-    await waitForFollowTelemetry(
-      `${requiredFlightMode.toLowerCase()}_mode`,
-      (telemetry) => String(telemetry.flightMode || '').toUpperCase() === requiredFlightMode,
-      transitionId, { resumeDeadline }
-    );
-
-    const armedPreflight = requireUwbFollowStartClearance();
-    if (!armedPreflight.safe) throw new Error(armedPreflight.reason);
-    publishUwbFollowState(idleUwbFollowResult('arming', 'arming', armedPreflight), false);
-    sendMavlinkCommand('ARM', { reason: 'uwb_follow_start' });
-    await waitForFollowTelemetry('arming', (telemetry) => telemetry.armed === true, transitionId, { timeoutMs: 8000, resumeDeadline });
-    if (automatic) {
-      uwbAutoResume.clearWindow();
-      publishUwbFollowState(idleUwbFollowResult('confirming_recovered_uwb', 'confirming_signal'), false);
-      await waitForFollowTelemetry('recovered_uwb', () => uwbAutoResume.observe(
-        Date.now(), sharedUwbControlTelemetry(Date.now()), requireUwbFollowStartClearance(), { duringAttempt: true }
-      ), transitionId, { resumeDeadline });
-    }
-
-    uwbFollowController.reset();
-    const now = Date.now();
-    let result = uwbFollowController.update({
-      now,
-      telemetry: sharedUwbControlTelemetry(now),
-      connected: systemState.isConnected,
-      controlMode: uwbFollowControlMode
-    });
-    if (!result.safe) throw new Error(result.reason);
-    uwbAutoResume.started(sharedUwbControlTelemetry(now), now, automatic);
-    result = uwbAutoResume.ramp(result, now);
-    // Establish an actual neutral ACRO command before publishing an active
-    // session. Otherwise the watchdog may see the pre-arming stale lease before
-    // the first follow timer tick and immediately disarm a successful start.
-    if (result.controlMode === 'relative_acro' || result.relativeImuControl) {
-      sendUwbRelativeDrive({ ...result, forwardSpeedMps: 0, yawRateDegS: 0,
-        throttlePercent: 0, steeringDegrees: 0 });
-    }
-    uwbFollowTransitionBusy = false;
-    publishUwbFollowState(result, true);
-    startUwbTestLog(result);
-    addLog('UWB_FOLLOW', `${automatic ? 'Automatically resumed' : 'Operator started'} ${uwbTrackingMethod}/${uwbFollowControlMode} UWB target following after ${requiredFlightMode} mode and arming`);
-    return res.json({ success: true, state: uwbFollowState });
-  } catch (error) {
-    const reason = String(error && error.message ? error.message : 'start_failed');
-    if (transitionId === uwbFollowTransitionId) {
-      uwbFollowTransitionBusy = false;
-      uwbFollowTransitionId += 1;
-      uwbFollowController.reset();
-      sendUwbFollowStop(reason);
-      disarmAndReturnManual(reason);
-      publishUwbFollowState(idleUwbFollowResult(reason), false);
-      uwbFollowControlMode = 'auto';
-      if (automatic) uwbAutoResume.attemptFailed(reason);
-      addLog('SAFETY', `UWB follow start rejected: ${reason}`);
-    }
-    return res.status(409).json({ success: false, message: reason, state: uwbFollowState });
-  }
+app.post('/api/uwb-follow/start', async (req, res) => {
+  const result = await nativeControl.start(req.body?.trackingMethod ? { trackingMethod: req.body.trackingMethod } : {});
+  if (result.state) acceptNativeFollowState(result.state);
+  if (!result.ok) return res.status(409).json({ success: false, message: result.error, state: uwbFollowState });
+  return res.status(result.searching ? 202 : 200).json({ success: true, ...result, state: uwbFollowState });
 });
 
-app.post('/api/uwb-follow/stop', (_req, res) => {
-  stopUwbFollow('manual_stop', { disarm: true });
-  res.json({ success: true, state: uwbFollowState });
+app.post('/api/uwb-follow/stop', async (_req, res) => {
+  const result = await nativeControl.command('FOLLOW_STOP', { reason: 'manual_stop', disarm: true });
+  if (result.state) acceptNativeFollowState(result.state);
+  if (!result.ok) return res.status(503).json({ success: false, message: result.error });
+  return res.json({ success: true, state: uwbFollowState });
 });
 
 app.get('/api/motors', (req, res) => {
@@ -4772,10 +4086,10 @@ app.get('/api/logs/download', (req, res) => {
   res.download(FLIGHT_CSV_FILE, 'flight_data.csv');
 });
 
-app.post('/api/control/rover', (req, res) => {
+app.post('/api/control/rover', async (req, res) => {
   const { throttle, steering } = req.body || {};
   const sourceLabel = isVisionActive() ? 'VISION' : 'REST';
-  const result = applyRoverControl({ throttle, steering }, sourceLabel);
+  const result = await applyRoverControl({ throttle, steering }, sourceLabel);
   if (!result.ok) {
     res.status(400).json({ success: false, message: result.error });
     return;
@@ -4783,10 +4097,11 @@ app.post('/api/control/rover', (req, res) => {
   res.json({ success: true, data: result });
 });
 
-app.post('/api/control/motor', (req, res) => {
+app.post('/api/control/motor', async (req, res) => {
   const body = req.body || {};
   const items = Array.isArray(body.motors) ? body.motors : [{ channel: body.channel, pwm: body.pwm }];
-  const results = items.map((it) => handleMotorControl(it.channel, it.pwm, isVisionActive() ? 'VISION' : 'REST'));
+  const results = [];
+  for (const it of items) results.push(await handleMotorControl(it.channel, it.pwm, isVisionActive() ? 'VISION' : 'REST'));
   const bad = results.find((r) => !r.ok);
   if (bad) return res.status(400).json({ success: false, message: bad.error });
   res.json({ success: true });
@@ -5368,15 +4683,15 @@ io.on('connection', (socket) => {
   addLog('INFO', `Web client connected: ${socket.id}`);
   socket.emit('system_state', systemState);
 
-  socket.on('motor_control', (data = {}) => {
-    const result = handleMotorControl(data.channel, data.pwm, `WEB:${socket.id}`);
+  socket.on('motor_control', async (data = {}) => {
+    const result = await handleMotorControl(data.channel, data.pwm, `WEB:${socket.id}`);
     if (!result.ok) {
       socket.emit('error_message', { message: result.error });
     }
   });
 
-  socket.on('rover_drive', (data = {}) => {
-    const result = applyRoverControl({ throttle: data.throttle, steering: data.steering }, `SOCKET:${socket.id}`);
+  socket.on('rover_drive', async (data = {}) => {
+    const result = await applyRoverControl({ throttle: data.throttle, steering: data.steering }, `SOCKET:${socket.id}`);
     if (!result.ok) {
       socket.emit('error_message', { message: result.error });
       return;
@@ -5487,9 +4802,10 @@ function shutdown() {
 
   flushTelemetryCsv(true);
   addLog('INFO', 'Server shutting down');
-  clearInterval(uwbFollowTimer);
-  clearInterval(manualRoverSlewTimer);
-  stopUwbFollow('server_shutdown', { disarm: true });
+  clearInterval(nativeStatusTimer);
+  // Following belongs to the independent service. Manual input still expires
+  // on its service-owned lease when this Web process stops publishing.
+  finishUwbTestLog('web_shutdown', uwbFollowState);
 
   if (isVisionActive()) {
     try { visionProcess.kill('SIGTERM'); } catch (_) {}
@@ -5522,7 +4838,7 @@ function shutdown() {
   }
 
   try {
-    commandSocket.close();
+    nativeControl.close();
   } catch (error) {
     console.error(`[Shutdown] Command socket close error: ${error.message}`);
   }

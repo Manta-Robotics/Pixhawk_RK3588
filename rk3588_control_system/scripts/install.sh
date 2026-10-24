@@ -30,7 +30,7 @@ cd "$PROJECT_DIR"
 RUN_USER="${MANTA_RUN_USER:-${SUDO_USER:-root}}"
 
 SYSTEM_PACKAGES=(
-    build-essential ca-certificates curl git openssl
+    build-essential cmake nlohmann-json3-dev ca-certificates curl git openssl
     python3 python3-dev python3-pip python3-setuptools python3-venv python3-numpy python3-opencv python3-dbus python3-gi
     libssl-dev libffi-dev libopenblas-dev libjpeg-dev libopenjp2-7
     bluez bluez-tools rfkill network-manager dnsmasq iptables iw
@@ -82,6 +82,7 @@ else
     "$PROJECT_DIR/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
 fi
 "$PROJECT_DIR/.venv/bin/python" -m pip "${PIP_ARGS[@]}"
+bash "$PROJECT_DIR/scripts/build_native_control.sh"
 
 install -d -o "$RUN_USER" -g "$RUN_USER" \
     "$PROJECT_DIR/logs" \

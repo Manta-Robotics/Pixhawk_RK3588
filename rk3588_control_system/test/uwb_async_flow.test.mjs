@@ -91,7 +91,7 @@ test('camera requests remain active while standalone UWB and full telemetry keep
   const started = performance.now();
   await send({ type: 'uwb', payload: { distanceM: 1.23, azimuthDeg: 4, fresh: true, online: true,
     measurementStatus: 'trusted', measurementUpdatedAt: 1000 } });
-  while (!packets.some(([name]) => name === 'uwb_update') && performance.now() - started < 1000) await delay(10);
+  while (!packets.some(([name, data]) => name === 'uwb_update' && data.distanceM === 1.23) && performance.now() - started < 1000) await delay(10);
   assert.ok(packets.some(([name, data]) => name === 'uwb_update' && data.distanceM === 1.23));
   assert.ok(performance.now() - started < 400, 'slow camera requests must not delay UWB publication');
   const statusStarted = performance.now();

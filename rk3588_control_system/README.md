@@ -12,7 +12,7 @@
         | HTTP + Socket.IO :3000
         v
 backend/server.js
-  |-- UDP :14551/:14552 <-> backend/mavlink_bridge.py <-> /dev/ttyS1 <-> Pixhawk TELEM2
+  |-- UDP :14551/:14552 <-> control/bin/manta-control <-> /dev/ttyS1 <-> Pixhawk TELEM2
   |-- UART /dev/ttyS3 <-> 云台控制器
   |-- HTTP 127.0.0.1:8091 <-> 云台 RTSP 代理
   |-- HTTP 127.0.0.1:8090 <-> OV8858 本地摄像头
@@ -131,7 +131,7 @@ npm run maintenance
 
 | 目录 | 职责与边界 | 关键入口 | 变更后的主要验证 |
 | --- | --- | --- | --- |
-| `backend/` | 控制面的服务端实现。`server.js` 提供 HTTP API、Socket.IO、静态页面、录像管理与云台/跟踪进程编排；`mavlink_bridge.py` 负责 Pixhawk UART 与本机 UDP 命令/遥测之间的桥接。这里不存放网页布局，也不应写入运行日志或录像。 | `backend/server.js`、`backend/mavlink_bridge.py` | `npm run maintenance`；按改动重启 `manta-backend.service` 或 `manta-bridge.service`，再检查 API、遥测和日志。 |
+| `backend/` | 控制面的服务端实现。`server.js` 提供 HTTP API、Socket.IO、静态页面、录像管理与云台/跟踪进程编排；`mavlink_bridge.py` 保留为测试基线；独立 C++ 服务负责 MAVLink、UWB 融合与跟随控制。这里不存放网页布局，也不应写入运行日志或录像。 | `backend/server.js`、`backend/mavlink_bridge.py` | `npm run maintenance`；按改动重启 `manta-backend.service` 或 `manta-bridge.service`，再检查 API、遥测和日志。 |
 | `config/` | 可审查的运行参数源。`system.config.json` 管理串口、端口、热点、相机、云台、录像和跟踪；`motor_config.json` 管理电机通道与限制；`bluetooth.config.json` 管理蓝牙 PAN。代码应读取配置，不应在多个脚本中重复硬编码同一参数。 | `config/system.config.json`、`config/motor_config.json`、`config/bluetooth.config.json` | `npm run check:config` 和 `npm run maintenance`；根据参数消费者重启对应服务。 |
 | `frontend/` | 浏览器控制台的静态资源。HTML 文件定义页面入口，`frontend/js/` 处理 API、Socket.IO、状态和交互，`frontend/css/` 管理样式。前端不得直接访问串口或设备文件，硬件操作必须经过后端接口。 | `frontend/index.html`、`frontend/gimbal.html`、`frontend/videos.html`、`frontend/map.html` | `npm run check`，浏览器强制刷新并验证连接、断线、加载中、错误和禁用状态；通常无需重启服务。 |
 | `scripts/` | 板级集成与独立进程。包含安装、systemd 部署、热点/蓝牙、相机、云台流、模型转换、诊断、跟踪与状态报告。带硬件副作用的脚本必须显式执行，不能被静态检查或测试自动触发。 | `install.sh`、`install_boot_services.sh`、`status_report.sh`、`camera_snapshot_server.py`、`gimbal_rtsp_stream_server.py`、`face_track.py`、`infer_video.py` | `npm run maintenance`；再运行对应诊断脚本，并只重启受影响的服务。 |
@@ -177,7 +177,7 @@ npm run maintenance
 | 改动范围 | 最小验证 | 通常需要的运行操作 |
 | --- | --- | --- |
 | `backend/server.js` | `npm run maintenance`、HTTP/Socket.IO 冒烟检查 | 重启 `manta-backend.service` |
-| `backend/mavlink_bridge.py` | `npm run maintenance`、飞控链路检查 | 重启 `manta-bridge.service` |
+| `control/` | 原生差分与进程集成检查、飞控链路检查 | 编译安装后重启 `manta-bridge.service` |
 | `frontend/` | `npm run check`、桌面和移动浏览器交互检查 | 浏览器刷新；通常不重启服务 |
 | `config/system.config.json` | `npm run check:config`、配置差异复核 | 仅重启读取了相关字段的服务 |
 | 相机/云台媒体脚本 | `npm run maintenance`、对应 health/stream 端点 | 重启 `manta-camera.service` 或 `manta-gimbal-stream.service` |
@@ -294,3 +294,5 @@ Lua 回归测试使用可选 `lupa` 的 Lua 5.3 解释器执行实际脚本并�
 python3 -m unittest discover -s test -p 'test_*.py'
 node --test --test-concurrency=1
 ```
+
+独立 C++ 服务构建、部署与验证：[docs/native-control.md](docs/native-control.md)。
