@@ -1,3 +1,4 @@
+#include "manta/clock_export.hpp"
 #include "manta/mavlink_core.hpp"
 #include <iomanip>
 #include <iostream>
@@ -25,7 +26,10 @@ int main() {
             const auto wall = request.value("wall_ms", 1000000.0),
                        mono = request.value("mono_ms", 0.0);
             Json result = nullptr;
-            if (op == "reset")
+            if (op == "export_clock")
+                result =
+                    manta::export_wall_clock(request.at("packet"), wall, request.at("system_ms"));
+            else if (op == "reset")
                 core = std::make_unique<manta::MavlinkCore>(request.value("config", Json::object()),
                                                             wire, event);
             else if (op == "receive") {
