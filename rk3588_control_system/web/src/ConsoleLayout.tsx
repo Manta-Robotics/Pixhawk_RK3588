@@ -707,6 +707,7 @@ export function DeviceView(){return (<section {...{"className": "view active", "
 </div>
 {"\n          "}
 <div {...{"className": "drive-body"}}>
+<div className="drive-control-area">
 {"\n            "}
 <div {...{"className": "joystick-wrap", "id": "joystick", "role": "slider", "tabIndex": 0, "aria-label": "Manta 360度移动摇杆", "aria-valuetext": "停止"}}>
 {"\n              "}
@@ -753,6 +754,7 @@ export function DeviceView(){return (<section {...{"className": "view active", "
 {"\n            "}
 </div>
 {"\n            "}
+</div>
 <div {...{"className": "relative-position-panel", "id": "relativePositionPanel", "data-state": "offline"}}>
 {"\n              "}
 <div {...{"className": "relative-position-head"}}>

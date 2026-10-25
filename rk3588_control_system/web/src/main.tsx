@@ -8,6 +8,7 @@ import './offline-satellite-map';
 import './uwb-display-smoother';
 import './uwb-raw-display';
 import './console.css';
+import './responsive.css';
 
 window.io=io;
 function App(){
