@@ -44,6 +44,24 @@ def main():
             check(frames, result)
         append('command', check_command, request=dict(command=name, params=params))
 
+    # Clock corrections affect only published epochs, never sample age or
+    # duration. Cover nested sensors, RPC state, second/millisecond timestamps,
+    # null/zero sentinels, stale frames, and frames already in the future.
+    for offset in [-3_600_000, -3000, -600, 0, 600, 3000, 3_600_000]:
+        clock = 1_792_894_900_000
+        packet = dict(timestamp=clock/1000, payload=dict(
+            updatedAt=clock-20, timestamp=clock-10, receivedMeasurementAt=clock-900,
+            sensors=[dict(rawDistanceUpdatedAt=clock+100, measurementUpdatedAt=clock-50)],
+            nullAt=None, zeroAt=0, solveMs=15, wait_timeout_ms=5000, goodCount=42))
+        expected = copy.deepcopy(packet)
+        expected['timestamp'] += offset/1000
+        for key in ['updatedAt', 'timestamp', 'receivedMeasurementAt']:
+            expected['payload'][key] += offset
+        for key in expected['payload']['sensors'][0]:
+            expected['payload']['sensors'][0][key] += offset
+        requests.append(dict(op='export_clock', wall_ms=clock, system_ms=clock+offset, packet=packet))
+        checks.append(lambda r, expected=expected: equal(r['result'], expected))
+
     hb = mav.MAVLink_heartbeat_message(mav.MAV_TYPE_GROUND_ROVER, mav.MAV_AUTOPILOT_ARDUPILOTMEGA, 129, 0, 4, 3)
     receive(mav.MAVLink_heartbeat_message(mav.MAV_TYPE_GCS, mav.MAV_AUTOPILOT_INVALID, 0, 0, 0, 3), lambda r: equal(r['connected'], False))
     receive(hb, lambda r: equal((r['connected'], r['state']['flightMode'], r['state']['armed']), (True, 'MANUAL', True)))

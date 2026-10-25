@@ -1,3 +1,4 @@
+#include "manta/clock_export.hpp"
 #include "manta/config_validation.hpp"
 #include "manta/control_runtime.hpp"
 #include "manta/mavlink_core.hpp"
@@ -25,6 +26,11 @@ double monotonic_ms() {
     return std::chrono::duration<double, std::milli>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+double system_wall_ms() {
+    return std::floor(std::chrono::duration<double, std::milli>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count());
 }
 double wall_ms() {
     // Sensor and controller timestamps share a monotonic clock, expressed in
@@ -232,7 +238,8 @@ int main(int argc, char **argv) {
             tx_bytes += bytes.size();
         };
         const auto publish = [&](const Json &event) {
-            const auto data = event.dump(-1, ' ', false, Json::error_handler_t::replace);
+            const auto public_event = manta::export_wall_clock(event, wall_ms(), system_wall_ms());
+            const auto data = public_event.dump(-1, ' ', false, Json::error_handler_t::replace);
             sendto(telemetry.value, data.data(), data.size(), MSG_DONTWAIT,
                    reinterpret_cast<const sockaddr *>(&telemetry_address),
                    sizeof(telemetry_address));
@@ -322,7 +329,8 @@ int main(int argc, char **argv) {
                             {"type", "command_result"},
                             {"payload", {{"requestId", request["requestId"]}, {"result", result}}},
                             {"timestamp", wall_ms() / 1000}};
-                        const auto data = response.dump();
+                        const auto data =
+                            manta::export_wall_clock(response, wall_ms(), system_wall_ms()).dump();
                         sendto(commands.value, data.data(), data.size(), MSG_DONTWAIT,
                                reinterpret_cast<const sockaddr *>(&source), source_size);
                     }
