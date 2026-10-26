@@ -58,7 +58,8 @@ export class RelativeImuControl {
   const c=this.c,d=preflight.distanceM;
   const dt=this.at===null?.1:clamp((now-this.at)/1000,.001,.25);
   const bearing=wrap(preflight.azimuthDeg*c.bearingSign*c.bearingScale+c.bearingOffsetDeg);
-  this.bearing=this.bearing===null?bearing:wrap(this.bearing+c.bearingFilterAlpha*wrap(bearing-this.bearing));
+  const rawControl=telemetry.uwb?.controlSource==='raw';
+  this.bearing=rawControl||this.bearing===null?bearing:wrap(this.bearing+c.bearingFilterAlpha*wrap(bearing-this.bearing));
   const sampleAt=telemetry.uwb.measurementUpdatedAt;
   const observed=!estimate || ['measured','recovering'].includes(estimate.source);
   if(observed && Number.isFinite(sampleAt) && (this.measurementAt===null || sampleAt>this.measurementAt)){
@@ -95,7 +96,7 @@ export class RelativeImuControl {
   if((requested>c.relativeThrottleLimitPercent && rateError>0)||(requested<0 && rateError<0))this.cruise=previousCruise;
   requested=clamp(this.cruise+kp*rateError,0,c.relativeThrottleLimitPercent);
   if(policy)requested=clamp(policy.nominalThrottlePercent,0,c.relativeThrottleLimitPercent);
-  if(c.relativeNmpc?.enabled)return this.updatePredictive({now,dt,d,preflight,telemetry,estimate,
+  if(c.relativeNmpc?.enabled&&!rawControl)return this.updatePredictive({now,dt,d,preflight,telemetry,estimate,
    referenceThrottle:requested,desiredClosing});
   const gps=this.gpsSpeed.update({now,telemetry,bearingDeg:this.bearing,rangeRateMps:this.rangeRate,
    desiredClosingMps:desiredClosing,appliedThrottle:this.throttle,policySpeedMps:policy?.nominalSpeedMps,

@@ -17,6 +17,7 @@ export class TraditionalDualMotorLimiter {
       throttleDecelPerS: Math.max(1, finite(config.throttle_decel_percent_s, 80)),
       reverseNeutralMs: Math.max(0, finite(config.reverse_neutral_ms, 300)),
       maximumDtS: clamp(finite(config.maximum_dt_s, 0.1), 0.02, 1),
+      steeringRatePerS: config.steering_slew_deg_s === undefined ? Infinity : Math.max(1, finite(config.steering_slew_deg_s, 9)),
       steeringShare: 0.8
     };
     this.reset();
@@ -27,6 +28,7 @@ export class TraditionalDualMotorLimiter {
     this.motors = { left: 0, right: 0 };
     this.output = { throttle: 0, steering: 0 };
     this.updatedAt = now;
+    this.turnCommand = 0;
     this.lastDirection = 0;
     this.reverseReadyAt = 0;
     return { ...this.output };
@@ -46,7 +48,8 @@ export class TraditionalDualMotorLimiter {
     if (!dt) return { ...this.output };
     const throttle = this.target.throttle;
     const direction = Math.sign(throttle);
-    const turn = clamp(this.target.steering / this.steeringSpan * this.throttleSpan,
+    this.turnCommand = toward(this.turnCommand, this.target.steering, this.config.steeringRatePerS * dt);
+    const turn = clamp(this.turnCommand / this.steeringSpan * this.throttleSpan,
       -Math.abs(throttle) * this.config.steeringShare, Math.abs(throttle) * this.config.steeringShare);
     const requested = { left: throttle + turn, right: throttle - turn };
     const maximum = Math.max(Math.abs(requested.left), Math.abs(requested.right));

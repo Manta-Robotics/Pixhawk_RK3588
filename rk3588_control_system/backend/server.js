@@ -27,6 +27,7 @@ import { DualThrustRoverLimiter } from './dual_thrust_rover.js';
 import { TraditionalManualPropulsion } from './traditional_manual_propulsion.js';
 import { UwbFollowController } from './uwb_follow.js';
 import { IntermittentUwbFollow } from './uwb_target_prediction.js';
+import { UwbRawControl } from './uwb_raw_control.js';
 import { UwbAutoResume } from './uwb_auto_resume.js';
 import { UwbGpsDriftHold } from './uwb_gps_drift_hold.js';
 import { NeuralUwbFollowController } from './neural_uwb_follow.js';
@@ -103,6 +104,9 @@ const uwbControllerConfig = {
   bearing_offset_deg: GIMBAL_BEACON_CONFIG.yaw_offset_deg ?? UWB_FOLLOW_CONFIG.bearing_offset_deg,
   neural_model_path: path.resolve(PROJECT_ROOT, UWB_FOLLOW_CONFIG.neural_model_path || 'models/smart_usv_uwb_policy.json')
 };
+const rawUwbControl = new UwbRawControl({
+  ...config.uwb_dual, timeout_ms: UWB_FOLLOW_CONFIG.uwb_timeout_ms
+});
 const intermittentUwbFollow = new IntermittentUwbFollow(UWB_FOLLOW_CONFIG.prediction, uwbControllerConfig);
 const uwbAutoResume = new UwbAutoResume(uwbControllerConfig);
 const uwbGpsDriftHold = new UwbGpsDriftHold(uwbControllerConfig);
@@ -201,6 +205,7 @@ const traditionalManualPropulsion = new TraditionalManualPropulsion({
   steering_limit: Math.min(ROVER_MANUAL_STEERING_LIMIT, traditionalUwbFollowController.config.relativeSteeringLimitDeg),
   throttle_span: Math.max(Math.abs(ROVER_THROTTLE_MIN), Math.abs(ROVER_THROTTLE_MAX)),
   steering_span: Math.max(Math.abs(ROVER_STEERING_MIN), Math.abs(ROVER_STEERING_MAX)),
+  steering_slew_deg_s: traditionalUwbFollowController.config.steeringSlewDegS,
   throttle_accel_percent_s: traditionalUwbFollowController.config.throttleAccelPercentS,
   throttle_decel_percent_s: traditionalUwbFollowController.config.throttleDecelPercentS,
   reverse_neutral_ms: config.rover_manual_reverse_neutral_ms,
@@ -1601,7 +1606,9 @@ function stabilizeBeaconUwb(now, uwb) {
 function sharedUwbControlTelemetry(now = Date.now()) {
   return {
     ...systemState.telemetry,
-    uwb: stabilizeBeaconUwb(now, systemState.telemetry.uwb)
+    uwb: UWB_FOLLOW_CONFIG.control_input === 'raw'
+      ? rawUwbControl.view(systemState.telemetry.uwb, now, systemState.isConnected)
+      : stabilizeBeaconUwb(now, systemState.telemetry.uwb)
   };
 }
 
@@ -3764,7 +3771,12 @@ function sendUwbRelativeDrive(result) {
     const sameDirectionSteeringLimit=throttle*steeringSpan/throttleSpan
       *traditionalManualPropulsion.limiter.config.steeringShare;
     const steering=clamp(requested.steering,-sameDirectionSteeringLimit,sameDirectionSteeringLimit);
-    const output=sendManualRoverOutput({throttle,steering},'UWB_IMU_RELATIVE');
+    const limited=result.rawControl?traditionalManualPropulsion.update({
+      now:Date.now(),result:{...result,throttlePercent:throttle,steeringDegrees:steering},
+      telemetry:systemState.telemetry,connected:systemState.isConnected
+    }):{throttle,steering,safe:true};
+    if(!limited.safe){forceNeutralRoverControl('UWB_IMU_RELATIVE',limited.reason);return limited;}
+    const output=sendManualRoverOutput(limited,'UWB_IMU_RELATIVE');
     uwbFollowController.relativeImuControl?.trackApplied?.(output.throttle,output.steering);
     lastRoverCommandAt=Date.now();
     Object.assign(result,{throttlePercent:output.throttle,steeringDegrees:output.steering});

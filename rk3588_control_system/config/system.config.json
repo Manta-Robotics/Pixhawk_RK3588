@@ -79,6 +79,7 @@
     "message_names": "UWB1_* only; TELEM1 front-facing receiver"
   },
   "uwb_follow": {
+    "control_input": "raw",
     "enabled": true,
     "tracking_method": "traditional",
     "neural_model_path": "models/smart_usv_uwb_policy.json",

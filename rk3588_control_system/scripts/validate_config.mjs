@@ -245,6 +245,8 @@ export function validateSystemConfig(config) {
       if (p.measurement_noise_m >= p.max_uncertainty_m) errors.push('prediction measurement noise must be below uncertainty limit');
     }
   }
+  if (config.uwb_follow?.control_input !== undefined && !['raw', 'filtered'].includes(config.uwb_follow.control_input))
+    errors.push('uwb_follow.control_input must be raw or filtered');
   if (config.uwb_follow?.waiting_drift_hold !== undefined && typeof config.uwb_follow.waiting_drift_hold !== 'boolean') errors.push('uwb_follow.waiting_drift_hold must be boolean');
   return errors;
 }

@@ -420,6 +420,18 @@ export class IntermittentUwbFollow {
       this.reset();
       this.estimator.calibration = calibration;
     }
+    if (telemetry.uwb?.controlSource === 'raw') {
+      const u = telemetry.uwb, id = identity(u);
+      const near=(u.sensors||[]).some(s=>fresh(s.rawDistanceUpdatedAt,now,controller.config.uwbTimeoutMs)
+        && number(s.rawDistanceM)!==null && s.rawDistanceM>=0 && s.rawDistanceM<=controller.config.safetyDistanceM);
+      if(near)return {...this.neutral('safety_distance',null,true),rawControl:true};
+      if (id !== null && this.targetId !== null && id !== this.targetId)
+        return this.neutral('target_identity_changed', null, false);
+      if (id !== null) this.targetId = id;
+      // Raw coordinates drive guidance directly. Prediction convergence and
+      // jump rejection are diagnostic paths; actuator ramps absorb changes.
+      return { ...controller.update({ now, telemetry, connected, controlMode }), rawControl:true };
+    }
     const wasLost = this.estimator.lossAt !== null;
     const estimate = this.estimator.update(now, telemetry);
     if (estimate.terminal) return this.neutral(estimate.reason, estimate, false);
