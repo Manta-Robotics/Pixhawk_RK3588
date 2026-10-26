@@ -19,9 +19,14 @@ void RelativeControl::pause() {
     cruise = previous;
 }
 void RelativeControl::track_applied(double t, double s) {
-    if (c["relativeNmpc"].value("enabled", false)) {
+    // Feed the allocated command back to the next slew step. Otherwise a
+    // saturated forward demand would jump back as soon as steering unwinds.
+    if (std::isfinite(t) && std::isfinite(s)) {
+        if (t < throttle) cruise = std::min(cruise, t);
         throttle = t;
         steering = s;
+    }
+    if (c["relativeNmpc"].value("enabled", false)) {
         nmpc.track_applied(t, s);
     }
 }
@@ -38,7 +43,7 @@ Json RelativeControl::update(double now, const Json &preflight, const Json &tele
     bearing = std::isfinite(bearing)
                   ? wrap(bearing + n("bearingFilterAlpha") * wrap(measured_bearing - bearing))
                   : measured_bearing;
-    const double sample = number(telemetry["uwb"], "measurementUpdatedAt");
+    const double sample = measurement_time(telemetry["uwb"]);
     const auto source =
         estimate.is_object() ? estimate.value("source", std::string()) : std::string("measured");
     if ((source == "measured" || source == "recovering") && std::isfinite(sample) &&
@@ -169,14 +174,29 @@ Json RelativeControl::update(double now, const Json &preflight, const Json &tele
                                        (n("bearingStopDeg") - n("bearingSlowdownDeg")),
                                    0, 1);
     requested *= number(turn, "speedScale") * alignment;
+    // Preserve low-speed differential steering for a distant side target.
+    // Never add turning thrust while closing too fast, near the target, or
+    // coasting on a prediction after loss of actual observations.
+    const bool turning = std::abs(bearing) > n("bearingSlowdownDeg") &&
+                         d > n("safetyResumeDistanceM") && !braking &&
+                         (source == "measured" || source == "recovering");
+    if (turning)
+        requested = std::max(requested, std::min(n("turnMinimumThrottlePercent"),
+                                                n("relativeThrottleLimitPercent")));
     if (safety) {
         requested = 0;
         cruise = std::min(cruise, throttle);
     }
+    const double turn_fraction = std::max(1 - alignment,
+        clamp(std::abs(number(turn, "desiredYawRateDegS")) / n("maxYawRateDegS"), 0, 1));
+    const double decel_rate = n("throttleDecelPercentS") + turn_fraction *
+        std::max(0.0, n("turnDecelPercentS") - n("throttleDecelPercentS"));
     const double step =
-        (requested < throttle ? n("throttleDecelPercentS") : n("throttleAccelPercentS")) * dt;
+        (requested < throttle ? decel_rate : n("throttleAccelPercentS")) * dt;
     throttle += clamp(requested - throttle, -step, step);
-    if (safety || braking || alignment == 0)
+    // Ordinary range/angle changes must respect the configured deceleration.
+    // Only actual near-distance protection bypasses the ramp.
+    if (safety)
         throttle = std::min(throttle, requested);
     cruise = policy.is_object() ? 0
                                 : clamp(cruise + (throttle - (cruise + kp * rate_error)) * dt, 0,
@@ -191,6 +211,10 @@ Json RelativeControl::update(double now, const Json &preflight, const Json &tele
     gps.track_applied(throttle, dt);
     result.update(
         {{"reason", safety ? "holding_distance" : "tracking"},
+         {"turningThrustActive", turning && n("turnMinimumThrottlePercent") > 0},
+         {"throttleDecelLimitPercentS", decel_rate},
+         {"measuredYawRateDegS", number(preflight, "measuredYawRateDegS", 0)},
+         {"yawRateErrorDegS", number(turn, "desiredYawRateDegS") - number(preflight, "measuredYawRateDegS", 0)},
          {"status", safety ? "holding" : "tracking"},
          {"navigationAvailable", active},
          {"navigationReason", active ? Json(nullptr) : Json("uwb_imu_only")},

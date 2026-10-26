@@ -3,6 +3,8 @@
 
 namespace manta {
 double shape_axis(double value, double limit, double deadband = 0, double expo = 1);
+Json allocate_forward_drive(double throttle, double steering, double throttle_span = 100,
+                            double steering_span = 45, double motor_limit = 100);
 class MotorLimiter {
   public:
     MotorLimiter(const Json &raw, bool traditional = false);

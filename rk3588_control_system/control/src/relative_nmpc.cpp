@@ -62,7 +62,7 @@ std::string RelativeNmpc::observe(double now, const Json &t, double range, doubl
     }
     if (!id.empty())
         identity = id;
-    const double sample = number(u, "measurementUpdatedAt");
+    const double sample = measurement_time(u);
     const bool admitted =
         u.value("online", false) && u.value("fresh", false) &&
         (estimate.is_object() ? estimate.value("measurementConfirmed", false)
@@ -70,7 +70,7 @@ std::string RelativeNmpc::observe(double now, const Json &t, double range, doubl
         sensors_trusted && std::isfinite(sample) && sample <= now &&
         now - sample <= number(c, "uwbTimeoutMs");
     if (admitted && (!std::isfinite(measurement_at) || sample > measurement_at)) {
-        const double yaw = (number(t["attitude"], "yaw") -
+        const double yaw = number(u, "measurementHeadingDeg", number(t["attitude"], "yaw") -
                             number(t["attitude"], "yawRateDegS") * (now - sample) / 1000) *
                            radians,
                      angle = yaw + bearing * radians;
@@ -143,8 +143,8 @@ Json RelativeNmpc::solve(double now, const Json &t, double range, double bearing
     const double accepted =
         estimate.is_object()
             ? number(estimate, "lastMeasuredAt",
-                     number(t.value("uwb", Json::object()), "measurementUpdatedAt"))
-            : number(t.value("uwb", Json::object()), "measurementUpdatedAt");
+                     measurement_time(t.value("uwb", Json::object())))
+            : measurement_time(t.value("uwb", Json::object()));
     const double max_age =
         estimate.is_object() && estimate.value("source", std::string()) == "predicted"
             ? number(p, "horizon_ms", 1000)

@@ -36,3 +36,15 @@ endif()
 add_executable(manta-replay src/replay.cpp)
 target_link_libraries(manta-replay PRIVATE manta_core)
 include(CTest)
+if(BUILD_TESTING)
+    add_test(NAME native_uwb_contract
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/check_native_uwb_contract.py
+            $<TARGET_FILE:manta-wire-replay> $<TARGET_FILE:manta-follow-replay>)
+    if(TARGET manta-control)
+        add_test(NAME native_service
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/check_native_service.py
+                $<TARGET_FILE:manta-control>)
+    endif()
+endif()

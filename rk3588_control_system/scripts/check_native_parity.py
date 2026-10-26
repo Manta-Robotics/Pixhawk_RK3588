@@ -36,7 +36,8 @@ def main():
     # Vary calibration, heading wrap, adaptive modes, quarantine, raw-window
     # recovery, radio loss, target identity, invalid input and clock reset.
     for options in ({}, {'bearing_sign': -1, 'bearing_scale': .8148, 'bearing_offset_deg': -4.816, 'mount_yaw_deg': 90},
-                    {'config': {'occlusion_enabled': False}}, {'config': {'adaptive_enabled': False}}):
+                    {'config': {'occlusion_enabled': False}}, {'config': {'adaptive_enabled': False}},
+                    {'config': {'trust_checks_enabled': False}}):
         requests.append({'op': 'reset', 'options': options})
         expected.append({'ok': True})
         reference = GatedUwbKalman(**options)
@@ -66,6 +67,39 @@ def main():
             if i % 31 == 0:
                 requests.append({'op': 'result', 'now_ms': at + 12, 'heading_deg': observation['heading_deg']})
                 expected.append(reference.result(at + 12, observation['heading_deg']))
+    # Deterministically cross the long quarantine reanchoring path, including
+    # an invalid interruption, duplicate traffic and a fresh jump afterwards.
+    requests.append({'op': 'reset', 'options': {}})
+    expected.append({'ok': True})
+    reference = GatedUwbKalman()
+    for at in range(1000, 10000, 25):
+        distance = 1 if at < 3000 else .73 + .02 * math.sin(at / 100)
+        angle = 0 if at < 3000 else -30 + .5 * math.sin(at / 100)
+        if 6000 <= at < 6500 or at >= 9000:
+            angle = 55 if at % 50 else -55
+        observation = dict(distance_m=distance, azimuth_deg=angle, now_ms=at,
+                           heading_deg=0, sequence_id=at, tag_id=1,
+                           valid=at != 4000)
+        requests.append(observation)
+        expected.append(reference.update(**observation))
+        if at % 100 == 0:
+            requests.append(observation)
+            expected.append(reference.update(**observation))
+    assert reference.recovery_count >= 1
+    # Motion after quarantine must recover, while jitter around a moving mean
+    # must not. Keep the native/reference comparison over the entire lifecycle.
+    for speed, jitter in ((.5, False), (2., False), (.5, True)):
+        options = {}
+        requests.append({'op': 'reset', 'options': options}); expected.append({'ok': True})
+        reference = GatedUwbKalman()
+        for at in range(1000, 8000, 25):
+            distance = 3 if at < 3000 else 5+speed*(at-3000)/1000
+            if jitter and at >= 3000:
+                distance += 1 if at % 50 else -1
+            observation = dict(distance_m=distance, azimuth_deg=0, now_ms=at,
+                               heading_deg=0, sequence_id=at, tag_id=1)
+            requests.append(observation); expected.append(reference.update(**observation))
+        assert reference.recovery_count == (0 if jitter else 1)
     for gated in (False, True):
         options = dict(require_gated_measurements=gated, mount_yaw_deg=[0, 90], receiver_position_x_m=[.1, -.1])
         fusion = DualUwbFusion(**options)

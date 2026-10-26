@@ -262,8 +262,7 @@ Json FollowController::update(double now, const Json &t, bool connected, const s
     if (acro && nav) {
         const auto &p = c["prediction"];
         const double deceleration = std::max(.05, number(p, "braking_deceleration_mps2", .3));
-        const double age = std::max(0.0, (now - number(t.value("uwb", Json::object()),
-                                                       "measurementUpdatedAt", now)) /
+        const double age = std::max(0.0, (now - measurement_time(t.value("uwb", Json::object()), now)) /
                                              1000),
                      reaction = .6 + std::min(age, n("uwbTimeoutMs") / 1000);
         const double margin = std::max(.05, number(p, "measurement_noise_m", .12)),

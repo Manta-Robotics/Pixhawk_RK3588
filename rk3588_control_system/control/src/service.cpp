@@ -122,6 +122,8 @@ Fd serial(const std::string &path, int rate) {
     cfsetospeed(&options, speed);
     if (tcsetattr(out.value, TCSANOW, &options) < 0)
         throw std::runtime_error("tcsetattr failed");
+    if (tcflush(out.value, TCIFLUSH) < 0)
+        throw std::runtime_error("serial input flush failed");
     return out;
 }
 struct Client {

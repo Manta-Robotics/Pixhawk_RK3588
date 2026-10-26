@@ -18,7 +18,8 @@ inline Json export_wall_clock(Json packet, double control_now_ms, double wall_no
         } else if (value.is_number() && value.get<double>() > 0) {
             if (key == "timestamp")
                 value = value.get<double>() + (depth == 1 ? offset / 1000 : offset);
-            else if (key.ends_with("At") || key == "accepted_at" || key == "updated_at")
+            else if (key.ends_with("At") || key == "accepted_at" || key == "updated_at" ||
+                     key == "filterTimeMs")
                 value = value.get<double>() + offset;
         }
     };

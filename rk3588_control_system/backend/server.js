@@ -28,6 +28,7 @@ import { UwbFollowController } from './uwb_follow.js';
 import { IntermittentUwbFollow } from './uwb_target_prediction.js';
 import { NeuralUwbFollowController } from './neural_uwb_follow.js';
 import { UwbTestLogger } from './uwb_test_logger.js';
+import { UwbMeasurementLogger } from './uwb_measurement_logger.js';
 import {
   acceptGimbalFeedback,
   createGimbalLinkHealth,
@@ -37,6 +38,7 @@ import {
 } from './gimbal_link_health.js';
 import { limitOutgoingGimbalFrame } from './gimbal_frame_limits.js';
 import { SiyiGimbal, decodeSiyiPackets } from './siyi_gimbal.js';
+import { resolveTrackingPython, waitForTrackerReady } from './tracking_runtime.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -115,6 +117,7 @@ let uwbTrackingMethod = String(UWB_FOLLOW_CONFIG.tracking_method || 'traditional
 let uwbFollowController = uwbTrackingMethod === 'neural'
   ? neuralUwbFollowController : traditionalUwbFollowController;
 const uwbTestLogger = new UwbTestLogger(UWB_TEST_LOG_DIR, { flushRows: UWB_FOLLOW_RATE_HZ });
+const uwbMeasurementLogger = new UwbMeasurementLogger(UWB_TEST_LOG_DIR);
 let uwbFollowState = {
   active: false,
   status: 'idle',
@@ -384,6 +387,7 @@ let gimbalTxEnabled = false;
 let gimbalTrackProcess = null;
 let gimbalTrackRestartTimer = null;
 let gimbalTrackStopRequested = false;
+let gimbalTrackerStartup = null;
 let gimbalLastRateX = 0;
 let gimbalLastRateY = 0;
 let gimbalStopFramesRemaining = 0;
@@ -2842,6 +2846,19 @@ function startGimbalTracking(options = {}) {
     };
     const child = spawn(PYTHON_EXEC, args, { cwd: PROJECT_ROOT, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv });
     gimbalTrackProcess = child;
+    const readiness = waitForTrackerReady(child);
+    gimbalTrackerStartup = { child, readiness };
+    readiness.catch(error => {
+      if (child !== gimbalTrackProcess) return;
+      gimbalTrackStopRequested = true;
+      gimbalState.trackingActive = false;
+      gimbalState.trackWorkerActive = false;
+      gimbalState.lastError = error.message;
+      holdGimbalTrackIdle(`${requestedMode}-initialization-failed`);
+      updateGimbalTrackStatus({ status: 'error', mode: requestedMode, message: error.message, workerActive: false });
+      addLog('GIMBAL_TRACK_ERR', error.message);
+    });
+    child.on('error', error => addLog('GIMBAL_TRACK_ERR', error.message));
     gimbalTrackTarget = null;
     gimbalTrackHolding = true;
     gimbalTrackLastTargetAt = 0;
@@ -3463,6 +3480,16 @@ function buildUwbTestSample(result = uwbFollowState, event = 'sample', reason = 
     commanded_forward_mps: result.commandedForwardSpeedMps ?? result.forwardSpeedMps,
     throttle_percent: result.throttlePercent ?? command.throttle,
     steering_deg: result.steeringDegrees ?? command.steering,
+    desired_yaw_rate_deg_s: result.yawRateDegS,
+    yaw_rate_error_deg_s: result.yawRateErrorDegS,
+    requested_throttle_percent: result.driveAllocation?.requestedThrottle,
+    requested_steering_deg: result.driveAllocation?.requestedSteering,
+    turn_headroom_percent: result.driveAllocation?.turnHeadroomPercent,
+    throttle_reduced_for_turn: result.driveAllocation?.throttleReducedForTurn,
+    left_demand_percent: result.driveAllocation?.leftDemandPercent,
+    right_demand_percent: result.driveAllocation?.rightDemandPercent,
+    trust_checks_enabled: uwb.trustChecksEnabled,
+    trust_diagnostics: JSON.stringify((uwb.sensors || []).map(s => ({receiverId:s.receiverId, ...s.trustDiagnostics}))),
     command_left_pwm: command.leftPwm,
     command_right_pwm: command.rightPwm,
     actual_left_pwm: actualOutputs[`ch${ROVER_LEFT_CHANNEL}`],
@@ -3507,6 +3534,7 @@ function stopUwbFollow(reason = 'manual_stop', { disarm = false } = {}) {
 
 function mergeUwbTelemetry(previous, incomingUwb) {
   const nextTelemetry = { uwb: { ...previous } };
+  nextTelemetry.uwb.trustChecksEnabled = incomingUwb.trustChecksEnabled !== false;
   nextTelemetry.uwb.measurementStatus = String(incomingUwb.measurementStatus || 'unavailable');
   nextTelemetry.uwb.rejectionReason = incomingUwb.rejectionReason ? String(incomingUwb.rejectionReason) : null;
   for (const key of ['distanceM', 'azimuthDeg', 'elevationDeg', 'rawDistanceM', 'rawAzimuthDeg', 'rawElevationDeg', 'relativeXM', 'relativeYM', 'updatedAt', 'measurementUpdatedAt', 'measurementNis']) {
@@ -3811,6 +3839,8 @@ telemetrySocket.on('message', (rawMessage) => {
   try {
     const packet = JSON.parse(rawMessage.toString('utf8'));
 
+    if (packet.type === 'uwb_measurement') { uwbMeasurementLogger.record(packet.payload); return; }
+
     if (packet.type === 'uwb_follow') { acceptNativeFollowState(packet.payload); return; }
     if (packet.type === 'control_uwb') { nativeGuardedUwb = { value: packet.payload, receivedAt: Date.now() }; return; }
     if (packet.type === 'rover_control') { acceptNativeRoverControl(packet.payload); return; }
@@ -4011,6 +4041,28 @@ app.post('/api/uwb-follow/method', async (req, res) => {
   return res.json({ success: true, trackingMethod: result.method, state: uwbFollowState });
 });
 
+app.get('/api/uwb-measurements/state', (_req, res) => {
+  res.json({ success: true, ...uwbMeasurementLogger.state() });
+});
+app.post('/api/uwb-measurements/start', async (req, res) => {
+  try {
+    const result = await uwbMeasurementLogger.start({
+      label: String(req.body?.label || '').slice(0, 500),
+      referenceDistanceM: req.body?.referenceDistanceM,
+      referenceBearingDeg: req.body?.referenceBearingDeg,
+      uwbDual: config.uwb_dual, measurementFilter: config.uwb_measurement_filter,
+      timeAlignment: { enabled: true, ...config.uwb_time_alignment },
+      bearingCalibration: { sign: GIMBAL_BEACON_CONFIG.yaw_source_sign,
+        scale: GIMBAL_BEACON_CONFIG.yaw_source_scale, offsetDeg: GIMBAL_BEACON_CONFIG.yaw_offset_deg }
+    });
+    res.json({ success: true, ...result });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+});
+app.post('/api/uwb-measurements/stop', async (_req, res) => {
+  try { res.json({ success: true, ...await uwbMeasurementLogger.stop() }); }
+  catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
 app.get('/api/uwb-follow/logs', (_req, res) => {
   try {
     if (!fs.existsSync(UWB_TEST_LOG_DIR)) {
@@ -4037,7 +4089,7 @@ app.get('/api/uwb-follow/logs', (_req, res) => {
 
 app.get('/api/uwb-follow/logs/:fileName/download', (req, res) => {
   const fileName = String(req.params.fileName || '');
-  if (path.basename(fileName) !== fileName || !/^uwb_[A-Za-z0-9_.-]+\.csv$/.test(fileName)) {
+  if (path.basename(fileName) !== fileName || !/^uwb_[A-Za-z0-9_.-]+\.csv(?:\.json|\.summary\.json)?$/.test(fileName)) {
     return res.status(400).json({ success: false, message: 'Invalid UWB log file name' });
   }
   const filePath = path.join(UWB_TEST_LOG_DIR, fileName);
@@ -4108,7 +4160,7 @@ app.post('/api/control/motor', async (req, res) => {
 });
 
 const VISION_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'vision_face_controller.py');
-const PYTHON_EXEC = process.env.PYTHON_EXEC || 'python3';
+const PYTHON_EXEC = resolveTrackingPython(PROJECT_ROOT);
 let visionProcess = null;
 
 function isVisionActive() {
@@ -4450,7 +4502,7 @@ app.post('/api/gimbal/click', (req, res) => {
   res.json({ success: true, delta, state: gimbalState });
 });
 
-app.post('/api/gimbal/track/start', (req, res) => {
+app.post('/api/gimbal/track/start', async (req, res) => {
   if (!gimbalStream || !gimbalState.connected) {
     const opened = openGimbalPort('web');
     if (!opened) {
@@ -4467,6 +4519,20 @@ app.post('/api/gimbal/track/start', (req, res) => {
   if (!result.ok) {
     res.status(500).json({ success: false, message: result.error, state: gimbalState });
     return;
+  }
+  if (result.mode !== 'beacon' && gimbalTrackerStartup?.child === gimbalTrackProcess) {
+    const startup = gimbalTrackerStartup;
+    try {
+      const ready = await startup.readiness;
+      if (startup.child !== gimbalTrackProcess || !gimbalState.trackingActive) {
+        res.status(409).json({ success: false, message: 'Tracking startup was cancelled or superseded', state: gimbalState });
+        return;
+      }
+      result.detector = ready.detector || result.detector;
+    } catch (error) {
+      res.status(503).json({ success: false, message: error.message, state: gimbalState });
+      return;
+    }
   }
   if (!result.alreadyRunning && result.mode !== 'beacon') beginGimbalResponseCheck(`track-start:${result.mode || gimbalState.trackMode}`);
   res.json({ success: true, active: true, alreadyRunning: Boolean(result.alreadyRunning), mode: result.mode || gimbalState.trackMode, detector: result.detector || '', state: gimbalState });
@@ -4854,8 +4920,10 @@ function shutdown() {
 
   httpServer.close(() => {
     console.log('[Server] Closed');
-    clearTimeout(forceExitTimer);
-    process.exit(0);
+    uwbMeasurementLogger.stop().catch(error => console.error('[Measurement log]', error.message)).finally(() => {
+      clearTimeout(forceExitTimer);
+      process.exit(0);
+    });
   });
 }
 

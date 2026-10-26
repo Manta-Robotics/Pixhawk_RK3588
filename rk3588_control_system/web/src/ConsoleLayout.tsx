@@ -483,7 +483,7 @@ export function DeviceView(){return (<section {...{"className": "view active", "
 </div>
 {"\n                "}
 <div {...{"className": "uwb-values"}}>
-<span>
+<span id="uwbDistanceLabel">
 {"距离"}
 </span>
 <strong {...{"id": "uwbDistance"}}>

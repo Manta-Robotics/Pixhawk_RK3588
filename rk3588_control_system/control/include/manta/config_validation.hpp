@@ -28,8 +28,10 @@ inline void validate_control_config(const Json &root) {
           "commissioning_mode", "hard_stop_enabled", "close_approach_enabled"})
         boolean(f, key);
     boolean(p, "enabled");
-    for (const auto *key : {"enabled", "adaptive_enabled", "occlusion_enabled"})
+    for (const auto *key : {"enabled", "adaptive_enabled", "occlusion_enabled", "trust_checks_enabled"})
         boolean(filter, key);
+    bound(f, "relative_turn_decel_percent_s", 1, 100);
+    bound(f, "relative_turn_min_throttle_percent", 0, 100);
     const auto execution = f.value("execution_mode", std::string("manual"));
     if (execution != "manual" && execution != "acro" && execution != "relative_imu")
         throw std::invalid_argument("unsupported follow execution_mode");

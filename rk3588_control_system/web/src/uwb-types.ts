@@ -16,6 +16,7 @@ export interface UwbPacket {
   online?: boolean;
   fresh?: boolean;
   measurementStatus?: string;
+  trustChecksEnabled?: boolean;
   measurementUpdatedAt?: number | null;
   distanceM?: number | null;
   azimuthDeg?: number | null;

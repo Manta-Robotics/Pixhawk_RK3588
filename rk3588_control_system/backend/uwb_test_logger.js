@@ -14,6 +14,9 @@ const COLUMNS = [
   'tracking_phase', 'close_approach_active', 'distance_hold_error_m', 'distance_hold_active',
   'distance_recovery_active', 'desired_forward_mps', 'commanded_forward_mps',
   'throttle_percent', 'steering_deg',
+  'desired_yaw_rate_deg_s', 'yaw_rate_error_deg_s', 'requested_throttle_percent', 'requested_steering_deg',
+  'turn_headroom_percent', 'throttle_reduced_for_turn', 'left_demand_percent', 'right_demand_percent',
+  'trust_checks_enabled', 'trust_diagnostics',
   'command_left_pwm', 'command_right_pwm', 'actual_left_pwm', 'actual_right_pwm', 'output_neutral_verified'
 ];
 

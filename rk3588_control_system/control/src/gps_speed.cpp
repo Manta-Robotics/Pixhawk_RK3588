@@ -50,7 +50,7 @@ Json GpsSpeedLoop::update(double now, const Json &t, double bearing, double rate
     const double yaw = number(t["attitude"], "yaw") * radians, b = bearing * radians,
                  vx = number(t["velocity"], "vx"), vy = number(t["velocity"], "vy");
     const double measured = vx * std::cos(yaw) + vy * std::sin(yaw),
-                 sample = number(t.value("uwb", Json::object()), "measurementUpdatedAt");
+                 sample = measurement_time(t.value("uwb", Json::object()));
     if (std::isfinite(sample) && sample != measurement_at) {
         const double target = vx * std::cos(yaw + b) + vy * std::sin(yaw + b) + rate;
         const double elapsed = std::isfinite(measurement_at)

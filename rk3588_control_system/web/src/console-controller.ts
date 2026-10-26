@@ -421,16 +421,23 @@ function renderTelemetry(this: any): any {
   }
 }
 
-function renderUwbStatus(this: any): any {
+function renderUwbStatus(){
   var uwb: any=state.uwb||{},panel: any=$("#uwbPanel"),dot: any=$("#uwbDot");
   if(!panel||!dot)return;
   var display: any=uwbDisplaySmoother.view(state.connected?uwb:{},Date.now());
   var distance: any=display.distanceM,azimuth: any=display.azimuthDeg,elevation: any=Number(uwb.elevationDeg);
   var valid: any=Boolean(state.connected&&display.valid&&Number.isFinite(elevation));
+  // Display-only history: never promote held readings to valid telemetry.
+  if(!state.connected)lastCompactUwb=null;
+  if(valid)lastCompactUwb={distance:distance,azimuth:azimuth,elevation:elevation};
+  var shown: any=lastCompactUwb;
   panel.dataset.state=valid?"online":"offline";
-  $("#uwbDistance").textContent=valid?distance.toFixed(2)+" m":"-- m";
-  $("#uwbAngles").textContent=valid?azimuth.toFixed(1)+"° / "+elevation.toFixed(1)+"°":"--° / --°";
-  if(!valid){dot.style.setProperty("--uwb-x","0px");dot.style.setProperty("--uwb-y","0px");renderRelativePosition();return;}
+  dot.dataset.missing=String(!valid);
+  $("#uwbDistanceLabel").textContent=valid?localize("距离","Distance"):shown?localize("信号丢失 · 上次距离","Signal lost · last range"):localize("等待信号 · 距离","Waiting · range");
+  if(shown){distance=shown.distance;azimuth=shown.azimuth;elevation=shown.elevation;}
+  $("#uwbDistance").textContent=shown?distance.toFixed(2)+" m":"-- m";
+  $("#uwbAngles").textContent=shown?azimuth.toFixed(1)+"° / "+elevation.toFixed(1)+"°":"--° / --°";
+  if(!shown){dot.style.setProperty("--uwb-x","0px");dot.style.setProperty("--uwb-y","0px");renderRelativePosition();return;}
   var displayRange: any=Math.max(2,Math.min(20,distance)),radius: any=Math.min(19,19*distance/displayRange),angle: any=azimuth*Math.PI/180;
   dot.style.setProperty("--uwb-x",(-Math.sin(angle)*radius).toFixed(2)+"px");
   dot.style.setProperty("--uwb-y",(-Math.cos(angle)*radius).toFixed(2)+"px");
@@ -438,7 +445,9 @@ function renderUwbStatus(this: any): any {
 }
 
 var uwbDisplaySmoother: any=new window.MantaUwbDisplaySmoother(120),relativeDisplaySmoother: any=new window.MantaUwbDisplaySmoother(120),rawUwbDisplay: any=new window.MantaUwbRawDisplay();
-function renderRelativePosition(this: any): any {
+// Held values belong only to this view and are cleared on disconnect.
+var lastCompactUwb: any=null,lastRelativeUwb: any=null,lastRawUwb: any=null;
+function renderRelativePosition(){
   var panel: any=$("#relativePositionPanel"),point: any=$("#relativeTargetPoint"),vector: any=$("#relativeTargetVector");
   if(!panel||!point||!vector)return;
   var now: any=Date.now(),uwb: any=state.uwb||{},display: any=uwbDisplaySmoother.view(state.connected?uwb:{},now),distance: any=display.distanceM,azimuth: any=display.azimuthDeg;
@@ -447,15 +456,18 @@ function renderRelativePosition(this: any): any {
   var predicted: any=Boolean(follow.active&&estimate.usable&&estimate.source==="predicted");
   if(predicted){distance=Math.hypot(estimate.relativeBodyM.x,estimate.relativeBodyM.y);azimuth=Math.atan2(-estimate.relativeBodyM.y,estimate.relativeBodyM.x)*180/Math.PI}
   var valid: any=Boolean(state.connected&&(predicted||display.valid)&&Number.isFinite(distance)&&Number.isFinite(azimuth));
-  point.setAttribute("visibility",valid?"visible":"hidden");vector.setAttribute("visibility",valid?"visible":"hidden");
-  rawPoint.setAttribute("visibility",raw.valid?"visible":"hidden");rawVector.setAttribute("visibility",raw.valid?"visible":"hidden");
-  point.style.opacity=predicted?"0.55":"1";vector.setAttribute("stroke-dasharray",predicted?"3 2":"none");
+  if(!state.connected){lastCompactUwb=null;lastRelativeUwb=null;lastRawUwb=null;}
+  if(raw.valid)lastRawUwb=raw;
+  var shownRaw: any=lastRawUwb,hasRaw: any=Boolean(shownRaw);
+  rawPoint.dataset.missing=String(!raw.valid);
+  rawPoint.setAttribute("visibility",hasRaw?"visible":"hidden");rawVector.setAttribute("visibility",hasRaw?"visible":"hidden");
+
   panel.dataset.state=valid?"online":raw.valid?"raw-only":"offline";
   $("#relativePositionTitle").textContent=predicted?localize("目标预测位置","Predicted target"):localize("目标相对位置","Relative target");
-  $("#relativeRawLabel").textContent=localize("○ 原始","○ Raw")+(raw.valid?localize("·基站","·RX ")+raw.receiverId:"");
-  $("#relativeRawValue").textContent=raw.valid?raw.distanceM.toFixed(2)+" m / "+raw.azimuthDeg.toFixed(1)+"°":"-- m / --°";
+  $("#relativeRawLabel").textContent=(!raw.valid&&hasRaw?localize("○ 上次原始","○ Last raw"):localize("○ 原始","○ Raw"))+(hasRaw?localize("·基站","·RX ")+shownRaw.receiverId:"");
+  $("#relativeRawValue").textContent=hasRaw?shownRaw.distanceM.toFixed(2)+" m / "+shownRaw.azimuthDeg.toFixed(1)+"°":"-- m / --°";
   $("#relativeRawValue").title=raw.valid?localize("模块原始值，未筛选，不用于控制。标签 ","Unscreened module values; not used for control. Tag ")+raw.tagId:localize("未收到新鲜完整定位帧","No fresh complete measurement");
-  $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):localize("● 可信","● Trusted");
+  $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):uwb.trustChecksEnabled===false?localize("● 平滑","● Smoothed"):localize("● 可信","● Trusted");
   var relative: any=predicted?estimate.relativeBodyM:follow.active&&!(follow.pausePropulsion&&estimate.source==="unavailable")?follow.relativeBodyM:null;
   if(valid&&relative&&!predicted){
     var relativeView: any=relativeDisplaySmoother.view(Object.assign({},uwb,{distanceM:Math.hypot(relative.x,relative.y),azimuthDeg:Math.atan2(-relative.y,relative.x)*180/Math.PI}),now);
@@ -465,21 +477,33 @@ function renderRelativePosition(this: any): any {
   // UWB +Y is left; the controller's +Y is right.
   var forward: any=valid?(relative&&Number.isFinite(relative.x)?relative.x:distance*Math.cos(angle)):0;
   var left: any=valid?(relative&&Number.isFinite(relative.y)?-relative.y:distance*Math.sin(angle)):0;
-  var magnitude: any=Math.max(valid?Math.hypot(forward,left):0,raw.valid?Math.hypot(raw.forward,raw.left):0),scales: any=[1,2,5,10,20,50],scale: any=5;
-  if(valid||raw.valid){scale=scales[scales.length-1];for(var i: any=0;i<scales.length;i++){if(magnitude<=scales[i]*.9){scale=scales[i];break}}scale=Math.max(scale,Math.ceil(magnitude/.9));}
-  function plot(this: any,dot?: any,line?: any,x?: any,y?: any): any {var px: any=90-clamp(y/scale,-1,1)*51,py: any=56-clamp(x/scale,-1,1)*51;dot.setAttribute("cx",px.toFixed(2));dot.setAttribute("cy",py.toFixed(2));line.setAttribute("x2",px.toFixed(2));line.setAttribute("y2",py.toFixed(2));}
-  if(valid)plot(point,vector,forward,left);
-  if(raw.valid)plot(rawPoint,rawVector,raw.forward,raw.left);
+  if(valid)lastRelativeUwb={forward:forward,left:left,distance:distance,azimuth:azimuth,predicted:predicted};
+  var shown: any=lastRelativeUwb,hasPosition: any=Boolean(shown),missingMeasurement: any=!state.connected||!display.valid;
+  if(shown){forward=shown.forward;left=shown.left;distance=shown.distance;azimuth=shown.azimuth;}
+  point.dataset.missing=String(missingMeasurement);
+  point.setAttribute("visibility",hasPosition||!hasRaw?"visible":"hidden");
+  vector.setAttribute("visibility",hasPosition?"visible":"hidden");
+  point.style.opacity=shown&&shown.predicted?"0.55":"1";
+  vector.setAttribute("stroke-dasharray",shown&&shown.predicted?"3 2":"none");
+  if(!valid&&shown)$("#relativeJudgedLabel").textContent=shown.predicted?localize("◌ 上次预测","◌ Last prediction"):localize("● 上次位置","● Last position");
+  var magnitude: any=Math.max(hasPosition?Math.hypot(forward,left):0,hasRaw?Math.hypot(shownRaw.forward,shownRaw.left):0),scales: any=[1,2,5,10,20,50],scale: any=5;
+  if(hasPosition||hasRaw){scale=scales[scales.length-1];for(var i: any=0;i<scales.length;i++){if(magnitude<=scales[i]*.9){scale=scales[i];break}}scale=Math.max(scale,Math.ceil(magnitude/.9));}
+  function plot(dot: any,line: any,x: any,y: any){var px: any=90-clamp(y/scale,-1,1)*51,py: any=56-clamp(x/scale,-1,1)*51;dot.setAttribute("cx",px.toFixed(2));dot.setAttribute("cy",py.toFixed(2));line.setAttribute("x2",px.toFixed(2));line.setAttribute("y2",py.toFixed(2));}
+  plot(point,vector,hasPosition?forward:0,hasPosition?left:0);
+  if(hasRaw)plot(rawPoint,rawVector,shownRaw.forward,shownRaw.left);
   $("#relativeRingLabel").textContent=scale+" m";
-  $("#relativePositionValue").textContent=valid?localize("前 ","FWD ")+forward.toFixed(2)+" · "+localize("左 ","LEFT ")+left.toFixed(2):localize("可信位置：暂无","Trusted position unavailable");
-  $("#relativeRangeValue").textContent=valid?distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°":state.connected&&(raw.valid||(uwb.sensors||[]).some(function(this: any,s?: any): any {return s.measurementStatus==="suspect"}))?localize("拒收 / 等待恢复","Rejected / waiting"):"-- m / --°";
+  $("#relativePositionValue").textContent=hasPosition?localize("前 ","FWD ")+forward.toFixed(2)+" · "+localize("左 ","LEFT ")+left.toFixed(2):localize("可信位置：暂无","Trusted position unavailable");
+  $("#relativeRangeValue").textContent=hasPosition?distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°":state.connected&&(raw.valid||(uwb.sensors||[]).some(function(s: any){return s.measurementStatus==="suspect"}))?localize("拒收 / 等待恢复","Rejected / waiting"):"-- m / --°";
   var activeIds: any=Array.isArray(uwb.activeReceiverIds)?uwb.activeReceiverIds:[],mode: any=String(uwb.fusionMode||"");
-  var sensors: any=uwb.sensors||[],sensor: any=sensors.find(function(this: any,s?: any): any {return s.receiverId===raw.receiverId})||sensors[0]||{};
-  var quarantine: any=sensors.some(function(this: any,s?: any): any {return s.occlusionDiagnostics&&["suspect","quarantined","recovering"].includes(s.occlusionDiagnostics.state)});
+  var sensors: any=uwb.sensors||[],sensor: any=sensors.find(function(s: any){return s.receiverId===raw.receiverId})||sensors[0]||{};
+  var quarantine: any=sensors.some(function(s: any){return s.occlusionDiagnostics&&["suspect","quarantined","recovering"].includes(s.occlusionDiagnostics.state)});
   $("#relativeFusionMode").textContent=predicted?localize("预测，非实测","PREDICTED"):valid?(mode==="overlap_weighted_fusion"?localize("双基站融合","DUAL FUSION"):activeIds.length?localize("基站 ","RX ")+activeIds.join("+"):localize("单基站","SINGLE RX")):quarantine?localize("定位异常，等待恢复","POSITION SUSPECT"):localize("等待 UWB","WAITING UWB");
   var reason: any=uwb.rejectionReason||sensor.fusionExclusionReason||sensor.filterReason||sensor.invalidReason||"";
   var reasons: any={occlusion_suspected:localize("突跳隔离","Jump quarantine"),innovation_outlier:localize("创新偏差过大","Innovation outlier"),outside_receiver_fov:localize("超出视野","Outside FOV"),distance_out_of_range:localize("距离超限","Range rejected"),radio_invalid:localize("无线定位无效","Radio invalid"),heading_unavailable:localize("航向不可用","Heading unavailable"),stale_measurement:localize("可信数据过期","Trusted data stale")};
   var decision: any=!state.connected?localize("连接已断开","Disconnected"):predicted?localize("预测，非可信实测","Prediction, not a trusted observation"):valid?localize("已接纳；原始值仅供对照","Accepted; raw values for comparison"):!raw.valid?localize("无新鲜定位帧","No fresh measurement"):localize("未接纳：","Rejected: ")+(quarantine?localize("突跳隔离","Jump quarantine"):reasons[reason]||localize("等待可信位置","Waiting for trusted position"));
+  if(state.connected&&!predicted&&uwb.trustChecksEnabled===false)decision=valid?localize("可信度仅作诊断；使用平滑测量","Trust diagnostic only; smoothed measurement"):localize("可信度仅作诊断；等待完整有效帧","Trust diagnostic only; waiting for a valid complete frame");
+  if(state.connected&&uwb.trustChecksEnabled===false&&sensor.trustDiagnostics){var diagnostic: any=sensor.trustDiagnostics;decision+=localize("；旁路：","; diagnostic: ")+(sensor.withinFov===false?localize("超出标称视野","outside nominal FOV"):diagnostic.status==="suspect"?localize("可疑（不停推）","suspect (no stop)"):localize("正常","normal"));}
+  if(state.connected&&!valid&&shown)decision=localize("信号丢失；显示上次位置","Signal lost; showing last position");
   $("#relativeDecision").textContent=decision;$("#relativeDecision").title=decision+(reason?" ("+reason+")":"");
 }
 

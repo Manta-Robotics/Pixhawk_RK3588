@@ -8,7 +8,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
+CONFIG_FILE="${MANTA_CONFIG_FILE:-${MANTA_CONFIG_PATH:-$PROJECT_DIR/config/system.config.json}}"
 
 eval "$(python3 - "$CONFIG_FILE" <<'PY'
 import json
@@ -18,12 +18,19 @@ import sys
 cfg = json.load(open(sys.argv[1], 'r', encoding='utf-8'))
 pixhawk = cfg.get('pixhawk', {})
 for key, value in {
+    'SERIAL_PORT': cfg.get('serial_port', '/dev/ttyS1'),
     'BOOT_ENV': pixhawk.get('boot_config', '/boot/firmware/ubuntuEnv.txt'),
     'UART_OVERLAY': pixhawk.get('uart_overlay', 'rk3588-lubancat-uart1-m1-overlay'),
 }.items():
     print(f"{key}={shlex.quote(str(value))}")
 PY
 )"
+
+case "$SERIAL_PORT" in
+    /dev/ttyUSB*|/dev/ttyACM*|/dev/serial/*)
+        echo "[pixhawk-uart] USB serial $SERIAL_PORT does not require a board UART overlay."
+        exit 0 ;;
+esac
 
 if [[ ! -f "$BOOT_ENV" ]]; then
     echo "[pixhawk-uart] Missing $BOOT_ENV" >&2

@@ -41,6 +41,7 @@ def main():
     process = None
     frames, packets = [], []
     heartbeat_at = 0
+    boot_at = time.monotonic() - 1
     def send(message):
         os.write(master, message.pack(sender)); sender.seq = (sender.seq+1) % 256
 
@@ -60,6 +61,8 @@ def main():
                         frames.append(msg)
                         if msg.get_type() == 'COMMAND_LONG' and msg.command == 511:
                             send(mav.MAVLink_command_ack_message(511, 0))
+                        if msg.get_type() == 'TIMESYNC' and msg.tc1 == 0:
+                            send(mav.MAVLink_timesync_message(int((time.monotonic()-boot_at)*1e9), msg.ts1))
             if telemetry in ready:
                 packets.append(json.loads(telemetry.recv(65536)))
 
@@ -83,12 +86,19 @@ def main():
                 assert rejected.returncode != 0, invalid
             path.write_text(json.dumps(config))
             log = open(Path(directory)/'service.log', 'w+')
+            # Pre-open stale bytes must not survive the service's input flush.
+            send(mav.MAVLink_heartbeat_message(10, 3, 129, 0, 4, 3))
+            for name, value in [('DIST', .2), ('EL', 0), ('AZ', 30)]:
+                send(mav.MAVLink_named_value_float_message(10000, f'UWB1_{name}'.encode(), value))
             process = subprocess.Popen([binary, '--config', str(path)], stdout=log, stderr=log)
             pump(.7)
             assert process.poll() is None
             assert any(p['type'] == 'connection' and p['payload']['connected'] for p in packets), packets[-2:]
             assert any(m.get_type() == 'HEARTBEAT' for m in frames)
             assert any(m.get_type() == 'COMMAND_LONG' and m.command == 511 for m in frames)
+            assert any(m.get_type() == 'TIMESYNC' and m.tc1 == 0 for m in frames)
+            assert not any(p['payload'].get('clearanceStop') or p['payload'].get('fresh')
+                           for p in packets if p['type'] == 'uwb')
             with socket.create_connection(('127.0.0.1', mp_port), timeout=1) as planner:
                 pump(.2)
                 received = mav.MAVLink(None).parse_buffer(planner.recv(65536))

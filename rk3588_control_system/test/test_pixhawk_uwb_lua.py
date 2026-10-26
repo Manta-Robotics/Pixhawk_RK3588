@@ -40,7 +40,26 @@ function gcs:send_text(severity, text) end
 function gcs:send_named_float(name, value)
     messages[#messages + 1] = {name = name, value = value, at = now_ms}
 end
-function millis() return {tofloat = function() return now_ms end} end
+function millis() return {toint = function() return now_ms end} end
+heartbeat_pending = true
+channel = 1
+send_clock_step = 0
+drop_field = nil
+mavlink = {}
+function mavlink:init(depth, count) assert(depth == 4 and count == 1) end
+function mavlink:register_rx_msgid(id) assert(id == 0) end
+function mavlink:receive_chan()
+    if heartbeat_pending then heartbeat_pending = false; return 'heartbeat', channel end
+end
+function mavlink:send_chan(chan, id, payload)
+    assert(id == 251)
+    local at, value, name = string.unpack('<I4fc10', payload)
+    name = string.gsub(name, '%z', '')
+    now_ms = now_ms + send_clock_step
+    if name == drop_field then return false end
+    messages[#messages + 1] = {name = name, value = value, at = at, channel = chan, payload = payload}
+    return true
+end
 function feed(id, bytes)
     local queue = ports[id].queue
     for index = 1, #bytes do queue[#queue + 1] = string.byte(bytes, index) end
@@ -48,6 +67,7 @@ end
 max_instructions = 0
 function run_tick(at)
     now_ms = at
+    if at % 1000 == 0 then heartbeat_pending = true end
     local instructions = 0
     debug.sethook(function() instructions = instructions + 100 end, '', 100)
     local next_callback, delay = callback()
@@ -119,7 +139,88 @@ class PixhawkUwbLuaTests(unittest.TestCase):
         self.assertEqual(len(self.messages(lua, b'UWB1_AZ')), 1)
         self.assertEqual([m[b'value'] for m in self.messages(lua, b'UWB1_VALID')], [0, 1])
         names = [m[b'name'] for m in lua.globals().messages.values()]
-        self.assertEqual(names[-4:], [b'UWB1_DIST', b'UWB1_EL', b'UWB1_VALID', b'UWB1_AZ'])
+        self.assertEqual(names[-5:], [b'UWB1_VALID', b'UWB1_PROTO', b'UWB1_DIST', b'UWB1_EL', b'UWB1_AZ'])
+
+    def test_position_fields_share_source_clock_even_across_send_ticks(self):
+        lua = self.make_runtime()
+        lua.globals().send_clock_step = 1
+        lua.globals().feed(1, frame())
+        for at in range(10, 51, 10):
+            lua.globals().run_tick(at)
+        fields = [self.messages(lua, b'UWB1_' + field)[0] for field in (b'DIST', b'EL', b'AZ')]
+        self.assertEqual(len({m[b'at'] for m in fields}), 1)
+        self.assertTrue(all(m[b'channel'] == 1 for m in fields))
+        # Check the exact payload layout independently of the Lua mock decoder.
+        at, value, name = struct.unpack('<If10s', fields[0][b'payload'])
+        self.assertEqual(at, fields[0][b'at'])
+        self.assertAlmostEqual(value, 1.25)
+        self.assertEqual(name.rstrip(b'\0'), b'UWB1_DIST')
+
+    def test_out_of_range_angle_is_not_forwarded_as_a_position(self):
+        lua = self.make_runtime()
+        for at, data in ((20, frame(az=181)), (60, frame(el=-91)), (100, frame(seq=3))):
+            lua.globals().feed(1, data)
+            for tick in range(at - 10, at + 30, 10):
+                lua.globals().run_tick(tick)
+        self.assertEqual(len(self.messages(lua, b'UWB1_AZ')), 1)
+        self.assertEqual([m[b'value'] for m in self.messages(lua, b'UWB1_VALID')], [0, 1])
+
+    def test_partial_send_is_not_completed_and_next_observation_recovers(self):
+        lua = self.make_runtime()
+        lua.globals().drop_field = b'UWB1_EL'
+        lua.globals().feed(1, frame())
+        for at in range(10, 51, 10):
+            lua.globals().run_tick(at)
+        self.assertEqual(len(self.messages(lua, b'UWB1_DIST')), 1)
+        self.assertEqual(len(self.messages(lua, b'UWB1_AZ')), 0)
+        lua.globals().drop_field = None
+        lua.globals().feed(1, frame(seq=2))
+        for at in range(60, 101, 10):
+            lua.globals().run_tick(at)
+        self.assertEqual(len(self.messages(lua, b'UWB1_AZ')), 1)
+        self.assertEqual(self.messages(lua, b'UWB1_AZ')[0][b'at'], self.messages(lua, b'UWB1_DIST')[-1][b'at'])
+
+    def test_protocol_announcement_precedes_positions_and_repeats_after_heartbeat(self):
+        lua = self.make_runtime()
+        lua.globals().drop_field = b'UWB1_PROTO'
+        lua.globals().feed(1, frame())
+        for at in (10, 20):
+            lua.globals().run_tick(at)
+        self.assertFalse(self.messages(lua, b'UWB1_DIST'))
+        lua.globals().drop_field = None
+        for at in (30, 50, 1010):
+            if at == 1010:
+                lua.globals().heartbeat_pending = True
+            lua.globals().feed(1, frame())
+            lua.globals().run_tick(at)
+            lua.globals().run_tick(at + 10)
+        self.assertEqual(len(self.messages(lua, b'UWB1_PROTO')), 2)
+        names = [m[b'name'] for m in lua.globals().messages.values()]
+        self.assertLess(names.index(b'UWB1_PROTO'), names.index(b'UWB1_DIST'))
+        self.assertTrue(all(m[b'value'] == 2 for m in self.messages(lua, b'UWB1_PROTO')))
+
+    def test_inactive_channel_expires_and_new_heartbeat_restores_forwarding(self):
+        lua = self.make_runtime()
+        lua.globals().feed(1, frame())
+        for at in (4010, 4020):
+            lua.globals().run_tick(at)
+        self.assertEqual(len(self.messages(lua, b'UWB1_AZ')), 0)
+        lua.globals().channel = 3
+        lua.globals().heartbeat_pending = True
+        lua.globals().feed(1, frame(seq=2))
+        for at in (4030, 4040):
+            lua.globals().run_tick(at)
+        samples = self.messages(lua, b'UWB1_AZ')
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0][b'channel'], 3)
+
+    def test_source_timestamp_preserves_uint32_precision_and_wrap(self):
+        lua = self.make_runtime()
+        lua.globals().feed(1, frame(seq=1) + frame(seq=2))
+        for at in (0xFFFFFFF0, 0xFFFFFFFA, 4, 14):
+            lua.globals().heartbeat_pending = True
+            lua.globals().run_tick(at)
+        self.assertEqual([m[b'at'] for m in self.messages(lua, b'UWB1_AZ')], [0xFFFFFFFA, 14])
 
     def test_burst_is_drained_without_giving_two_samples_one_timestamp(self):
         lua = self.make_runtime()

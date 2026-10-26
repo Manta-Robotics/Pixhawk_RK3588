@@ -17,6 +17,7 @@ static double median(std::vector<double> values) {
 UwbFusion::UwbFusion(const Json &o)
     : enabled(o.value("enabled_receiver_ids", std::vector<int>{1, 2})),
       gated(o.value("require_gated_measurements", false)),
+      trust_checks(o.value("trust_checks_enabled", true)),
       freshness(std::max(100., number(o, "freshness_ms", 1500))),
       fov(clamp(number(o, "receiver_fov_half_deg", 70), 10, 89)),
       disagreement(clamp(number(o, "overlap_disagreement_deg", 30), 5, 90)),
@@ -72,6 +73,7 @@ UwbFusion::UwbFusion(const Json &o)
                                 "smoothingDisplacementM",
                                 "filterRecoveryDiagnostics",
                                 "occlusionDiagnostics",
+                                "trustDiagnostics",
                                 "invalidReason"})
             d[key] = nullptr;
         for (const auto *key :
@@ -88,7 +90,7 @@ std::optional<std::pair<int, std::string>> UwbFusion::parse_name(std::string nam
     std::transform(name.begin(), name.end(), name.begin(),
                    [](unsigned char c) { return std::toupper(c); });
     static const std::regex pattern(
-        "^UWB([12])?_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL)([12])?$");
+        "^UWB([12])?_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL|PROTO)([12])?$");
     std::smatch m;
     if (!std::regex_match(name, m, pattern) || (m[1].matched && m[3].matched))
         return {};
@@ -112,21 +114,99 @@ int UwbFusion::legacy_receiver(const Json &source) {
     return id;
 }
 std::optional<std::pair<int, std::string>> UwbFusion::update(const std::string &name, double value,
-                                                             double now, const Json &source) {
+                                                             double now, const Json &source,
+                                                             const Json &sample_id,
+                                                             const Json &wire_continuity) {
     const auto parsed = parse_name(name);
-    if (!parsed || !std::isfinite(value))
+    if (!parsed)
         return {};
     const int id = parsed->first ? parsed->first : legacy_receiver(source);
     const auto &field = parsed->second;
     auto &r = receivers[id - 1];
     auto &d = r.data;
+    r.measurement_completed = false;
+    const bool measurement = field == "DIST" || field == "AZ" || field == "EL";
+    const std::pair<int, int> sender = source.is_null()
+        ? std::pair{0, 0} : std::pair{source.at(0).get<int>(), source.at(1).get<int>()};
+    if (field == "PROTO") {
+        // Version 2 is sticky for this source/session. A delayed announcement
+        // or an attempted downgrade must never enable legacy timestamp pairing.
+        if (value == 2 && !r.strict_sources[sender]) {
+            r.strict_sources[sender] = true;
+            r.pending_distance = r.pending_azimuth = r.pending_elevation = false;
+            r.legacy_step = 0;
+        }
+        return {};
+    }
+    const auto legacy_contiguous = [&]() {
+        if (sample_id.is_null() || wire_continuity.is_null() || r.frame_key.is_null() ||
+            r.frame_key.at(0) != source || r.strict_sources[sender] ||
+            r.frame_completed || r.frame_rejected || !r.pending_distance || r.wire_continuity.is_null())
+            return false;
+        const auto stamp = sample_id.get<uint32_t>();
+        // The old Lua visits a receiver at most once per 20 ms. Its three sends
+        // must finish within 5 ms, in order, with no missing MAVLink packets.
+        // Do not infer a frame from local receive time (a read may hold a batch).
+        return uint32_t(stamp - r.frame_key.at(1).get<uint32_t>()) <= 5 &&
+               uint32_t(stamp - r.wire_stamp) < 0x80000000U &&
+               wire_continuity == r.wire_continuity;
+    };
+    if (!measurement) {
+        if (field == "VALID" && value > 0 && r.legacy_step == 2 && legacy_contiguous()) {
+            r.legacy_step = 3;
+            r.wire_continuity = wire_continuity;
+            r.wire_stamp = sample_id.get<uint32_t>();
+        } else
+            r.legacy_step = 0;
+    }
+    if (measurement && !sample_id.is_null()) {
+        auto key = Json::array({source, sample_id});
+        const bool legacy = legacy_contiguous() &&
+            ((field == "EL" && r.legacy_step == 1) ||
+             (field == "AZ" && (r.legacy_step == 2 || r.legacy_step == 3)));
+        if (legacy)
+            key = r.frame_key;
+        if (r.frame_key != key) {
+            const auto stamp = sample_id.get<uint32_t>();
+            const auto prior = r.newest_samples.find(sender);
+            // RFC-style uint32 serial arithmetic preserves normal clock wrap.
+            // An older observation must not alter pending fields, raw safety
+            // range or freshness, even after intervening complete frames.
+            if (prior != r.newest_samples.end()) {
+                const uint32_t delta = stamp - prior->second;
+                if (delta == 0 || delta >= 0x80000000U)
+                    return {};
+            }
+            r.newest_samples[sender] = stamp;
+            r.pending_distance = r.pending_azimuth = r.pending_elevation = false;
+            r.frame_rejected = r.frame_completed = false;
+            r.frame_key = key;
+        }
+        if (legacy)
+            r.newest_samples[sender] = sample_id.get<uint32_t>();
+        r.legacy_step = field == "DIST" ? 1 : legacy && field == "EL" ? 2 : 0;
+        r.wire_continuity = wire_continuity;
+        r.wire_stamp = sample_id.get<uint32_t>();
+    }
+    if (!std::isfinite(value)) {
+        if (!measurement)
+            return {};
+        r.pending_distance = r.pending_azimuth = r.pending_elevation = false;
+        r.frame_rejected = true;
+        d[field == "DIST" ? "rawDistanceM" : field == "AZ" ? "rawAzimuthDeg"
+                                                             : "rawElevationDeg"] = nullptr;
+        d["invalidReason"] = "non_finite_measurement";
+        d["rejectedCount"] = number(d, "rejectedCount", 0) + 1;
+        d["updatedAt"] = d["rawRejectedAt"] = now;
+        return std::pair{id, std::string("REJECTED")};
+    }
+    // A rejected or completed observation cannot be revived by its trailing
+    // fields or a retransmission. MAVLink always supplies a source sample ID.
+    if (measurement && !sample_id.is_null() && r.frame_rejected)
+        return {};
     if (!source.is_null()) {
         d["sourceSystem"] = source.at(0);
         d["sourceComponent"] = source.at(1);
-    }
-    if (field == "DIST") {
-        r.distance_at = now;
-        d["rawDistanceUpdatedAt"] = now;
     }
     static const std::map<std::string, std::string> metadata = {
         {"GOOD", "goodCount"},     {"SENT", "sentCount"},  {"AVL", "maxAvailable"},
@@ -140,7 +220,10 @@ std::optional<std::pair<int, std::string>> UwbFusion::update(const std::string &
     if (field == "VALID") {
         d["valid"] = value > 0;
         if (value <= 0)
-            r.pending_distance = r.pending_azimuth = false;
+            r.pending_distance = r.pending_azimuth = r.pending_elevation = false;
+        if (value <= 0 && !sample_id.is_null() &&
+            r.frame_key == Json::array({source, sample_id}))
+            r.frame_rejected = true;
         d["updatedAt"] = now;
         return std::pair{id, field};
     }
@@ -150,21 +233,30 @@ std::optional<std::pair<int, std::string>> UwbFusion::update(const std::string &
         d[field == "DIST" ? "rawDistanceM"
           : field == "AZ" ? "rawAzimuthDeg"
                           : "rawElevationDeg"] = value;
-        if (field == "DIST")
+        if (field == "DIST") {
             d["valid"] = false;
+            r.distance_at = now;
+            d["rawDistanceUpdatedAt"] = now;
+        }
         d["invalidReason"] = field == "DIST" ? "distance_out_of_range"
                              : field == "AZ" ? "azimuth_out_of_range"
                                              : "elevation_out_of_range";
-        r.pending_distance = r.pending_azimuth = false;
+        r.pending_distance = r.pending_azimuth = r.pending_elevation = false;
+        r.frame_rejected = true;
         d["rejectedCount"] = number(d, "rejectedCount", 0) + 1;
         d["updatedAt"] = now;
         if (field != "EL")
             d["rawRejectedAt"] = now;
         return std::pair{id, std::string("REJECTED")};
     }
+    // Validate even trailing fields of an already committed frame: an invalid
+    // retransmission invalidates that frame instead of silently staying trusted.
+    if (measurement && !sample_id.is_null() && r.frame_completed)
+        return {};
     if (field == "DIST") {
         d["invalidReason"] = nullptr;
         d["rawDistanceM"] = value;
+        d["rawDistanceUpdatedAt"] = now;
         r.pending_distance = true;
         if (!gated)
             history(r.distances, value);
@@ -173,23 +265,36 @@ std::optional<std::pair<int, std::string>> UwbFusion::update(const std::string &
         r.pending_azimuth = true;
         if (!gated)
             history(r.azimuths, wrap(value));
-    } else if (field == "EL")
+    } else if (field == "EL") {
         d["rawElevationDeg"] = value;
+        r.pending_elevation = true;
+        r.elevation_at = now;
+    }
     d["updatedAt"] = now;
     if (field == "DIST")
         r.distance_at = now;
     else if (field == "AZ")
         r.azimuth_at = now;
-    if (r.pending_distance && r.pending_azimuth) {
-        if (std::abs(r.distance_at - r.azimuth_at) <= 100) {
-            d["receivedMeasurementAt"] = std::max(r.distance_at, r.azimuth_at);
+    if (r.pending_distance && r.pending_azimuth && (sample_id.is_null() || r.pending_elevation)) {
+        const double earliest = std::min(r.distance_at, r.azimuth_at),
+                     latest = std::max(r.distance_at, r.azimuth_at);
+        const double first = sample_id.is_null() ? earliest : std::min(earliest, r.elevation_at),
+                     last = sample_id.is_null() ? latest : std::max(latest, r.elevation_at);
+        if (last - first <= 100) {
+            d["receivedMeasurementAt"] = last;
             if (!gated)
                 d["measurementUpdatedAt"] = d["receivedMeasurementAt"];
-            r.pending_distance = r.pending_azimuth = false;
-        } else if (r.distance_at < r.azimuth_at)
-            r.pending_distance = false;
-        else
-            r.pending_azimuth = false;
+            r.pending_distance = r.pending_azimuth = r.pending_elevation = false;
+            r.measurement_completed = r.frame_completed = true;
+        } else if (sample_id.is_null()) {
+            if (r.distance_at < r.azimuth_at)
+                r.pending_distance = false;
+            else
+                r.pending_azimuth = false;
+        } else {
+            r.pending_distance = r.pending_azimuth = r.pending_elevation = false;
+            r.frame_rejected = true;
+        }
     }
     return std::pair{id, field};
 }
@@ -217,7 +322,8 @@ void UwbFusion::apply(int id, const Json &result) {
         {"angular_filter_mode", "angularFilterMode"},
         {"smoothing_displacement_m", "smoothingDisplacementM"},
         {"recovery_diagnostics", "filterRecoveryDiagnostics"},
-        {"occlusion_diagnostics", "occlusionDiagnostics"}};
+        {"occlusion_diagnostics", "occlusionDiagnostics"},
+        {"trust_diagnostics", "trustDiagnostics"}};
     for (const auto &[from, to] : fields)
         d[to] = result.value(from, Json(nullptr));
     d["filterRecoveryCount"] = result.value("recovery_count", 0);
@@ -240,11 +346,15 @@ bool UwbFusion::complete(const Receiver &r) const {
            (!gated || d["measurementStatus"] == "trusted");
 }
 bool UwbFusion::fresh(const Receiver &r, double now) const {
-    const double at = number(r.data, gated ? "measurementUpdatedAt" : "updatedAt");
+    const double at = number(r.data, "measurementSampleAt",
+                             number(r.data, gated ? "measurementUpdatedAt" : "updatedAt"));
     return complete(r) && std::isfinite(at) && now >= at && now - at <= freshness;
 }
 double UwbFusion::bearing(const Receiver &r) const {
-    return wrap(number(r.data, "azimuthDeg") + number(r.data, "mountYawDeg"));
+    const double sample_heading = number(r.data, "measurementHeadingDeg");
+    const double correction = std::isfinite(sample_heading) && std::isfinite(reference_heading)
+        ? wrap(sample_heading - reference_heading) / heading_scale : 0;
+    return wrap(number(r.data, "azimuthDeg") + number(r.data, "mountYawDeg") + correction);
 }
 Vec UwbFusion::position(const Receiver &r) const {
     const double a = bearing(r) * radians, d = number(r.data, "distanceM");
@@ -252,12 +362,14 @@ Vec UwbFusion::position(const Receiver &r) const {
             number(r.data, "positionYM") + d * std::sin(a)};
 }
 double UwbFusion::coverage(const Receiver &r) const {
+    if (!trust_checks) return 1;
     const double angle = number(r.data, gated ? "rawAzimuthDeg" : "azimuthDeg");
     if (!std::isfinite(angle) || std::abs(wrap(angle)) > fov)
         return 0;
     return std::max(.05, squared(std::cos(std::abs(wrap(angle)) / fov * pi / 2)));
 }
 double UwbFusion::stability(const Receiver &r) const {
+    if (!trust_checks) return 1;
     if (r.distances.size() < 6 || r.azimuths.size() < 6)
         return 1;
     const double middle = median(r.distances);
@@ -293,7 +405,7 @@ Json UwbFusion::fused(double now) {
             std::isfinite(angle) ? Json(std::abs(wrap(angle)) <= fov) : Json(nullptr);
         sensor["fovHalfDeg"] = fov;
         sensor["fusionExclusionReason"] = !std::isfinite(angle) ? Json("no_complete_measurement")
-                                          : sensor["withinFov"] == false
+                                          : trust_checks && sensor["withinFov"] == false
                                               ? Json("outside_receiver_fov")
                                           : !complete(r)   ? r.data["filterReason"]
                                           : !fresh(r, now) ? Json("stale_measurement")

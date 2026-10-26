@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include "common.hpp"
 
 namespace manta {
@@ -24,12 +25,16 @@ class OcclusionGuard {
     int bad_count = 0, return_hits = 0;
     double return_at = missing, return_last_at = missing;
     Json diagnostics = {{"state", "clear"}, {"reason", nullptr}};
+    std::vector<Point> reacquisition;
+    double candidate_last_at = missing;
+    Vec candidate_last_position, candidate_velocity;
     OcclusionGuard(double speed, double distance_noise, double angle_noise, double recovery = 250);
     void reset();
     bool check(Vec position, double now);
     void interrupt_confirmation();
     void radio_loss();
     void accept(Vec position, double now);
+    bool confirm_new_track(Vec position, double now);
 };
 struct Axis {
     double position = 0, velocity = 0, p00 = 0, p01 = 0, p11 = 0;
@@ -55,10 +60,11 @@ class UwbFilter {
     OcclusionGuard occlusion;
     explicit UwbFilter(const Json &options = Json::object());
     Json update(const Json &observation);
-    Json reject(double now, const std::string &reason, double heading = missing);
+    Json reject(double now, const std::string &reason, double heading = missing, bool diagnose = true);
     Json result(double now, double heading = missing) const;
 
   private:
+    std::unique_ptr<UwbFilter> diagnostic_filter;
     struct Candidate {
         int hits;
         double residual;

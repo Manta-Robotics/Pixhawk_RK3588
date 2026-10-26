@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from uwb_fusion import DualUwbFusion
+from uwb_session import UwbSession, UwbClearance
 from uwb_measurement_filter import GatedUwbKalman, DEFAULTS as UWB_FILTER_DEFAULTS
 from rover_pilot_mapping import motor_target_axes, valid_pilot_type
 from rover_acro_mapping import required_parameters, validate_parameters, acro_axes
@@ -261,6 +262,7 @@ class MAVLinkBridge:
         mission_planner_tcp_config: Optional[Dict[str, Any]] = None,
         uwb_measurement_filter_config: Optional[Dict[str, Any]] = None,
         uwb_bearing_config: Optional[Dict[str, Any]] = None,
+        uwb_follow_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.serial_port = serial_port
         self.baudrate = baudrate
@@ -293,6 +295,8 @@ class MAVLinkBridge:
         self._acro_requested_at = 0.0
         self.flight_data = FlightData()
         self.uwb_data = UWBData()
+        self._uwb_session = UwbSession()
+        self._uwb_clearance = UwbClearance(uwb_follow_config)
         self.uwb_fusion = DualUwbFusion(
             mount_yaw_deg=uwb_dual_config.get('mount_yaw_deg', (0.0, 90.0)),
             freshness_ms=uwb_dual_config.get('freshness_ms', 1500),
@@ -308,6 +312,7 @@ class MAVLinkBridge:
             switch_blend_ms=uwb_dual_config.get('switch_blend_ms', 180),
             enabled_receiver_ids=uwb_dual_config.get('enabled_receiver_ids', (1, 2)),
             require_gated_measurements=self.uwb_filter_enabled,
+            trust_checks_enabled=self.uwb_filter_config['trust_checks_enabled'],
         )
         self._uwb_measurement_filters = {
             receiver_id: GatedUwbKalman(
@@ -371,7 +376,7 @@ class MAVLinkBridge:
         return str(raw_name).rstrip('\x00')
 
     def _update_uwb_named_value(self, name: str, value: float,
-                                source=None, sample_time_boot_ms=None) -> None:
+                                source=None, sample_time_boot_ms=None, wire_continuity=None) -> None:
         parsed = self.uwb_fusion.parse_name(name)
         receiver = None
         if parsed is not None:
@@ -383,8 +388,15 @@ class MAVLinkBridge:
             return (receiver.received_measurement_at, receiver.measurement_updated_at,
                     receiver.rejected_count, receiver.valid, receiver.measurement_status)
         before = revision()
-        self._apply_uwb_named_value(name, value, source, sample_time_boot_ms)
-        if receiver is not None and revision() != before and hasattr(self, 'telemetry_socket'):
+        if not hasattr(self, '_uwb_clearance'):
+            self._uwb_clearance = UwbClearance()
+        safety_before = self._uwb_clearance.payload()
+        updated = self._apply_uwb_named_value(name, value, source, sample_time_boot_ms, wire_continuity)
+        if updated is not None:
+            self._uwb_clearance.update(receiver, updated[1], value, int(time.time() * 1000),
+                                       self.uwb_filter_enabled, self.uwb_fusion.enabled_receiver_ids)
+        if receiver is not None and (revision() != before or receiver.measurement_completed or
+                safety_before != self._uwb_clearance.payload()) and hasattr(self, 'telemetry_socket'):
             # Publish completed observations and invalidations immediately. No GPS,
             # IMU, camera request, or periodic telemetry deadline is awaited here.
             self._send_node_packet('uwb', self._uwb_payload())
@@ -395,16 +407,12 @@ class MAVLinkBridge:
         value: float,
         source: Optional[tuple[int, int]] = None,
         sample_time_boot_ms: Optional[int] = None,
-    ) -> None:
+        wire_continuity: Optional[int] = None,
+    ) -> Optional[tuple[int, str]]:
         now_ms = int(time.time() * 1000)
-        updated = self.uwb_fusion.update(name, value, source=source, now_ms=now_ms)
+        updated = self.uwb_fusion.update(name, value, source=source, now_ms=now_ms,
+                                         sample_id=sample_time_boot_ms, wire_continuity=wire_continuity)
         if updated is None:
-            parsed = self.uwb_fusion.parse_name(name)
-            if self.uwb_filter_enabled and parsed and parsed[1] in ('DIST', 'AZ', 'EL') and not math.isfinite(value):
-                receiver_id = parsed[0] or self.uwb_fusion._legacy_receiver(source)
-                result = self._uwb_measurement_filters[receiver_id].reject(now_ms, 'non_finite_measurement')
-                self.uwb_fusion.apply_measurement_result(receiver_id, result)
-                self._refresh_uwb_fusion()
             return
         receiver_id, field_name = updated
         if self.uwb_filter_enabled:
@@ -416,8 +424,10 @@ class MAVLinkBridge:
                 self.uwb_fusion.apply_measurement_result(receiver_id, kalman.reject(now_ms, receiver.invalid_reason, heading))
             elif field_name == 'VALID' and receiver.valid is False:
                 self.uwb_fusion.apply_measurement_result(receiver_id, kalman.reject(now_ms, 'radio_invalid', heading))
-            elif field_name in ('DIST', 'AZ') and receiver.received_measurement_at == now_ms and not receiver.pending_distance and not receiver.pending_azimuth:
-                if abs(receiver.raw_azimuth_deg) > self.uwb_fusion.receiver_fov_half_deg:
+            elif receiver.measurement_completed:
+                if receiver.raw_elevation_deg is not None:
+                    self.uwb_fusion.set_filtered(receiver_id, 'EL', receiver.raw_elevation_deg)
+                if self.uwb_fusion.trust_checks_enabled and abs(receiver.raw_azimuth_deg) > self.uwb_fusion.receiver_fov_half_deg:
                     # Reject out-of-coverage observations before they move the
                     # posterior or enter its raw-consensus recovery history.
                     result = kalman.reject(now_ms, 'outside_receiver_fov', heading)
@@ -427,20 +437,21 @@ class MAVLinkBridge:
                         valid=receiver.valid,
                         # SEQ is low-rate diagnostic metadata. The sender's
                         # timestamp identifies each complete observation.
-                        sequence_id=sample_time_boot_ms if sample_time_boot_ms is not None else receiver.sequence_id,
+                        sequence_id=receiver.frame_key if sample_time_boot_ms is not None else receiver.sequence_id,
                         tag_id=receiver.tag_id)
                 self.uwb_fusion.apply_measurement_result(receiver_id, result)
             elif field_name == 'EL' and abs(value) <= 90:
                 # Elevation is separate from the horizontal Cartesian state.
                 self.uwb_fusion.set_filtered(receiver_id, 'EL', value)
             self._refresh_uwb_fusion()
-            return
+            return updated
         if field_name in {'GOOD', 'VALID', 'SEQ', 'ANCH', 'TAG', 'STAT', 'RX', 'HB', 'CRC', 'LEN', 'SENT', 'AVL', 'REJECTED'}:
             self._refresh_uwb_fusion()
-            return
+            return updated
         filtered = self._uwb_filters[(receiver_id, field_name)].update(value)
         self.uwb_fusion.set_filtered(receiver_id, field_name, filtered)
         self._refresh_uwb_fusion()
+        return updated
 
     def _refresh_uwb_fusion(self) -> None:
         now_ms = int(time.time() * 1000)
@@ -620,11 +631,36 @@ class MAVLinkBridge:
             self.connected = False
             return False
 
+    def _reset_uwb_session(self, reset_fence=True) -> None:
+        if reset_fence and hasattr(self, '_uwb_session'):
+            self._uwb_session.reset()
+        if hasattr(self, '_uwb_clearance'):
+            self._uwb_clearance.states.clear()
+        self._uwb_streams = {}
+        self.uwb_fusion.reset_session()
+        self._uwb_measurement_filters = {
+            receiver_id: GatedUwbKalman(
+                old.config, old.minimum_distance_m, old.maximum_distance_m,
+                old.sign, old.scale, old.offset, old.mount)
+            for receiver_id, old in self._uwb_measurement_filters.items()
+        }
+        self._uwb_filters = {
+            (receiver_id, field_name): ScalarKalmanFilter(
+                process_noise=0.04 if field_name == 'DIST' else 3.0,
+                measurement_noise=0.09 if field_name == 'DIST' else 6.0,
+                angle=field_name == 'AZ')
+            for receiver_id in (1, 2) for field_name in ('DIST', 'AZ', 'EL')
+        }
+        self.uwb_data = UWBData()
+        self.flight_data.attitude_updated_at = None
+
     def disconnect(self) -> None:
         if self.connected:
             self._send_node_packet('connection', {'connected': False})
 
         self.connected = False
+        self._reset_uwb_session()
+        self._send_node_packet('uwb', self._uwb_payload())
         try:
             if self.master is not None:
                 self.master.close()
@@ -769,8 +805,15 @@ class MAVLinkBridge:
                 0,
             )
             self._last_heartbeat_sent = time.time()
+            self._request_uwb_epoch()
         except Exception as exc:
             logger.debug('Heartbeat send failed: %s', exc)
+
+    def _request_uwb_epoch(self):
+        if self.master is not None and hasattr(self, '_uwb_session'):
+            nonce = self._uwb_session.request(time.monotonic() * 1000)
+            if nonce is not None:
+                self.master.mav.timesync_send(0, nonce)
 
     def _request_pilot_steer_type(self) -> None:
         interval = 10.0 if self.pilot_steer_type is not None else 1.0
@@ -1411,6 +1454,17 @@ class MAVLinkBridge:
 
     def _parse_message(self, msg: Any) -> None:
         msg_type = msg.get_type()
+        continuity = None
+        try:
+            sender = (int(msg.get_srcSystem()), int(msg.get_srcComponent()))
+            sequence = int(msg.get_seq()) & 255
+            streams = self._uwb_streams = getattr(self, '_uwb_streams', {})
+            previous, continuity = streams.get(sender, ((sequence - 1) & 255, 0))
+            if ((sequence - previous) & 255) != 1:
+                continuity += 1
+            streams[sender] = (sequence, continuity)
+        except (AttributeError, TypeError, ValueError):
+            pass
 
         if msg_type == 'PARAM_VALUE':
             param_id = getattr(msg, 'param_id', '')
@@ -1433,6 +1487,7 @@ class MAVLinkBridge:
             if not is_target_fcu_heartbeat(msg, self.target_system, self.target_component):
                 return
             self._last_fcu_heartbeat_at = time.time()
+            self._request_uwb_epoch()
             self.flight_data.armed = bool(getattr(msg, 'base_mode', 0) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
             self.flight_data.flight_mode = mavutil.mode_string_v10(msg)
             status_code = int(getattr(msg, 'system_status', 0))
@@ -1469,6 +1524,14 @@ class MAVLinkBridge:
                         min_interval=1.0,
                     )
                 self._last_system_status_reported = self.flight_data.system_status
+
+        elif msg_type == 'TIMESYNC':
+            if (hasattr(self, '_uwb_session') and msg.get_srcSystem() == self.target_system
+                    and msg.get_srcComponent() == self.target_component):
+                reset = self._uwb_session.reply(msg.tc1, msg.ts1, time.monotonic() * 1000)
+                if reset:
+                    self._reset_uwb_session(reset_fence=False)
+                    self._send_node_packet('uwb', self._uwb_payload())
 
         elif msg_type == 'GPS_RAW_INT':
             self.flight_data.gps_satellites = int(getattr(msg, 'satellites_visible', 0) or 0)
@@ -1616,9 +1679,15 @@ class MAVLinkBridge:
                 source = (int(msg.get_srcSystem()), int(msg.get_srcComponent()))
             except (AttributeError, TypeError, ValueError):
                 pass
+            if hasattr(self, '_uwb_session') and (
+                    source is None or source[0] != self.target_system or not self._uwb_session.admit(
+                        source, self.uwb_fusion.parse_name(name), getattr(msg, 'time_boot_ms', None),
+                        time.monotonic() * 1000)):
+                return
             self._update_uwb_named_value(
                 name, value, source=source,
                 sample_time_boot_ms=getattr(msg, 'time_boot_ms', None),
+                wire_continuity=continuity,
             )
 
         elif msg_type == 'STATUSTEXT':
@@ -1719,6 +1788,7 @@ class MAVLinkBridge:
         uwb_fresh = fused_uwb['fresh']
         return {
             'online': uwb_fresh,
+            **(self._uwb_clearance.payload() if hasattr(self, '_uwb_clearance') else UwbClearance().payload()),
             'fresh': uwb_fresh,
             'distanceM': self.uwb_data.distance_m,
             'azimuthDeg': self.uwb_data.azimuth_deg,
@@ -1745,7 +1815,8 @@ class MAVLinkBridge:
                 if self.uwb_fusion.enabled_receiver_ids == {2}
                 else 'TELEM1_TELEM2_NAMED_VALUE_FLOAT'
             ),
-            'filter': 'raw_validation_innovation_gate_cv_kalman_then_fusion' if self.uwb_filter_enabled else 'fast_per_receiver_kalman_then_body_xy_fusion',
+            'trustChecksEnabled': self.uwb_fusion.trust_checks_enabled,
+            'filter': ('raw_validation_innovation_gate_cv_kalman_then_fusion' if self.uwb_fusion.trust_checks_enabled else 'complete_frame_cv_kalman_then_fusion') if self.uwb_filter_enabled else 'fast_per_receiver_kalman_then_body_xy_fusion',
             'measurementStatus': 'trusted' if uwb_fresh else 'suspect' if any(s.get('measurementStatus') == 'suspect' for s in fused_uwb['sensors']) else 'unavailable',
             'rejectionReason': None if uwb_fresh else next((s.get('filterReason') for s in fused_uwb['sensors'] if s.get('measurementStatus') == 'suspect'), None),
             'measurementNis': max((s['filterNis'] for s in fused_uwb['sensors'] if s.get('filterNis') is not None and (not uwb_fresh or s['receiverId'] in fused_uwb['active_receiver_ids'])), default=None),
@@ -1941,6 +2012,7 @@ def main() -> None:
             uwb_dual_config=uwb_dual_config,
             uwb_measurement_filter_config=uwb_measurement_filter_config,
             uwb_bearing_config=uwb_bearing_config,
+            uwb_follow_config=config.get('uwb_follow'),
             mission_planner_tcp_config=mission_planner_tcp_config,
         )
 

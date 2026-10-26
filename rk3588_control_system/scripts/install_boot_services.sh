@@ -8,9 +8,14 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
+CONFIG_FILE="${MANTA_CONFIG_FILE:-${MANTA_CONFIG_PATH:-$PROJECT_DIR/config/system.config.json}}"
+export MANTA_CONFIG_FILE="$CONFIG_FILE"
 RUN_USER="${MANTA_RUN_USER:-root}"
 SKIP_BOOT_CONFIG="${MANTA_SKIP_BOOT_CONFIG:-0}"
+
+if [[ "$SKIP_BOOT_CONFIG" != "1" ]]; then
+    python3 "$PROJECT_DIR/scripts/validate_board_profile.py" "$CONFIG_FILE"
+fi
 
 if [[ -d /opt/node20/bin ]]; then
     export PATH="/opt/node20/bin:$PATH"

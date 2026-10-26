@@ -15,7 +15,7 @@ DEFAULTS = {
     'nis_threshold': 9.21, 'absolute_gate_m': 0.6,
     'max_relative_speed_mps': 6.0, 'rejection_covariance_scale': 1.25,
     'adaptive_enabled': True, 'stationary_time_constant_s': .4, 'moving_time_constant_s': .01,
-    'occlusion_enabled': True,
+    'occlusion_enabled': True, 'trust_checks_enabled': True,
 }
 
 
@@ -72,12 +72,16 @@ class GatedUwbKalman:
                  bearing_sign=1.0, bearing_scale=1.0, bearing_offset_deg=0.0, mount_yaw_deg=0.0):
         self.config = {**DEFAULTS, **(config or {})}
         for key in DEFAULTS:
-            if key not in ('enabled', 'adaptive_enabled', 'occlusion_enabled') and (not finite(self.config[key]) or self.config[key] <= 0):
+            if key not in ('enabled', 'adaptive_enabled', 'occlusion_enabled', 'trust_checks_enabled') and (not finite(self.config[key]) or self.config[key] <= 0):
                 raise ValueError('invalid UWB measurement filter parameter: ' + key)
         if not isinstance(self.config['adaptive_enabled'], bool):
             raise ValueError('adaptive_enabled must be boolean')
         if not isinstance(self.config['occlusion_enabled'], bool):
             raise ValueError('occlusion_enabled must be boolean')
+        if not isinstance(self.config['trust_checks_enabled'], bool):
+            raise ValueError('trust_checks_enabled must be boolean')
+        if not self.config['trust_checks_enabled']:
+            self.config['occlusion_enabled'] = False
         if not .01 <= self.config['moving_time_constant_s'] <= self.config['stationary_time_constant_s'] <= 2:
             raise ValueError('invalid adaptive angular time constants')
         if self.config['rejection_covariance_scale'] < 1:
@@ -103,6 +107,11 @@ class GatedUwbKalman:
         self.angular_filter = AdaptiveAngularFilter(self.config['stationary_time_constant_s'], self.config['moving_time_constant_s'])
         self.occlusion_guard = UwbOcclusionGuard(self.config['max_relative_speed_mps'],
             self.config['distance_std_m'], self.config['angle_std_deg'] * self.scale)
+        self.diagnostic_filter = None
+        if not self.config['trust_checks_enabled']:
+            self.diagnostic_filter = GatedUwbKalman(
+                {**self.config, 'trust_checks_enabled': True, 'occlusion_enabled': True},
+                minimum_distance_m, maximum_distance_m, bearing_sign, bearing_scale, bearing_offset_deg, mount_yaw_deg)
 
     def _predict(self, now_ms):
         if self.axes is None: return
@@ -113,7 +122,9 @@ class GatedUwbKalman:
         for axis in self.axes: axis.predict(dt, self.config['acceleration_std_mps2'] ** 2)
         self.at = now_ms
 
-    def reject(self, now_ms, reason, heading_deg=None):
+    def reject(self, now_ms, reason, heading_deg=None, diagnose=True):
+        if diagnose and self.diagnostic_filter:
+            self.diagnostic_filter.reject(now_ms, reason, heading_deg)
         if self.config['occlusion_enabled'] and reason in ('radio_invalid', 'distance_out_of_range'):
             self.occlusion_guard.radio_loss()
         if reason not in ('innovation_outlier', 'occlusion_suspected'):
@@ -201,21 +212,24 @@ class GatedUwbKalman:
         self.nis, self.innovation_m = None, None
         if not finite(now_ms) or now_ms <= 0:
             raise ValueError('measurement time must be a positive number')
+        if self.diagnostic_filter:
+            self.diagnostic_filter.update(distance_m, azimuth_deg, now_ms, heading_deg,
+                elevation_deg=elevation_deg, valid=valid, sequence_id=sequence_id, tag_id=tag_id)
         if self.at is not None and now_ms < self.at:
             self.axes = None; self.at = None; self.last_accepted_at = None
             self.raw_window=[]
             self.angular_filter.reset()
             self.occlusion_guard.reset()
-            return self.reject(now_ms, 'measurement_clock_reset', heading_deg)
+            return self.reject(now_ms, 'measurement_clock_reset', heading_deg, False)
         if not finite(distance_m) or not self.minimum_distance_m <= distance_m <= self.maximum_distance_m:
-            return self.reject(now_ms, 'distance_out_of_range', heading_deg)
+            return self.reject(now_ms, 'distance_out_of_range', heading_deg, False)
         if not finite(azimuth_deg) or abs(azimuth_deg) > 180:
-            return self.reject(now_ms, 'azimuth_out_of_range', heading_deg)
+            return self.reject(now_ms, 'azimuth_out_of_range', heading_deg, False)
         if elevation_deg is not None and (not finite(elevation_deg) or abs(elevation_deg) > 90):
-            return self.reject(now_ms, 'elevation_out_of_range', heading_deg)
-        if valid is False: return self.reject(now_ms, 'radio_invalid', heading_deg)
-        if not finite(heading_deg): return self.reject(now_ms, 'heading_unavailable', heading_deg)
-        if (sequence_id is not None and sequence_id == self.last_sequence) or now_ms == self.last_received_at:
+            return self.reject(now_ms, 'elevation_out_of_range', heading_deg, False)
+        if valid is False: return self.reject(now_ms, 'radio_invalid', heading_deg, False)
+        if not finite(heading_deg): return self.reject(now_ms, 'heading_unavailable', heading_deg, False)
+        if (sequence_id == self.last_sequence if sequence_id is not None else now_ms == self.last_received_at):
             # Replays do not update time, covariance, confidence or counters.
             return {**self.result(now_ms, heading_deg), 'accepted': False, 'duplicate': True}
         self.last_received_at, self.last_sequence = now_ms, sequence_id
@@ -224,7 +238,7 @@ class GatedUwbKalman:
             self.raw_window=[]
             self.angular_filter.reset()
             self.occlusion_guard.reset()
-            return self.reject(now_ms, 'target_identity_changed', heading_deg)
+            return self.reject(now_ms, 'target_identity_changed', heading_deg, False)
         if tag_id: self.tag_id = tag_id
         angle = math.radians(wrap((azimuth_deg + self.mount) * self.sign * self.scale + self.offset + heading_deg))
         measurement = (distance_m * math.cos(angle), distance_m * math.sin(angle))
@@ -238,13 +252,30 @@ class GatedUwbKalman:
             self.innovation_m = math.hypot(*residual)
             age = max(0, (now_ms - self.last_accepted_at) / 1000.0)
             absolute_limit = self.config['absolute_gate_m'] + self.config['max_relative_speed_mps'] * age
-            outlier = self.nis > self.config['nis_threshold'] or self.innovation_m > absolute_limit
+            outlier = self.config['trust_checks_enabled'] and (self.nis > self.config['nis_threshold'] or self.innovation_m > absolute_limit)
         if self.config['occlusion_enabled'] and not self.occlusion_guard.check(measurement, now_ms):
-            # Exclude suspect raw data from BOTH correction and independent
-            # recovery. A coherent reflected path must not bypass this guard.
+            # Quarantine cannot enter the short Kalman recovery window.
+            # The guard owns the longer bounded new-track confirmation.
             self.raw_window = []
             self.recovery_diagnostics = {'reason': 'occlusion_quarantine', 'hits': 0}
-            return self.reject(now_ms, 'innovation_outlier' if outlier else 'occlusion_suspected', heading_deg)
+            return self.reject(now_ms, 'innovation_outlier' if outlier else 'occlusion_suspected', heading_deg, False)
+        if (self.config['occlusion_enabled'] and
+                self.occlusion_guard.diagnostics.get('reason') == 'stable_new_track_confirmed'):
+            self.axes = [Axis(z, variance, self.config['initial_velocity_std_mps'] ** 2)
+                         for z in measurement]
+            for axis, velocity in zip(self.axes, self.occlusion_guard.candidate_velocity):
+                axis.velocity = velocity
+            self.at = self.last_accepted_at = now_ms
+            self.raw_window = []
+            self.accepted_count += 1
+            self.recovery_count += 1
+            self.status, self.reason = 'trusted', 'stable_track_reacquired'
+            self.recovery_diagnostics = {'reason': 'stable_track_reacquired',
+                                        'hits': len(self.occlusion_guard.reacquisition)}
+            self.occlusion_guard.accept(measurement, now_ms)
+            self.angular_filter.reset()
+            self._update_angular_filter(measurement, now_ms)
+            return {**self.result(now_ms, heading_deg), 'accepted': True, 'duplicate': False}
         candidate=self.raw_candidate(measurement,variance,now_ms)
         if self.axes is None:
             self.axes = [Axis(z, variance, self.config['initial_velocity_std_mps'] ** 2) for z in measurement]
@@ -253,7 +284,7 @@ class GatedUwbKalman:
             if outlier:
                 if candidate and now_ms-self.last_accepted_at>=200:
                     return self.recover_candidate(candidate,now_ms,heading_deg,measurement)
-                return self.reject(now_ms, 'innovation_outlier', heading_deg)
+                return self.reject(now_ms, 'innovation_outlier', heading_deg, False)
             for axis, z in zip(self.axes, measurement): axis.correct(z, variance)
         speed = math.hypot(*(axis.velocity for axis in self.axes))
         if speed > self.config['max_relative_speed_mps']:
@@ -273,6 +304,11 @@ class GatedUwbKalman:
         output.update(recovery_count=self.recovery_count,recovery_diagnostics=self.recovery_diagnostics.copy())
         output['occlusion_diagnostics'] = (self.occlusion_guard.diagnostics.copy()
             if self.config['occlusion_enabled'] else {'state': 'disabled', 'reason': None})
+        if self.diagnostic_filter:
+            diagnostic = self.diagnostic_filter.result(now_ms, heading_deg)
+            output['trust_diagnostics'] = dict(status=diagnostic['status'], reason=diagnostic['reason'],
+                nis=diagnostic['nis'], innovationM=diagnostic['innovation_m'],
+                occlusion=diagnostic['occlusion_diagnostics'], controlGating=False)
         if not self.axes: return output
         dt = min(10.0, max(0, (now_ms - self.at) / 1000.0))
         predicted = [axis.predicted(dt, self.config['acceleration_std_mps2'] ** 2) for axis in self.axes]

@@ -52,6 +52,8 @@ void FollowController::reset() {
 Json FollowController::preflight(double now, const Json &t, bool connected,
                                  const std::string &requested, const Json &estimate) const {
     const auto &c = config;
+    if (t.value("uwb", Json::object()).value("clearanceStop", false))
+        return zero_control("raw_distance_clearance", {{"pausePropulsion", true}});
     const auto u = t.value("uwb", Json::object()), a = t.value("attitude", Json::object()),
                v = t.value("velocity", Json::object()), pos = t.value("position", Json::object()),
                ekf = t.value("ekf", Json::object()), gps = t.value("gps", Json::object());
@@ -59,7 +61,7 @@ Json FollowController::preflight(double now, const Json &t, bool connected,
     const double distance = estimated ? std::hypot(number(estimate["relativeBodyM"], "x"),
                                                    number(estimate["relativeBodyM"], "y"))
                                       : number(u, "distanceM");
-    const double azimuth = estimated ? wrap(std::atan2(number(estimate["relativeBodyM"], "y"),
+    double azimuth = estimated ? wrap(std::atan2(number(estimate["relativeBodyM"], "y"),
                                                        number(estimate["relativeBodyM"], "x")) /
                                                 radians -
                                             number(c, "bearingOffsetDeg")) /
@@ -67,9 +69,12 @@ Json FollowController::preflight(double now, const Json &t, bool connected,
                                      : number(u, "azimuthDeg");
     const double yaw = number(a, "yaw"), yaw_rate = number(a, "yawRateDegS", 0),
                  vx = number(v, "vx"), vy = number(v, "vy"),
-                 uwb_at = number(u, u.contains("measurementUpdatedAt") ? "measurementUpdatedAt"
-                                                                       : "updatedAt"),
+                 uwb_at = number(u, "measurementSampleAt", number(u, u.contains("measurementUpdatedAt") ? "measurementUpdatedAt"
+                                                                       : "updatedAt")),
                  pos_at = number(pos, "updatedAt"), ekf_at = number(ekf, "updatedAt");
+    if (!estimated && std::isfinite(number(u, "measurementHeadingDeg")) && std::isfinite(yaw))
+        azimuth = wrap(azimuth + wrap(number(u, "measurementHeadingDeg") - yaw) /
+                                 (number(c, "bearingSign") * number(c, "bearingScale")));
     if (!connected)
         return zero_control("pixhawk_offline");
     if (!estimated &&

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import re
 import time
@@ -11,13 +11,13 @@ from typing import Deque, Dict, Iterable, Optional, Tuple
 
 
 UWB_NAME_PATTERNS = (
-    re.compile(r"^UWB([12])_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL)$"),
-    re.compile(r"^UWB_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL)([12])$"),
+    re.compile(r"^UWB([12])_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL|PROTO)$"),
+    re.compile(r"^UWB_(DIST|AZ|EL|GOOD|VALID|SEQ|ANCH|TAG|STAT|RX|HB|CRC|LEN|SENT|AVL|PROTO)([12])$"),
 )
 LEGACY_UWB_NAMES = {
     "UWB_DIST", "UWB_AZ", "UWB_EL", "UWB_GOOD", "UWB_VALID",
     "UWB_SEQ", "UWB_ANCH", "UWB_TAG", "UWB_STAT",
-    "UWB_RX", "UWB_HB", "UWB_CRC", "UWB_LEN", "UWB_SENT", "UWB_AVL",
+    "UWB_RX", "UWB_HB", "UWB_CRC", "UWB_LEN", "UWB_SENT", "UWB_AVL", "UWB_PROTO",
 }
 
 
@@ -68,10 +68,22 @@ class UwbReceiver:
     filter_admission_version: int = 0
     filter_recovery_diagnostics: Optional[dict] = None
     occlusion_diagnostics: Optional[dict] = None
+    trust_diagnostics: Optional[dict] = None
     pending_distance: bool = False
     pending_azimuth: bool = False
+    pending_elevation: bool = False
+    newest_samples: dict = field(default_factory=dict)
+    strict_sources: set = field(default_factory=set)
+    legacy_step: int = 0
+    wire_continuity: Optional[int] = None
+    wire_stamp: int = 0
+    frame_key: Optional[tuple] = None
+    frame_rejected: bool = False
+    frame_completed: bool = False
+    measurement_completed: bool = False
     distance_sample_at: Optional[int] = None
     azimuth_sample_at: Optional[int] = None
+    elevation_sample_at: Optional[int] = None
     rejected_count: int = 0
     invalid_reason: Optional[str] = None
 
@@ -142,6 +154,7 @@ class UwbReceiver:
             "filterAdmissionVersion": self.filter_admission_version,
             "filterRecoveryDiagnostics": self.filter_recovery_diagnostics,
             "occlusionDiagnostics": self.occlusion_diagnostics,
+            "trustDiagnostics": self.trust_diagnostics,
             "fresh": self.fresh(now_ms, timeout_ms),
             "rejectedCount": self.rejected_count,
             "invalidReason": self.invalid_reason,
@@ -173,6 +186,7 @@ class DualUwbFusion:
         switch_blend_ms: int = 180,
         enabled_receiver_ids: Iterable[int] = (1, 2),
         require_gated_measurements: bool = False,
+        trust_checks_enabled: bool = True,
     ) -> None:
         mounts = [float(value) for value in mount_yaw_deg]
         positions_x = [float(value) for value in receiver_position_x_m]
@@ -192,6 +206,7 @@ class DualUwbFusion:
         if not enabled or not enabled.issubset({1, 2}):
             raise ValueError("enabled_receiver_ids must contain receiver 1 and/or 2")
         self.enabled_receiver_ids = enabled
+        self.trust_checks_enabled = trust_checks_enabled
         self.freshness_ms = max(100, int(freshness_ms))
         self.receiver_fov_half_deg = max(10.0, min(89.0, float(receiver_fov_half_deg)))
         self.overlap_disagreement_deg = max(5.0, min(90.0, float(overlap_disagreement_deg)))
@@ -221,6 +236,20 @@ class DualUwbFusion:
             2: deque(maxlen=20),
         }
 
+    def reset_session(self) -> None:
+        """Retain installation settings, discard every observation/session state."""
+        receivers = list(self.receivers.values())
+        self.__init__(
+            mount_yaw_deg=[r.mount_yaw_deg for r in receivers],
+            receiver_position_x_m=[r.position_x_m for r in receivers],
+            receiver_position_y_m=[r.position_y_m for r in receivers],
+            **{key: getattr(self, key) for key in (
+                'freshness_ms', 'receiver_fov_half_deg', 'overlap_disagreement_deg',
+                'overlap_position_disagreement_m', 'minimum_distance_m', 'maximum_distance_m',
+                'switch_confidence_ratio', 'switch_confirm_ms', 'switch_blend_ms',
+                'enabled_receiver_ids', 'trust_checks_enabled')},
+            require_gated_measurements=receivers[0].require_gate)
+
     @staticmethod
     def _median(values: Iterable[float]) -> float:
         ordered = sorted(float(value) for value in values)
@@ -230,6 +259,7 @@ class DualUwbFusion:
         return (ordered[middle - 1] + ordered[middle]) / 2.0
 
     def _stability_weight(self, receiver: UwbReceiver) -> float:
+        if not self.trust_checks_enabled: return 1.0
         """Return a robust recent-sample quality score in the range [0.01, 1]."""
         distances = self._distance_history[receiver.receiver_id]
         azimuths = self._azimuth_history[receiver.receiver_id]
@@ -251,6 +281,7 @@ class DualUwbFusion:
         return max(0.01, min(1.0, distance_score * azimuth_score))
 
     def _coverage_weight(self, receiver: UwbReceiver) -> float:
+        if not self.trust_checks_enabled: return 1.0
         # Antenna coverage describes the observation angle, not a predicted
         # posterior which may lag or overshoot a turn at the field boundary.
         angle = receiver.raw_azimuth_deg if receiver.require_gate else receiver.azimuth_deg
@@ -332,18 +363,74 @@ class DualUwbFusion:
         *,
         source: Optional[Tuple[int, int]] = None,
         now_ms: Optional[int] = None,
+        sample_id: Optional[int] = None,
+        wire_continuity: Optional[int] = None,
     ) -> Optional[Tuple[int, str]]:
         parsed = self.parse_name(name)
-        if parsed is None or not math.isfinite(value):
+        if parsed is None:
             return None
         explicit_receiver, field_name = parsed
         receiver_id = explicit_receiver or self._legacy_receiver(source)
         receiver = self.receivers[receiver_id]
+        receiver.measurement_completed = False
+        measurement = field_name in ('DIST', 'AZ', 'EL')
+        if field_name == 'PROTO':
+            if value == 2 and source not in receiver.strict_sources:
+                receiver.strict_sources.add(source)
+                receiver.pending_distance = receiver.pending_azimuth = receiver.pending_elevation = False
+                receiver.legacy_step = 0
+            return None
+
+        def legacy_contiguous():
+            if (sample_id is None or wire_continuity is None or receiver.frame_key is None
+                    or receiver.frame_key[0] != source or source in receiver.strict_sources
+                    or receiver.frame_completed or receiver.frame_rejected
+                    or not receiver.pending_distance or receiver.wire_continuity is None):
+                return False
+            return (((sample_id - receiver.frame_key[1]) & 0xFFFFFFFF) <= 5
+                    and ((sample_id - receiver.wire_stamp) & 0xFFFFFFFF) < 0x80000000
+                    and wire_continuity == receiver.wire_continuity)
+
+        if not measurement:
+            if field_name == 'VALID' and value > 0 and receiver.legacy_step == 2 and legacy_contiguous():
+                receiver.legacy_step = 3
+                receiver.wire_continuity, receiver.wire_stamp = wire_continuity, sample_id
+            else:
+                receiver.legacy_step = 0
+        if measurement and sample_id is not None:
+            key = (source, sample_id)
+            legacy = legacy_contiguous() and (
+                (field_name == 'EL' and receiver.legacy_step == 1)
+                or (field_name == 'AZ' and receiver.legacy_step in (2, 3)))
+            if legacy:
+                key = receiver.frame_key
+            if receiver.frame_key != key:
+                stamp = int(sample_id) & 0xFFFFFFFF
+                prior = receiver.newest_samples.get(source)
+                if prior is not None and not 0 < ((stamp - prior) & 0xFFFFFFFF) < 0x80000000:
+                    return None
+                receiver.newest_samples[source] = stamp
+                receiver.pending_distance = receiver.pending_azimuth = receiver.pending_elevation = False
+                receiver.frame_rejected = receiver.frame_completed = False
+                receiver.frame_key = key
+            if legacy:
+                receiver.newest_samples[source] = int(sample_id) & 0xFFFFFFFF
+            receiver.legacy_step = 1 if field_name == 'DIST' else 2 if legacy and field_name == 'EL' else 0
+            receiver.wire_continuity, receiver.wire_stamp = wire_continuity, sample_id
+        if not math.isfinite(value):
+            if not measurement:
+                return None
+            receiver.pending_distance = receiver.pending_azimuth = receiver.pending_elevation = False
+            receiver.frame_rejected = True
+            setattr(receiver, {'DIST': 'raw_distance_m', 'AZ': 'raw_azimuth_deg', 'EL': 'raw_elevation_deg'}[field_name], None)
+            receiver.invalid_reason = 'non_finite_measurement'
+            receiver.rejected_count += 1
+            receiver.updated_at = receiver.raw_rejected_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
+            return receiver_id, 'REJECTED'
+        if measurement and sample_id is not None and receiver.frame_rejected:
+            return None
         if source is not None:
             receiver.source_system, receiver.source_component = int(source[0]), int(source[1])
-        if field_name == 'DIST':
-            receiver.distance_sample_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
-
         if field_name == "GOOD":
             receiver.good_count = max(0, int(value))
             return receiver_id, field_name
@@ -356,7 +443,9 @@ class DualUwbFusion:
         if field_name == "VALID":
             receiver.valid = value > 0
             if not receiver.valid:
-                receiver.pending_distance = receiver.pending_azimuth = False
+                receiver.pending_distance = receiver.pending_azimuth = receiver.pending_elevation = False
+                if sample_id is not None and receiver.frame_key == (source, sample_id):
+                    receiver.frame_rejected = True
             receiver.updated_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
             return receiver_id, field_name
         if field_name == "SEQ":
@@ -387,7 +476,9 @@ class DualUwbFusion:
             receiver.raw_distance_m = float(value)
             receiver.valid = False
             receiver.invalid_reason = "distance_out_of_range"
-            receiver.pending_distance = receiver.pending_azimuth = False
+            receiver.pending_distance = receiver.pending_azimuth = receiver.pending_elevation = False
+            receiver.distance_sample_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
+            receiver.frame_rejected = True
             receiver.rejected_count += 1
             receiver.updated_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
             receiver.raw_rejected_at = receiver.updated_at
@@ -397,12 +488,15 @@ class DualUwbFusion:
             if field_name == 'AZ': receiver.raw_azimuth_deg = float(value)
             else: receiver.raw_elevation_deg = float(value)
             receiver.invalid_reason = 'azimuth_out_of_range' if field_name == 'AZ' else 'elevation_out_of_range'
-            receiver.pending_distance = receiver.pending_azimuth = False
+            receiver.pending_distance = receiver.pending_azimuth = receiver.pending_elevation = False
+            receiver.frame_rejected = True
             receiver.rejected_count += 1
             receiver.updated_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
             if field_name == 'AZ': receiver.raw_rejected_at = receiver.updated_at
             return receiver_id, 'REJECTED'
 
+        if measurement and sample_id is not None and receiver.frame_completed:
+            return None
         if field_name == "DIST":
             receiver.invalid_reason = None
             receiver.raw_distance_m = float(value)
@@ -414,16 +508,25 @@ class DualUwbFusion:
             if not receiver.require_gate: self._azimuth_history[receiver_id].append(wrap_angle_deg(value))
         elif field_name == "EL":
             receiver.raw_elevation_deg = float(value)
+            receiver.pending_elevation = True
+            receiver.elevation_sample_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
         receiver.updated_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
         if field_name == 'DIST':
             receiver.distance_sample_at = receiver.updated_at
         elif field_name == 'AZ':
             receiver.azimuth_sample_at = receiver.updated_at
-        if receiver.pending_distance and receiver.pending_azimuth:
-            if abs(receiver.distance_sample_at - receiver.azimuth_sample_at) <= 100:
-                receiver.received_measurement_at = max(receiver.distance_sample_at, receiver.azimuth_sample_at)
+        if receiver.pending_distance and receiver.pending_azimuth and (sample_id is None or receiver.pending_elevation):
+            times = [receiver.distance_sample_at, receiver.azimuth_sample_at]
+            if sample_id is not None:
+                times.append(receiver.elevation_sample_at)
+            if max(times) - min(times) <= 100:
+                receiver.received_measurement_at = max(times)
                 if not receiver.require_gate: receiver.measurement_updated_at = receiver.received_measurement_at
-                receiver.pending_distance = receiver.pending_azimuth = False
+                receiver.pending_distance = receiver.pending_azimuth = receiver.pending_elevation = False
+                receiver.measurement_completed = receiver.frame_completed = True
+            elif sample_id is not None:
+                receiver.pending_distance = receiver.pending_azimuth = receiver.pending_elevation = False
+                receiver.frame_rejected = True
             elif receiver.distance_sample_at < receiver.azimuth_sample_at:
                 receiver.pending_distance = False
             else:
@@ -445,6 +548,7 @@ class DualUwbFusion:
         receiver.filter_admission_version = result.get('admission_version', 0)
         receiver.filter_recovery_diagnostics = result.get('recovery_diagnostics')
         receiver.occlusion_diagnostics = result.get('occlusion_diagnostics')
+        receiver.trust_diagnostics = result.get('trust_diagnostics')
         receiver.rejected_count = max(receiver.rejected_count, result.get('rejected_count', 0))
         if result.get('accepted'):
             self.set_filtered(receiver_id, 'DIST', result['distance_m'])
@@ -488,7 +592,7 @@ class DualUwbFusion:
             sensor['fovHalfDeg'] = self.receiver_fov_half_deg
             sensor['fusionExclusionReason'] = (
                 'no_complete_measurement' if angle is None else
-                'outside_receiver_fov' if not sensor['withinFov'] else
+                'outside_receiver_fov' if self.trust_checks_enabled and not sensor['withinFov'] else
                 receiver.filter_reason if not receiver.complete() else
                 'stale_measurement' if not receiver.fresh(now_ms, self.freshness_ms) else None)
             sensor["stabilityWeight"] = self._stability_weight(receiver)
