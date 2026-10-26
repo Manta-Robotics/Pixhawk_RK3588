@@ -203,6 +203,7 @@ export function validateSystemConfig(config) {
   if (measurementFilter !== undefined) {
     if (!isObject(measurementFilter)) errors.push('uwb_measurement_filter must be an object');
     else {
+      if (measurementFilter.control_source !== undefined && !['raw', 'filtered'].includes(measurementFilter.control_source)) errors.push('uwb_measurement_filter.control_source must be raw or filtered');
       if (typeof measurementFilter.enabled !== 'boolean') errors.push('uwb_measurement_filter.enabled must be boolean');
       if (measurementFilter.trust_checks_enabled !== undefined && typeof measurementFilter.trust_checks_enabled !== 'boolean')
         errors.push('uwb_measurement_filter.trust_checks_enabled must be boolean');

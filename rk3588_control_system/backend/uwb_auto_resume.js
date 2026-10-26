@@ -1,5 +1,4 @@
 // Retain operator follow intent across UWB timeouts; never across manual stops.
-const wrap=x=>((x+180)%360+360)%360-180;
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 function targetId(uwb={}) {
  const tags=(uwb.sensors||[]).filter(s=>!(uwb.activeReceiverIds||[]).length||uwb.activeReceiverIds.includes(s.receiverId))
@@ -52,39 +51,18 @@ export class UwbAutoResume {
  }
  observe(now,telemetry,preflight,{duringAttempt=false}={}){
   if(!this.pending||(this.attempting&&!duringAttempt))return false;
-  const u=telemetry.uwb||{},a=telemetry.attitude||{};
-  const sensors=(u.sensors||[]).filter(s=>!(u.activeReceiverIds||[]).length||u.activeReceiverIds.includes(s.receiverId));
-  const trusted=u.measurementStatus==='trusted'||(sensors.length>0&&sensors.every(s=>s.measurementStatus==='trusted'));
-  const at=u.measurementUpdatedAt,range=u.distanceM;
-  const bearing=wrap(u.azimuthDeg*(this.c.bearing_sign??1)*(this.c.bearing_scale??1)+(this.c.bearing_offset_deg??0));
-  const id=targetId(u),gap=this.p.measurement_gap_ms??450;
-  // max_uncertainty_m limits blind prediction. A new KF-accepted observation
-  // is confirmed through this independent temporal/kinematic window instead;
-  // inflated historical measurement covariance must not lock out reacquisition.
-  if(this.transitionFailure(now,telemetry,preflight)) {this.clearWindow();return false;}
-  if(!preflight.safe||!trusted||!u.online||!u.fresh||!finite(at)||at>now||now-at>gap
-    ||!finite(range)||range<=(this.c.safety_distance_m??.3)||!finite(u.azimuthDeg)
-    ||Math.abs(bearing)>(this.c.field_of_view_half_deg??45)
-    ||!finite(a.yaw)||!finite(a.updatedAt)||a.updatedAt>now||now-a.updatedAt>(this.c.navigation_timeout_ms??700)
-    ||(this.target!==null&&id!==this.target)) {
-    // No authorization on an invalid frame. Preserve the preceding good
-    // samples only across a short radio gap; repeated polling is not a sample.
-    if(this.lastAt===null||now-this.lastAt>gap||Math.abs(bearing)>(this.c.field_of_view_half_deg??45))this.clearWindow();
-    return false;
+  const u=telemetry.uwb||{},at=u.measurementSampleAt??u.measurementUpdatedAt,range=u.distanceM;
+  // The bridge admits complete valid frames. Recovery requires one fresh
+  // observation, with no frame-count, position-continuity or angle gate.
+  if(this.transitionFailure(now,telemetry,preflight)||!preflight.safe||!u.online||!u.fresh
+    ||!finite(at)||at>now||now-at>(this.c.uwb_timeout_ms??700)
+    ||!finite(range)||range<=(this.c.safety_distance_m??.3)||!finite(u.azimuthDeg)){
+    this.clearWindow();return false;
   }
-  if(this.lastAt!==null&&at<=this.lastAt)return false;
-  // Acquisition may start without a known tag. Never mix identities in its
-  // confirmation window, even when a caller has not yet bound a target.
-  if(this.lastAt!==null&&id!==this.windowTarget)this.clearWindow();
-  const theta=(a.yaw+bearing)*Math.PI/180,point={x:range*Math.cos(theta),y:range*Math.sin(theta)};
-  const dt=this.lastAt===null?0:(at-this.lastAt)/1000;
-  const own=telemetry.velocity||{};
-  const ownSpeed=finite(own.vx)&&finite(own.vy)?Math.hypot(own.vx,own.vy):3;
-  if(this.lastAt!==null&&(at-this.lastAt>gap||Math.hypot(point.x-this.point.x,point.y-this.point.y)
-    >(this.p.innovation_gate_m??.6)+((this.p.max_target_speed_mps??3)+ownSpeed)*dt))this.clearWindow();
-  if(this.firstAt===null)this.firstAt=at;
-  this.lastAt=at;this.point=point;this.windowTarget=id;this.samples++;
-  return this.samples>=(this.p.min_samples??3)&&at-this.firstAt>=180;
+  const id=targetId(u);
+  if(this.target===null&&id!==null)this.target=id;
+  this.firstAt=this.lastAt=at;this.windowTarget=id;this.samples=1;
+  return true;
  }
  beginAttempt(){if(!this.pending||this.attempting)return false;this.attempting=true;return true;}
  ramp(result,now){

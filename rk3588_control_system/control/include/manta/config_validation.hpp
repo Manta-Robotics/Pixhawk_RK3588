@@ -27,6 +27,9 @@ inline void validate_control_config(const Json &root) {
          {"enabled", "auto_resume_after_uwb_timeout", "waiting_drift_hold", "far_pursuit_enabled",
           "commissioning_mode", "hard_stop_enabled", "close_approach_enabled"})
         boolean(f, key);
+    const auto source = filter.value("control_source", std::string("filtered"));
+    if (source != "raw" && source != "filtered")
+        throw std::invalid_argument("unsupported UWB control_source");
     boolean(p, "enabled");
     for (const auto *key : {"enabled", "adaptive_enabled", "occlusion_enabled", "trust_checks_enabled"})
         boolean(filter, key);

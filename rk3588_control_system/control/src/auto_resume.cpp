@@ -117,63 +117,26 @@ Json AutoResume::transition_failure(double now, const Json &t, const Json &pre) 
 bool AutoResume::observe(double now, const Json &t, const Json &pre, bool during) {
     if (!pending || (attempting && !during))
         return false;
-    const auto u = t.value("uwb", Json::object()), a = t.value("attitude", Json::object()),
-               active = u.value("activeReceiverIds", Json::array());
-    bool all = true;
-    int count = 0;
-    for (const auto &s : u.value("sensors", Json::array()))
-        if (active.empty() || std::find(active.begin(), active.end(),
-                                        s.value("receiverId", Json(nullptr))) != active.end()) {
-            ++count;
-            all &= s.value("measurementStatus", std::string()) == "trusted";
-        }
-    const bool trusted =
-        u.value("measurementStatus", std::string()) == "trusted" || (count > 0 && all);
-    const double at = measurement_time(u), range = number(u, "distanceM"),
-                 bearing = wrap(number(u, "azimuthDeg") * number(c, "bearing_sign", 1) *
-                                    number(c, "bearing_scale", 1) +
-                                number(c, "bearing_offset_deg", 0)),
-                 gap = number(p, "measurement_gap_ms", 450);
+    const auto u = t.value("uwb", Json::object());
+    const double at = measurement_time(u), range = number(u, "distanceM");
     const auto id = resume_identity(u);
-    if (!transition_failure(now, t, pre).is_null()) {
-        clear_window();
-        return false;
-    }
-    const double yaw = number(a, "yaw"), pose_at = number(a, "updatedAt");
-    if (!pre.value("safe", false) || !trusted || !u.value("online", false) ||
-        !u.value("fresh", false) || !std::isfinite(at) || at > now || now - at > gap ||
+    // One complete, valid, fresh observation is sufficient. Raw mode's parser
+    // owns completeness/replay checks; recovery adds no KF, motion or FOV gate.
+    if (!transition_failure(now, t, pre).is_null() || !pre.value("safe", false) ||
+        !u.value("online", false) || !u.value("fresh", false) ||
+        !std::isfinite(at) || at > now || now - at > number(c, "uwb_timeout_ms", 700) ||
         !std::isfinite(range) || range <= number(c, "safety_distance_m", .3) ||
-        !std::isfinite(bearing) || std::abs(bearing) > number(c, "field_of_view_half_deg", 45) ||
-        !std::isfinite(yaw) || !std::isfinite(pose_at) || pose_at > now ||
-        now - pose_at > number(c, "navigation_timeout_ms", 700) ||
-        (!target.is_null() && id != target)) {
-        if (!std::isfinite(last_at) || now - last_at > gap ||
-            std::abs(bearing) > number(c, "field_of_view_half_deg", 45))
-            clear_window();
+        !std::isfinite(number(u, "azimuthDeg"))) {
+        clear_window();
         return false;
     }
-    if (std::isfinite(last_at) && at <= last_at)
-        return false;
-    if (std::isfinite(last_at) && id != window_target)
-        clear_window();
-    const Vec next{range * std::cos((yaw + bearing) * radians),
-                   range * std::sin((yaw + bearing) * radians)};
-    const double dt = std::isfinite(last_at) ? (at - last_at) / 1000 : 0;
-    const auto v = t.value("velocity", Json::object());
-    const double vx = number(v, "vx"), vy = number(v, "vy"),
-                 speed = std::isfinite(vx) && std::isfinite(vy) ? std::hypot(vx, vy) : 3;
-    if (std::isfinite(last_at) &&
-        (at - last_at > gap ||
-         (next - point).norm() > number(p, "innovation_gate_m", .6) +
-                                     (number(p, "max_target_speed_mps", 3) + speed) * dt))
-        clear_window();
-    if (!std::isfinite(first_at))
-        first_at = at;
-    last_at = at;
-    point = next;
+    // Bind the first acquisition before asynchronous mode/arm ACKs so a
+    // different tag cannot take over while a start is in progress.
+    if (target.is_null() && !id.is_null()) target = id;
+    first_at = last_at = at;
     window_target = id;
-    ++samples;
-    return samples >= number(p, "min_samples", 3) && at - first_at >= 180;
+    samples = 1;
+    return true;
 }
 bool AutoResume::begin_attempt() {
     if (!pending || attempting)

@@ -297,6 +297,8 @@ class MAVLinkBridge:
         self.uwb_data = UWBData()
         self._uwb_session = UwbSession()
         self._uwb_clearance = UwbClearance(uwb_follow_config)
+        self.uwb_raw_control = (uwb_measurement_filter_config or {}).get('control_source', 'filtered') == 'raw'
+        self.uwb_filter_enabled = self.uwb_filter_enabled or self.uwb_raw_control
         self.uwb_fusion = DualUwbFusion(
             mount_yaw_deg=uwb_dual_config.get('mount_yaw_deg', (0.0, 90.0)),
             freshness_ms=uwb_dual_config.get('freshness_ms', 1500),
@@ -312,7 +314,7 @@ class MAVLinkBridge:
             switch_blend_ms=uwb_dual_config.get('switch_blend_ms', 180),
             enabled_receiver_ids=uwb_dual_config.get('enabled_receiver_ids', (1, 2)),
             require_gated_measurements=self.uwb_filter_enabled,
-            trust_checks_enabled=self.uwb_filter_config['trust_checks_enabled'],
+            trust_checks_enabled=not self.uwb_raw_control and self.uwb_filter_config['trust_checks_enabled'],
         )
         self._uwb_measurement_filters = {
             receiver_id: GatedUwbKalman(
@@ -439,6 +441,12 @@ class MAVLinkBridge:
                         # timestamp identifies each complete observation.
                         sequence_id=receiver.frame_key if sample_time_boot_ms is not None else receiver.sequence_id,
                         tag_id=receiver.tag_id)
+                if self.uwb_raw_control and receiver.valid is not False:
+                    result = dict(trust_diagnostics=result.get('trust_diagnostics'),
+                                  accepted=True, admission_version=1, status='trusted',
+                                  reason='raw_complete_frame', distance_m=receiver.raw_distance_m,
+                                  azimuth_deg=receiver.raw_azimuth_deg, accepted_at=now_ms,
+                                  angular_filter_mode='raw')
                 self.uwb_fusion.apply_measurement_result(receiver_id, result)
             elif field_name == 'EL' and abs(value) <= 90:
                 # Elevation is separate from the horizontal Cartesian state.
@@ -455,7 +463,7 @@ class MAVLinkBridge:
 
     def _refresh_uwb_fusion(self) -> None:
         now_ms = int(time.time() * 1000)
-        if self.uwb_filter_enabled:
+        if self.uwb_filter_enabled and not self.uwb_raw_control:
             for receiver_id, kalman in self._uwb_measurement_filters.items():
                 self.uwb_fusion.receivers[receiver_id].filter_uncertainty_m = kalman.result(now_ms)['uncertainty_m']
         fused = self.uwb_fusion.fused(now_ms)
@@ -1815,8 +1823,9 @@ class MAVLinkBridge:
                 if self.uwb_fusion.enabled_receiver_ids == {2}
                 else 'TELEM1_TELEM2_NAMED_VALUE_FLOAT'
             ),
+            'controlSource': 'raw' if self.uwb_raw_control else 'filtered',
             'trustChecksEnabled': self.uwb_fusion.trust_checks_enabled,
-            'filter': ('raw_validation_innovation_gate_cv_kalman_then_fusion' if self.uwb_fusion.trust_checks_enabled else 'complete_frame_cv_kalman_then_fusion') if self.uwb_filter_enabled else 'fast_per_receiver_kalman_then_body_xy_fusion',
+            'filter': 'complete_frame_raw_then_body_xy_fusion' if self.uwb_raw_control else ('raw_validation_innovation_gate_cv_kalman_then_fusion' if self.uwb_fusion.trust_checks_enabled else 'complete_frame_cv_kalman_then_fusion') if self.uwb_filter_enabled else 'fast_per_receiver_kalman_then_body_xy_fusion',
             'measurementStatus': 'trusted' if uwb_fresh else 'suspect' if any(s.get('measurementStatus') == 'suspect' for s in fused_uwb['sensors']) else 'unavailable',
             'rejectionReason': None if uwb_fresh else next((s.get('filterReason') for s in fused_uwb['sensors'] if s.get('measurementStatus') == 'suspect'), None),
             'measurementNis': max((s['filterNis'] for s in fused_uwb['sensors'] if s.get('filterNis') is not None and (not uwb_fresh or s['receiverId'] in fused_uwb['active_receiver_ids'])), default=None),

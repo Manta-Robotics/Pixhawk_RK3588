@@ -539,6 +539,7 @@
     "lost_seconds": 1
   },
   "uwb_measurement_filter": {
+    "control_source": "raw",
     "enabled": true,
     "trust_checks_enabled": false,
     "distance_std_m": 0.12,

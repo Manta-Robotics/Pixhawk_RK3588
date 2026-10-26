@@ -133,6 +133,7 @@ class BridgeGateTests(unittest.TestCase):
         self.bridge.flight_data = FlightData()
         self.bridge.uwb_data = UWBData()
         self.bridge.uwb_filter_enabled = True
+        self.bridge.uwb_raw_control = False  # This fixture exercises filtered admission.
         self.bridge.uwb_fusion = DualUwbFusion(enabled_receiver_ids=(1,), require_gated_measurements=True)
         self.bridge._uwb_measurement_filters = {1: GatedUwbKalman(), 2: GatedUwbKalman()}
         class ForbiddenLegacyFilter:

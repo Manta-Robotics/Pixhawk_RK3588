@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 export const MEASUREMENT_COLUMNS = [
   'recordedAt', 'sourceInstance', 'sourceSession', 'recordId', 'sequenceGap', 'outOfOrder',
   'receiverId', 'frameKey', 'source', 'protocol', 'sourceTimeKind', 'sourceTimeBootMs',
-  'sampleAt', 'receivedAt', 'finalizedAt', 'filterTimeMs', 'transportDelayMs', 'clockUncertaintyMs', 'clockLeadMs',
+  'sampleAt', 'receivedAt', 'finalizedAt', 'filterTimeMs', 'transportDelayMs', 'clockUncertaintyMs', 'clockLeadMs', 'clockOffsetCorrectionMs',
   'headingDeg', 'headingMethod', 'headingSpanMs', 'status', 'reason', 'complete', 'field', 'fieldValue',
   'tagId', 'rawDistanceM', 'rawAzimuthDeg', 'rawElevationDeg', 'rawBearingDeg',
   'filteredDistanceM', 'filteredAzimuthDeg', 'filteredBearingDeg', 'unsmoothedAzimuthDeg',

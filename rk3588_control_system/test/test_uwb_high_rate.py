@@ -84,6 +84,7 @@ class HighRateUwbTests(unittest.TestCase):
         bridge = MAVLinkBridge.__new__(MAVLinkBridge)
         bridge.flight_data, bridge.uwb_data = FlightData(), UWBData()
         bridge.uwb_filter_enabled = True
+        bridge.uwb_raw_control = False  # This fixture exercises filtered admission.
         bridge.uwb_fusion = DualUwbFusion(enabled_receiver_ids=(1,), require_gated_measurements=True)
         bridge._uwb_measurement_filters = {1: GatedUwbKalman(), 2: GatedUwbKalman()}
         def pair(at, angle):
