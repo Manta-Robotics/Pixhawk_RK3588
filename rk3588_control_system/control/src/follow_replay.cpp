@@ -47,7 +47,11 @@ int main() {
                 motor = std::make_unique<MotorLimiter>(request.at("config"),
                                                        request.value("traditional", false));
                 out = motor->reset(request.value("now", 0.0));
-            } else if (op == "motor_target")
+            } else if (op == "allocate_forward")
+                out = allocate_forward_drive(request.at("throttle"), request.at("steering"),
+                    request.value("throttleSpan", 100.), request.value("steeringSpan", 45.),
+                    request.value("motorLimit", 100.));
+            else if (op == "motor_target")
                 out = motor->set_target(request.at("target"));
             else if (op == "motor_step")
                 out = motor->step(request.at("now"));
@@ -127,6 +131,15 @@ int main() {
                                             request.value("connected", false),
                                             request.value("controlMode", std::string("auto")),
                                             request.value("targetEstimate", Json(nullptr)));
+            else if (op == "relative_allocated") {
+                out = relative->update(request.at("now"), request.at("preflight"),
+                    request.at("telemetry"), request.value("estimate", Json(nullptr)),
+                    request.value("policy", Json(nullptr)));
+                const auto allocated = allocate_forward_drive(number(out, "throttlePercent"),
+                    number(out, "steeringDegrees"));
+                relative->track_applied(number(allocated, "throttle"), number(allocated, "steering"));
+                out["driveAllocation"] = allocated;
+            }
             else if (op == "relative")
                 out = relative->update(request.at("now"), request.at("preflight"),
                                        request.at("telemetry"),

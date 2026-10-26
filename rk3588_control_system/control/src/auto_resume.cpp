@@ -129,7 +129,7 @@ bool AutoResume::observe(double now, const Json &t, const Json &pre, bool during
         }
     const bool trusted =
         u.value("measurementStatus", std::string()) == "trusted" || (count > 0 && all);
-    const double at = number(u, "measurementUpdatedAt"), range = number(u, "distanceM"),
+    const double at = measurement_time(u), range = number(u, "distanceM"),
                  bearing = wrap(number(u, "azimuthDeg") * number(c, "bearing_sign", 1) *
                                     number(c, "bearing_scale", 1) +
                                 number(c, "bearing_offset_deg", 0)),

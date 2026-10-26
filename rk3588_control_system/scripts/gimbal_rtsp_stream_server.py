@@ -16,7 +16,8 @@ import cv2
 import numpy as np
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-CONFIG = json.loads((PROJECT_DIR / 'config' / 'system.config.json').read_text(encoding='utf-8'))
+CONFIG_PATH = Path(os.environ.get('MANTA_CONFIG_FILE') or os.environ.get('MANTA_CONFIG_PATH') or PROJECT_DIR / 'config' / 'system.config.json')
+CONFIG = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
 GIMBAL = CONFIG.get('gimbal', {}) if isinstance(CONFIG.get('gimbal', {}), dict) else {}
 VIDEO = GIMBAL.get('video', {}) if isinstance(GIMBAL.get('video', {}), dict) else {}
 

@@ -18,6 +18,11 @@ local REPORT_PERIOD_MS = 1000
 local NO_FRAME_PERIOD_MS = 5000
 local MIN_DISTANCE_M = 0.15
 local MAX_DISTANCE_M = 20.0
+-- Discover the companion/GCS links from their heartbeats instead of assuming
+-- that a particular SERIAL port has a fixed MAVLink channel number.
+local channels = {}
+mavlink:init(4, 1)
+mavlink:register_rx_msgid(0) -- HEARTBEAT
 
 local function new_receiver(receiver_id, serial_instance)
     local uart = serial:find_serial(serial_instance)
@@ -109,6 +114,37 @@ local function set_validity(receiver, valid)
     end
 end
 
+local function send_position(receiver, now_ms, distance, elevation, azimuth)
+    -- NAMED_VALUE_FLOAT (251): uint32 time_boot_ms, float value, char name[10].
+    -- gcs:send_named_float stamps each call separately; pack once with a shared
+    -- observation clock so packet loss cannot mix fields from different frames.
+    local prefix = string.format("UWB%d_", receiver.id)
+    local dist = string.pack("<I4fc10", now_ms, distance, prefix .. "DIST")
+    local el = string.pack("<I4fc10", now_ms, elevation, prefix .. "EL")
+    local az = string.pack("<I4fc10", now_ms, azimuth, prefix .. "AZ")
+    local sent = false
+    for chan, link in pairs(channels) do
+        if ((now_ms - link.seen) & 0xFFFFFFFF) <= 3000 then
+            -- Announce strict shared-clock framing before positions, and again
+            -- after every peer heartbeat so a restarted receiver learns it.
+            -- Old receivers ignore this diagnostic and still read the triplet.
+            if not link.protocol[receiver.id] then
+                link.protocol[receiver.id] = mavlink:send_chan(chan, 251,
+                    string.pack("<I4fc10", now_ms, 2, prefix .. "PROTO"))
+            end
+            -- A TX-space failure leaves an incomplete frame. Never send its
+            -- completion marker after a failed field, and never retry it later.
+            if link.protocol[receiver.id] and mavlink:send_chan(chan, 251, dist)
+                and mavlink:send_chan(chan, 251, el) then
+                if mavlink:send_chan(chan, 251, az) then sent = true end
+            end
+        else
+            channels[chan] = nil
+        end
+    end
+    return sent
+end
+
 local function process_frame(receiver, now_ms)
     local command = u16(receiver, 9)
     if command == 0x2002 and receiver.expected_length == HEARTBEAT_LENGTH then
@@ -142,7 +178,8 @@ local function process_frame(receiver, now_ms)
     receiver.last_tag_id = tag_id
     receiver.last_tag_status = tag_status
 
-    if distance_m < MIN_DISTANCE_M or distance_m > MAX_DISTANCE_M then
+    if distance_m < MIN_DISTANCE_M or distance_m > MAX_DISTANCE_M
+        or math.abs(azimuth_deg) > 180 or math.abs(elevation_deg) > 90 then
         set_validity(receiver, false)
         return true
     end
@@ -152,13 +189,12 @@ local function process_frame(receiver, now_ms)
     -- Three floats per position, rather than five. GOOD and other counters
     -- are diagnostics; send them separately so two 40 Hz receivers leave
     -- room on a 115200 baud MAVLink link for attitude and motor feedback.
-    -- AZ completes the pair in the bridge. Send elevation and any validity
-    -- transition before AZ, so the published observation is already coherent.
-    send_value(receiver, "DIST", distance_m)
-    send_value(receiver, "EL", elevation_deg)
+    -- AZ completes the pair in the bridge. Send the validity transition first,
+    -- then the timestamped DIST/EL/AZ observation in order on each active link.
     set_validity(receiver, true)
-    send_value(receiver, "AZ", azimuth_deg)
-    receiver.sent_count = receiver.sent_count + 1
+    if send_position(receiver, now_ms, distance_m, elevation_deg, azimuth_deg) then
+        receiver.sent_count = receiver.sent_count + 1
+    end
     return true
 end
 
@@ -259,11 +295,16 @@ end
 
 local next_receiver = 1
 local function update()
-    local now_ms = millis():tofloat()
+    local now_ms = millis():toint() & 0xFFFFFFFF
+    for _ = 1, 4 do
+        local message, chan = mavlink:receive_chan()
+        if not message then break end
+        channels[chan] = {seen = now_ms, protocol = {}}
+    end
     update_receiver(receivers[next_receiver], now_ms)
     next_receiver = 3 - next_receiver
     return update, 10
 end
 
-gcs:send_text(MAV_SEVERITY.INFO, "UWB: per-frame TELEM1+TELEM2 readers started")
+gcs:send_text(MAV_SEVERITY.INFO, "UWB frame-v2: shared clock DIST/EL/AZ ready")
 return update()

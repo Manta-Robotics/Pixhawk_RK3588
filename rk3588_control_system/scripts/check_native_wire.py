@@ -52,10 +52,13 @@ def main():
         packet = dict(timestamp=clock/1000, payload=dict(
             updatedAt=clock-20, timestamp=clock-10, receivedMeasurementAt=clock-900,
             sensors=[dict(rawDistanceUpdatedAt=clock+100, measurementUpdatedAt=clock-50)],
+            sampleAt=clock-80, receivedAt=clock-20, filterTimeMs=clock-80,
+            sourceTimeBootMs=12345, transportDelayMs=60, clockUncertaintyMs=2,
             nullAt=None, zeroAt=0, solveMs=15, wait_timeout_ms=5000, goodCount=42))
         expected = copy.deepcopy(packet)
         expected['timestamp'] += offset/1000
-        for key in ['updatedAt', 'timestamp', 'receivedMeasurementAt']:
+        for key in ['updatedAt', 'timestamp', 'receivedMeasurementAt',
+                    'sampleAt', 'receivedAt', 'filterTimeMs']:
             expected['payload'][key] += offset
         for key in expected['payload']['sensors'][0]:
             expected['payload']['sensors'][0][key] += offset
@@ -143,7 +146,11 @@ def main():
 
     # Compare every telemetry/UWB field to the retained Python reference.
     for gated in [False, True]:
-        config = {'uwb_dual': {'enabled_receiver_ids': [1]}, 'uwb_measurement_filter': {'enabled': gated}}
+        # Retained Python baseline has receipt-time filtering. Exercise that
+        # explicit compatibility mode here; source-time motion has its own
+        # real-wire invariance/ground-truth tests in native_uwb_contract.
+        config = {'uwb_dual': {'enabled_receiver_ids': [1]}, 'uwb_measurement_filter': {'enabled': gated},
+                  'uwb_time_alignment': {'enabled': False}}
         append('reset', config=config)
         reference = MAVLinkBridge('offline-test', 115200, '127.0.0.1', 0, 9, 100, 1, 1, 3, -100, 100, -45, 45,
                                  uwb_dual_config=config['uwb_dual'], uwb_measurement_filter_config=config['uwb_measurement_filter'])
@@ -157,9 +164,10 @@ def main():
                         mav.MAVLink_sys_status_message(0, 0, 0, 0, 12000, 500, 80, 0, 0, 0, 0, 0, 0),
                         mav.MAVLink_servo_output_raw_message(0, 0, 1510, 1500, 1490, 1500, 0, 0, 0, 0)]
             for i in range(80):
-                messages.extend([mav.MAVLink_named_value_float_message(i, b'UWB1_DIST', 3+.01*i),
-                                 mav.MAVLink_named_value_float_message(i, b'UWB1_AZ', 5*math.sin(i/20))])
-            messages.append(mav.MAVLink_named_value_float_message(81, b'UWB1_VALID', 0))
+                messages.extend([mav.MAVLink_named_value_float_message(70+30*i, b'UWB1_DIST', 3+.01*i),
+                                 mav.MAVLink_named_value_float_message(70+30*i, b'UWB1_EL', 0),
+                                 mav.MAVLink_named_value_float_message(70+30*i, b'UWB1_AZ', 5*math.sin(i/20))])
+            messages.append(mav.MAVLink_named_value_float_message(2470, b'UWB1_VALID', 0))
             for message in messages:
                 now += 10
                 frame = message.pack(sender)
@@ -174,6 +182,13 @@ def main():
                     actual = {k: v for k, v in r['state'].items() if k not in ['imuCalibration', 'acroControl']}
                     compare(expected, actual)
                 append('receive', compare_state, hex=frame.hex())
+                if message.get_type() == 'HEARTBEAT':
+                    # Both implementations cross an actual fresh TIMESYNC reply
+                    # before accepting any UWB data from the new connection.
+                    nonce = reference._uwb_session.request(now)
+                    reply = mav.MAVLink_timesync_message(1, nonce)
+                    reference._parse_message(decoder.parse_char(reply.pack(sender)))
+                    append('sync', boot_ms=0, seq=sender.seq)
         reference.command_socket.close(); reference.telemetry_socket.close()
 
     now += 4000

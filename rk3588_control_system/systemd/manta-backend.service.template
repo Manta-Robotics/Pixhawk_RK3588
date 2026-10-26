@@ -1,7 +1,7 @@
 [Unit]
 Description=Manta Dashboard Backend
-After=network.target
-Wants=network.target
+After=network-online.target manta-gimbal-route.service manta-gimbal-stream.service
+Wants=network-online.target manta-gimbal-route.service manta-gimbal-stream.service
 
 [Service]
 Type=simple

@@ -27,6 +27,9 @@ inline double number(const Json &j, const std::string &k, double fallback = miss
 inline Json nullable(double x) {
     return std::isfinite(x) ? Json(x) : Json(nullptr);
 }
+inline double measurement_time(const Json &u, double fallback = missing) {
+    return number(u, "measurementSampleAt", number(u, "measurementUpdatedAt", fallback));
+}
 inline double squared(double x) {
     return x * x;
 }

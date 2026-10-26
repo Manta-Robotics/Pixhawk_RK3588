@@ -5,22 +5,32 @@
 namespace manta {
 struct Receiver {
     Json data;
-    bool pending_distance = false, pending_azimuth = false;
-    double distance_at = missing, azimuth_at = missing;
+    bool pending_distance = false, pending_azimuth = false, pending_elevation = false;
+    std::map<std::pair<int, int>, uint32_t> newest_samples;
+    std::map<std::pair<int, int>, bool> strict_sources;
+    int legacy_step = 0;
+    Json wire_continuity = nullptr;
+    uint32_t wire_stamp = 0;
+    Json frame_key = nullptr;
+    bool frame_rejected = false, frame_completed = false, measurement_completed = false;
+    double distance_at = missing, azimuth_at = missing, elevation_at = missing;
     std::vector<double> distances, azimuths;
 };
 class UwbFusion {
   public:
     std::array<Receiver, 2> receivers;
     std::vector<int> enabled;
-    bool gated;
+    bool gated, trust_checks;
+    double reference_heading = missing, heading_scale = 1;
     double freshness, fov, disagreement, position_disagreement, minimum, maximum, confidence,
         confirm_ms, blend_ms;
     explicit UwbFusion(const Json &options = Json::object());
     static std::optional<std::pair<int, std::string>> parse_name(std::string name);
     int legacy_receiver(const Json &source);
     std::optional<std::pair<int, std::string>> update(const std::string &name, double value,
-                                                      double now, const Json &source = nullptr);
+                                                      double now, const Json &source = nullptr,
+                                                      const Json &sample_id = nullptr,
+                                                      const Json &wire_continuity = nullptr);
     void apply(int id, const Json &result);
     void set_filtered(int id, const std::string &field, double value);
     Json fused(double now);

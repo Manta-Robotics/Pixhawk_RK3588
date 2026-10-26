@@ -13,7 +13,8 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlsplit
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-CONFIG = json.loads((PROJECT_DIR / 'config' / 'system.config.json').read_text(encoding='utf-8'))
+CONFIG_PATH = Path(os.environ.get('MANTA_CONFIG_FILE') or os.environ.get('MANTA_CONFIG_PATH') or PROJECT_DIR / 'config' / 'system.config.json')
+CONFIG = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
 HOTSPOT = CONFIG.get('hotspot', {})
 CAMERA = CONFIG.get('camera', {})
 SNAPSHOT_PORT = int(HOTSPOT.get('camera_port', 8090))

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
+CONFIG_FILE="${MANTA_CONFIG_FILE:-${MANTA_CONFIG_PATH:-$PROJECT_DIR/config/system.config.json}}"
 
 eval "$(python3 - "$CONFIG_FILE" <<'PY'
 import json

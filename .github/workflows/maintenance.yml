@@ -55,6 +55,7 @@ jobs:
         run: |
           cmake -S control -B control/build -DCMAKE_BUILD_TYPE=Release
           cmake --build control/build --parallel 2
+          ctest --test-dir control/build --output-on-failure
           python scripts/check_native_parity.py control/build/manta-replay
           python scripts/check_native_wire.py control/build/manta-wire-replay
           node scripts/check_native_follow.mjs control/build/manta-follow-replay

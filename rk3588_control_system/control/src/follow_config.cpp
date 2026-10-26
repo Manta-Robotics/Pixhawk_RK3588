@@ -60,6 +60,8 @@ Json normalize_follow_config(const Json &raw) {
         {"steeringReturnDegS", "steering_return_deg_s", 30, 1, 180},
         {"throttleAccelPercentS", "relative_throttle_accel_percent_s", 12, 1, 100},
         {"throttleDecelPercentS", "relative_throttle_decel_percent_s", 25, 1, 100},
+        {"turnDecelPercentS", "relative_turn_decel_percent_s", number(raw, "relative_throttle_decel_percent_s", 25), 1, 100},
+        {"turnMinimumThrottlePercent", "relative_turn_min_throttle_percent", 0, 0, 100},
         {"rangeDeadbandM", "range_deadband_m", .12, 0, 2},
         {"uwbTimeoutMs", "uwb_timeout_ms", 700, 100, INFINITY},
         {"navigationTimeoutMs", "navigation_timeout_ms", 700, 100, INFINITY},

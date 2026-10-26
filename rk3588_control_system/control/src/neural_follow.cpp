@@ -129,7 +129,7 @@ Json NeuralFollow::preflight(double now, const Json &t, bool connected, const st
 void NeuralFollow::ingest(const Json &t, const Json &pf) {
     const auto u = t.value("uwb", Json::object());
     const double at =
-        number(u, u.contains("measurementUpdatedAt") ? "measurementUpdatedAt" : "updatedAt");
+        measurement_time(u, number(u, "updatedAt"));
     if (!std::isfinite(at) || at == measurement_at)
         return;
     const std::array<double, 3> raw = {number(pf, "distanceM"), number(pf, "azimuthDeg"),
@@ -233,7 +233,7 @@ Json NeuralFollow::relative_only(double now, const Json &t, const Json &pf, cons
     const Vec body = {d * std::cos(bearing), -d * std::sin(bearing)};
     const auto relative_enu = rotate(body, yaw);
     const double at =
-        number(t["uwb"], "measurementUpdatedAt",
+        measurement_time(t["uwb"],
                estimate.is_object()            ? number(estimate, "lastMeasuredAt",
                                              std::isfinite(measurement_at) ? measurement_at : now)
                : std::isfinite(measurement_at) ? measurement_at

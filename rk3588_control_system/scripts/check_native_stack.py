@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real C++ daemon + Node HTTP + PTY autopilot, without physical hardware."""
 import concurrent.futures
+import csv
 import json
 import os
 from pathlib import Path
@@ -32,6 +33,8 @@ class Autopilot:
         self.mode, self.armed, self.radio, self.accept_mode = 0, False, True, True
         self.distance, self.angle, self.running = 4.0, 0.0, True
         self.frames, self.error = [], None
+        self.near_burst = False
+        self.burst_sent_at = None
         self.sender = mav.MAVLink(None, srcSystem=1, srcComponent=1)
         self.parser = mav.MAVLink(None)
         self.parameters = dict(PILOT_STEER_TYPE=0, SPEED_MAX=2, CRUISE_SPEED=.8,
@@ -51,6 +54,17 @@ class Autopilot:
         try:
             while self.running:
                 now = time.monotonic()
+                if self.near_burst:
+                    self.near_burst = False
+                    stamp = int(now * 1000) & 0xFFFFFFFF
+                    packet = b''
+                    for offset, distance in ((0, .2), (1, self.distance)):
+                        for name, value in [('DIST', distance), ('EL', 0), ('AZ', 0)]:
+                            packet += mav.MAVLink_named_value_float_message(
+                                (stamp + offset) & 0xFFFFFFFF, f'UWB1_{name}'.encode(), value).pack(self.sender)
+                            self.sender.seq = (self.sender.seq + 1) % 256
+                    os.write(self.master, packet)
+                    self.burst_sent_at = time.monotonic()
                 if now >= next_sensor:
                     next_sensor = now+.05
                     stamp = int(now*1000) % 2**32
@@ -70,7 +84,9 @@ class Autopilot:
                     if not message:
                         continue
                     self.frames.append((time.monotonic(), message))
-                    if message.get_type() == 'PARAM_REQUEST_READ':
+                    if message.get_type() == 'TIMESYNC' and message.tc1 == 0:
+                        self.send(mav.MAVLink_timesync_message(time.monotonic_ns(), message.ts1))
+                    elif message.get_type() == 'PARAM_REQUEST_READ':
                         key = message.param_id
                         if key in self.parameters:
                             self.send(mav.MAVLink_param_value_message(key.encode(), self.parameters[key], mav.MAV_PARAM_TYPE_REAL32, len(self.parameters), 0))
@@ -107,6 +123,7 @@ def main():
         config['gimbal']['face']['keep_warm'] = False
         config['gimbal']['beacon'].update(yaw_source_sign=1, yaw_source_scale=1, yaw_offset_deg=0)
         config['uwb_follow']['relative_nmpc']['enabled'] = False
+        config['uwb_measurement_filter']['trust_checks_enabled'] = False
         config['uwb_follow']['gps_speed_closed_loop']['enabled'] = False
         path = Path(directory)/'config.json'
         path.write_text(json.dumps(config))
@@ -145,7 +162,7 @@ def main():
         def start_web():
             process = subprocess.Popen([node, 'backend/server.js'], cwd=ROOT,
                                        env={**os.environ, 'MANTA_CONFIG_FILE': str(path)}, stdout=log, stderr=log)
-            end = time.monotonic()+8
+            end = time.monotonic()+30
             while time.monotonic() < end:
                 assert process.poll() is None, 'Web process exited'
                 try:
@@ -154,6 +171,12 @@ def main():
                 except OSError:
                     pass
                 time.sleep(.05)
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
             raise AssertionError('Web startup timed out')
 
         try:
@@ -161,10 +184,58 @@ def main():
             time.sleep(.2)
             wait(lambda: rpc('CONTROL_STATUS')['state'].get('reason') == 'method_selected')
             web = start_web()
+            # Measurement recording is independent of follow/arming and logs
+            # actual native per-observation events, not HTTP telemetry snapshots.
+            assert not fcu.armed
+            status, recording = http('/api/uwb-measurements/start',
+                                     {'label': 'stationary_4m', 'referenceDistanceM': 4,
+                                      'referenceBearingDeg': 0})
+            assert status == 200 and recording['active'], recording
+            wait(lambda: http('/api/uwb-measurements/state')[1]['rows'] >= 8)
+            status, recorded = http('/api/uwb-measurements/stop', {})
+            assert status == 200 and not recorded['active'] and recorded['droppedRows'] == 0, recorded
+            assert not fcu.armed
+            csv_path = Path(config['logs_dir']) / 'uwb_tests' / recorded['fileName']
+            with csv_path.open() as stream:
+                samples = list(csv.DictReader(stream))
+            assert len(samples) >= 8 and all(s['sourceTimeKind'] == 'lua_processing' for s in samples)
+            assert all(s['headingMethod'] in ('exact', 'interpolated', 'yaw_rate_extrapolated') for s in samples)
+            assert all(abs(float(s['distanceErrorM'])) < .01 for s in samples if s['status'] == 'accepted')
+            assert all(float(s['sampleAt']) <= float(s['receivedAt']) for s in samples)
+            if config['uwb_measurement_filter'].get('trust_checks_enabled') is False:
+                assert all(s['trustChecksEnabled'] == 'false' for s in samples)
+                assert all(json.loads(s['trustDiagnostics'])['controlGating'] is False for s in samples)
             status, result = http('/api/uwb-follow/start', {})
             assert status == 200 and result['state']['active'], result
             mark = time.monotonic()
             wait(lambda: any(at > mark and m.get_type() == 'MANUAL_CONTROL' and m.z > 0 for at, m in fcu.frames))
+            # Exercise the actual runtime allocator/transport while the
+            # independent diagnostic filter sees jumps and quarantines them.
+            for angle, distance in ((35, 8), (-35, 6)):
+                fcu.angle, fcu.distance = angle, distance
+                wait(lambda: rpc('CONTROL_STATUS')['state'].get('steeringDegrees', 0) * angle > 1, 6)
+                current = rpc('CONTROL_STATUS')['state']
+                assert current['active'] and fcu.armed, current
+                allocated = current['driveAllocation']
+                assert 0 <= allocated['leftDemandPercent'] <= 100
+                assert 0 <= allocated['rightDemandPercent'] <= 100
+                telemetry = http('/api/status')[1]['data']['telemetry']['uwb']
+                assert telemetry['fresh'] and telemetry['trustChecksEnabled'] is False
+                assert telemetry['sensors'][0]['trustDiagnostics']['controlGating'] is False
+            fcu.angle, fcu.distance = 0, 4
+            # A single serial read ends on a safe far observation. The pending
+            # near stop must still reach the actual motor transport immediately.
+            fcu.near_burst = True
+            wait(lambda: fcu.burst_sent_at is not None, 1)
+            wait(lambda: rpc('CONTROL_STATUS')['state'].get('reason') == 'raw_distance_clearance', 1)
+            stopped_at = time.monotonic()
+            assert any(fcu.burst_sent_at <= at <= stopped_at and m.get_type() == 'MANUAL_CONTROL'
+                       and m.y == m.z == 0 for at, m in fcu.frames)
+            time.sleep(.2)
+            assert not any(at > stopped_at and m.get_type() == 'MANUAL_CONTROL' and m.z > 0
+                           for at, m in fcu.frames)
+            wait(lambda: any(at > stopped_at+.5 and m.get_type() == 'MANUAL_CONTROL' and m.z > 0
+                             for at, m in fcu.frames), 6)
             # A graceful Web shutdown must not send a vehicle stop or disarm.
             web.terminate(); web.wait(timeout=5); web = None
             mark = time.monotonic(); time.sleep(1)

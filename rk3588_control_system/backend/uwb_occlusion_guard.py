@@ -20,9 +20,62 @@ class UwbOcclusionGuard:
         self.velocity = (0., 0.)
         self.reference_position = None
         self.bad_count = 0
-        self.return_at = self.return_last_at = None
-        self.return_hits = 0
+        self.interrupt_confirmation()
         self.diagnostics = {'state': 'clear', 'reason': None}
+
+    def confirm_new_track(self, position, at):
+        # Bound motion-model residuals, not displacement from a fixed cluster.
+        # Validate even packets between the retained 25 ms evidence samples.
+        consistent = (self.candidate_last_at is not None
+                      and 0 <= at - self.candidate_last_at <= 150)
+        if consistent:
+            prior = self.candidate_last_position
+            budget = self.speed_limit * (at - self.candidate_last_at) / 1000
+            angle = abs(math.degrees(math.atan2(
+                position[1] * prior[0] - position[0] * prior[1],
+                position[0] * prior[0] + position[1] * prior[1])))
+            consistent = (math.dist(position, prior) <= self.step_margin + budget
+                          and angle <= self.angle_margin + math.degrees(
+                              budget / max(.15, min(math.hypot(*position), math.hypot(*prior)))))
+        trial = list(self.reacquisition)
+        if trial and trial[-1][0] == at:
+            trial[-1] = (at, position)
+        else:
+            trial.append((at, position))
+        velocity, residual = None, 0.
+        if consistent and len(trial) >= 4 and at - trial[0][0] >= 100:
+            ts = [(t-at)/1000 for t, _ in trial]
+            mt = sum(ts)/len(ts)
+            denominator = sum((t-mt)**2 for t in ts)
+            means = tuple(sum(z[k] for _, z in trial)/len(trial) for k in (0, 1))
+            velocity = tuple(sum((t-mt)*(z[k]-means[k]) for t, (_, z) in zip(ts, trial))
+                             / denominator for k in (0, 1))
+            fitted = tuple(m-v*mt for m, v in zip(means, velocity))
+            consistent = math.hypot(*velocity) <= self.speed_limit
+            for t, z in trial:
+                expected = tuple(p+v*(t-at)/1000 for p, v in zip(fitted, velocity))
+                residual = max(residual, math.dist(z, expected))
+                angle = abs(math.degrees(math.atan2(z[1]*expected[0]-z[0]*expected[1],
+                                                   z[0]*expected[0]+z[1]*expected[1])))
+                consistent = consistent and residual <= self.step_margin and angle <= self.angle_margin
+        if not consistent:
+            self.reacquisition = []
+            velocity = None
+        self.candidate_last_at = at
+        self.candidate_last_position = position
+        self.candidate_velocity = velocity or (0., 0.)
+        if not self.reacquisition or at - self.reacquisition[-1][0] >= 25:
+            self.reacquisition.append((at, position))
+        self.reacquisition = [(t, z) for t, z in self.reacquisition if 0 <= at - t <= 3200][-128:]
+        span = at - self.reacquisition[0][0]
+        self.diagnostics.update(candidate_hits=len(self.reacquisition), candidate_ms=span,
+                                candidate_required_ms=1500,
+                                candidate_speed_mps=math.hypot(*velocity) if velocity else None,
+                                candidate_residual_m=residual if velocity else None)
+        ready = span >= 1500 and len(self.reacquisition) >= 16
+        if ready:
+            self.diagnostics.update(state='recovering', reason='stable_new_track_confirmed')
+        return ready
 
     def check(self, position, at):
         if self.anchor is None:
@@ -44,8 +97,8 @@ class UwbOcclusionGuard:
         if not self.bad_count and not jump:
             self.diagnostics = {'state': 'clear', 'reason': None}
             return True
-        # Freeze the reference on the first anomaly. Never let elapsed rejection
-        # time or a stable wrong cluster expand this return corridor indefinitely.
+        # Freeze the old return corridor. A displaced cluster uses a separate,
+        # longer confirmation window rather than widening this corridor.
         horizon = min(max(dt, 0.), .25)
         expected = tuple(z + v * horizon for z, v in zip(self.reference_position, self.velocity))
         return_error = math.dist(position, expected)
@@ -62,7 +115,10 @@ class UwbOcclusionGuard:
                                 'reason': 'raw_position_jump', 'step_m': step,
                                 'return_error_m': return_error, 'return_angle_error_deg': return_angle,
                                 'bad_count': self.bad_count}
-            return False
+            return self.confirm_new_track(position, at)
+        self.reacquisition = []
+        self.candidate_last_at = None
+        self.candidate_velocity = (0., 0.)
         # One isolated spike may return immediately to the existing track.
         # A burst requires uninterrupted fresh observations for recovery_ms.
         if self.bad_count < 2:
@@ -82,6 +138,9 @@ class UwbOcclusionGuard:
     def interrupt_confirmation(self):
         self.return_at = self.return_last_at = None
         self.return_hits = 0
+        self.reacquisition = []
+        self.candidate_last_at = None
+        self.candidate_velocity = (0., 0.)
 
     def radio_loss(self):
         if self.anchor is not None:
@@ -91,6 +150,7 @@ class UwbOcclusionGuard:
                                 'reason': 'radio_loss', 'bad_count': self.bad_count}
 
     def accept(self, position, at):
+        new_track = self.diagnostics.get('reason') == 'stable_new_track_confirmed'
         recovering = self.bad_count >= 2
         if recovering:
             self.history = []
@@ -114,6 +174,6 @@ class UwbOcclusionGuard:
                 self.velocity = tuple(v * min(1., self.speed_limit / max(speed, 1e-9)) for v in velocity)
         self.anchor = (at, position)
         self.bad_count = 0
-        self.return_at = self.return_last_at = None
-        self.return_hits = 0
-        self.diagnostics = {'state': 'clear', 'reason': 'original_track_confirmed' if recovering else None}
+        self.interrupt_confirmation()
+        self.diagnostics = {'state': 'clear', 'reason': 'stable_new_track_confirmed' if new_track
+                            else 'original_track_confirmed' if recovering else None}

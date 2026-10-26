@@ -72,14 +72,16 @@ Json DriftHold::observe_bearing(double now, const Json &t) {
     if (sensors.size() != 1)
         return no("one_raw_receiver_required");
     const auto &s = sensors[0];
-    const double at =
+    const double received =
         std::max(number(s, "receivedMeasurementAt", 0), number(s, "rawRejectedAt", 0));
+    const auto timing = s.value("sampleTiming", Json::object());
+    const double at = number(timing, "sampleAt", received);
     if (quarantined(s)) {
         bearings.clear();
         return no("occlusion_quarantine");
     }
     if (!fresh(at, now, number(p, "measurement_gap_ms", 450)) || !s.value("valid", true) ||
-        at != number(s, "receivedMeasurementAt"))
+        received != number(s, "receivedMeasurementAt"))
         return no("raw_invalid_or_stale");
     const double az =
         number(s, "rawAzimuthDeg",
@@ -93,7 +95,8 @@ Json DriftHold::observe_bearing(double now, const Json &t) {
     if (std::abs(bearing) > 45)
         return no("outside_fov");
     const double heading =
-        wrap(number(a, "yaw") + bearing - number(a, "yawRateDegS", 0) * (now - at) / 1000);
+        wrap(number(timing, "headingDeg", number(a, "yaw") -
+                    number(a, "yawRateDegS", 0) * (now - at) / 1000) + bearing);
     const auto id = sensor_id(s);
     if (!target_id.is_null() && target_id != id) {
         bearings.clear();
@@ -188,12 +191,12 @@ void DriftHold::refresh_range(double now, const Json &t) {
     if (sensors.empty())
         return;
     const auto &s = sensors[0];
-    const double at = number(u, "measurementUpdatedAt"), range = number(u, "distanceM"),
+    const double at = measurement_time(u), range = number(u, "distanceM"),
                  uncertainty = number(s, "filterUncertaintyM");
     if (quarantined(s) || u.value("measurementStatus", std::string()) != "trusted" ||
         s.value("measurementStatus", std::string()) != "trusted" || !u.value("fresh", false) ||
         !fresh(at, now, number(p, "measurement_gap_ms", 450)) ||
-        number(s, "receivedMeasurementAt") != at || !std::isfinite(range) ||
+        number(s, "receivedMeasurementAt") != number(u, "measurementUpdatedAt") || !std::isfinite(range) ||
         !std::isfinite(uncertainty) || uncertainty < 0 ||
         number(certificate, "measurementAt") == at)
         return;

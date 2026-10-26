@@ -1,4 +1,5 @@
 #include "manta/propulsion.hpp"
+#include <stdexcept>
 
 namespace manta {
 namespace {
@@ -9,6 +10,26 @@ double toward_motor(double v, double t, double d) {
     return v < t ? std::min(t, v + d) : std::max(t, v - d);
 }
 } // namespace
+Json allocate_forward_drive(double throttle, double steering, double throttle_span,
+                            double steering_span, double motor_limit) {
+    if (!std::isfinite(throttle) || !std::isfinite(steering) ||
+        !std::isfinite(throttle_span) || !std::isfinite(steering_span) ||
+        !std::isfinite(motor_limit) || throttle_span <= 0 || steering_span <= 0 || motor_limit < 0)
+        throw std::invalid_argument("invalid_forward_allocation");
+    const double requested = clamp(throttle, 0, motor_limit),
+                 turn = steering * throttle_span / steering_span;
+    // First reserve the requested differential, then reduce common thrust.
+    // The 0.8 share keeps both motors forward, including after saturation.
+    const double limit = std::min(.8 * requested, motor_limit * .8 / 1.8),
+                 difference = clamp(turn, -limit, limit),
+                 common = std::min(requested, motor_limit - std::abs(difference));
+    return {{"throttle", common}, {"steering", difference * steering_span / throttle_span},
+            {"requestedThrottle", throttle}, {"requestedSteering", steering},
+            {"leftDemandPercent", common + difference}, {"rightDemandPercent", common - difference},
+            {"turnHeadroomPercent", motor_limit - common},
+            {"throttleReducedForTurn", common < requested - 1e-9},
+            {"steeringLimited", std::abs(difference - turn) > 1e-9}};
+}
 double shape_axis(double value, double limit, double deadband, double expo) {
     limit = std::max(.001, std::abs(limit));
     deadband = clamp(std::abs(deadband), 0, limit * .95);

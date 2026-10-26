@@ -51,8 +51,8 @@ std::string measurement_key(const Json &u) {
         if (std::find(ids.begin(), ids.end(), s["receiverId"]) != ids.end()) {
             if (number(s, "filterAdmissionVersion") == 1 &&
                 std::isfinite(number(s, "measurementUpdatedAt")))
-                tokens.push_back(s["receiverId"].dump() +
-                                 ":accepted:" + s["measurementUpdatedAt"].dump());
+                tokens.push_back(s["receiverId"].dump() + ":accepted:" +
+                                 s.value("acceptedFrameKey", s["measurementUpdatedAt"]).dump());
             else if (std::isfinite(number(s, "sequenceId")))
                 tokens.push_back(s["receiverId"].dump() + ":" + s["sequenceId"].dump());
         }
@@ -86,6 +86,7 @@ static std::pair<bool, bool> admission_contract(const Json &u, double now, doubl
                      s.value("measurementStatus", std::string()) == "trusted" &&
                      s.value("valid", Json(nullptr)) != false &&
                      fresh_time(number(s, "measurementUpdatedAt"), now, gap) &&
+                     fresh_time(number(s, "measurementSampleAt", number(s, "measurementUpdatedAt")), now, gap) &&
                      s.value("receivedMeasurementAt", Json(nullptr)) ==
                          s.value("measurementUpdatedAt", Json(nullptr)) &&
                      std::isfinite(number(s, "filterUncertaintyM")) &&
@@ -137,7 +138,7 @@ Json TargetEstimator::pose(double now, const Json &t) {
     return last_pose;
 }
 Json TargetEstimator::sample(const Json &u, const Json &pose, double now) const {
-    const double at = number(u, "measurementUpdatedAt"), range = number(u, "distanceM"),
+    const double at = number(u, "measurementSampleAt", number(u, "measurementUpdatedAt")), range = number(u, "distanceM"),
                  azimuth = number(u, "azimuthDeg");
     if (!pose.is_object() || !u.value("online", false) || !u.value("fresh", false) ||
         !std::isfinite(range) || range <= 0 || !std::isfinite(azimuth) ||
@@ -147,7 +148,7 @@ Json TargetEstimator::sample(const Json &u, const Json &pose, double now) const 
                                     number(calibration, "bearing_scale", .8148) +
                                 number(calibration, "bearing_offset_deg", -4.816));
     const Vec body = {range * std::cos(bearing * radians), range * std::sin(bearing * radians)},
-              relative = rotate_vector(body, number(pose, "yaw") * radians);
+              relative = rotate_vector(body, number(u, "measurementHeadingDeg", number(pose, "yaw")) * radians);
     const auto position = vector_value(pose["position"]) -
                           Vec{number(pose, "vx"), number(pose, "vy")} * ((now - at) / 1000) +
                           relative;

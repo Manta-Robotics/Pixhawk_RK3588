@@ -69,6 +69,58 @@ void OcclusionGuard::reset() {
 void OcclusionGuard::interrupt_confirmation() {
     return_at = return_last_at = missing;
     return_hits = 0;
+    reacquisition.clear();
+    candidate_last_at = missing;
+    candidate_velocity = {};
+}
+bool OcclusionGuard::confirm_new_track(Vec position, double now) {
+    // Validate every observation against an independent bounded-motion fit.
+    // Residuals, not total displacement, must stay small during confirmation.
+    bool consistent = std::isfinite(candidate_last_at) && now >= candidate_last_at &&
+                      now - candidate_last_at <= 150;
+    const double budget = speed_limit * std::max(0., (now - candidate_last_at) / 1000);
+    if (consistent)
+        consistent = (position - candidate_last_position).norm() <= step_margin + budget &&
+            std::abs(wrap(position.angle() - candidate_last_position.angle())) <= angle_margin +
+                budget / std::max(.15, std::min(position.norm(), candidate_last_position.norm())) / radians;
+    auto trial = reacquisition;
+    if (!trial.empty() && trial.back().at == now) trial.back().z = position;
+    else trial.push_back({now, position});
+    std::optional<Fit> model;
+    double residual = 0;
+    if (consistent && trial.size() >= 4 && now - trial.front().at >= 100) {
+        model = fit(trial, now);
+        consistent = model && model->velocity.norm() <= speed_limit;
+        if (model)
+            for (const auto &p : trial) {
+                const Vec expected = model->position + model->velocity * ((p.at - now) / 1000);
+                residual = std::max(residual, (p.z - expected).norm());
+                consistent &= residual <= step_margin &&
+                    std::abs(wrap(p.z.angle() - expected.angle())) <= angle_margin;
+            }
+    }
+    if (!consistent) {
+        reacquisition.clear();
+        model.reset();
+    }
+    candidate_last_at = now;
+    candidate_last_position = position;
+    candidate_velocity = model ? model->velocity : Vec{};
+    if (reacquisition.empty() || now - reacquisition.back().at >= 25)
+        reacquisition.push_back({now, position});
+    trim(reacquisition, now, 3200, 128);
+    const double span = now - reacquisition.front().at;
+    diagnostics["candidate_hits"] = reacquisition.size();
+    diagnostics["candidate_ms"] = span;
+    diagnostics["candidate_required_ms"] = 1500;
+    diagnostics["candidate_speed_mps"] = model ? Json(model->velocity.norm()) : Json(nullptr);
+    diagnostics["candidate_residual_m"] = model ? Json(residual) : Json(nullptr);
+    const bool ready = span >= 1500 && reacquisition.size() >= 16;
+    if (ready) {
+        diagnostics["state"] = "recovering";
+        diagnostics["reason"] = "stable_new_track_confirmed";
+    }
+    return ready;
 }
 void OcclusionGuard::radio_loss() {
     if (anchor) {
@@ -100,15 +152,18 @@ bool OcclusionGuard::check(Vec position, double now) {
                  angle_error = std::abs(wrap(position.angle() - expected.angle()));
     if (!(error <= std::max(.30, step_margin) && angle_error <= angle_margin && !jump)) {
         ++bad_count;
-        interrupt_confirmation();
+        return_at = return_last_at = missing;
+        return_hits = 0;
         diagnostics = {{"state", bad_count >= 2 ? "quarantined" : "suspect"},
                        {"reason", "raw_position_jump"},
                        {"step_m", step},
                        {"return_error_m", error},
                        {"return_angle_error_deg", angle_error},
                        {"bad_count", bad_count}};
-        return false;
+        return confirm_new_track(position, now);
     }
+    reacquisition.clear();
+    candidate_last_at = missing;
     if (bad_count < 2) {
         diagnostics = {{"state", "clear"}, {"reason", "isolated_spike_returned"}};
         return true;
@@ -126,6 +181,7 @@ bool OcclusionGuard::check(Vec position, double now) {
     return now - return_at >= recovery_ms && return_hits >= 3;
 }
 void OcclusionGuard::accept(Vec position, double now) {
+    const bool new_track = diagnostics.value("reason", Json(nullptr)) == "stable_new_track_confirmed";
     const bool recovering = bad_count >= 2;
     if (recovering)
         history.clear();
@@ -144,7 +200,8 @@ void OcclusionGuard::accept(Vec position, double now) {
     bad_count = 0;
     interrupt_confirmation();
     diagnostics = {{"state", "clear"},
-                   {"reason", recovering ? Json("original_track_confirmed") : Json(nullptr)}};
+                   {"reason", new_track ? Json("stable_new_track_confirmed")
+                              : recovering ? Json("original_track_confirmed") : Json(nullptr)}};
 }
 Axis Axis::predicted(double dt, double q) const {
     Axis a = *this;
@@ -168,6 +225,7 @@ void Axis::correct(double measurement, double variance) {
 }
 static Json defaults(const Json &options) {
     Json c = {{"enabled", true},
+              {"trust_checks_enabled", true},
               {"distance_std_m", .12},
               {"angle_std_deg", 2.},
               {"acceleration_std_mps2", 2.},
@@ -182,7 +240,8 @@ static Json defaults(const Json &options) {
               {"occlusion_enabled", true}};
     c.update(options.value("config", Json::object()));
     for (const auto &[key, value] : c.items()) {
-        if (key == "enabled" || key == "adaptive_enabled" || key == "occlusion_enabled") {
+        if (key == "enabled" || key == "adaptive_enabled" || key == "occlusion_enabled" ||
+            key == "trust_checks_enabled") {
             if (!value.is_boolean())
                 throw std::invalid_argument("invalid boolean: " + key);
         } else if (!value.is_number() || !std::isfinite(value.get<double>()) ||
@@ -193,6 +252,10 @@ static Json defaults(const Json &options) {
         number(c, "moving_time_constant_s") > number(c, "stationary_time_constant_s") ||
         number(c, "stationary_time_constant_s") > 2 || number(c, "rejection_covariance_scale") < 1)
         throw std::invalid_argument("invalid filter bounds");
+    // Keep complete-frame filtering and smoothing enabled when admission
+    // heuristics are disabled. Never fall back to independent scalar fields.
+    if (!c["trust_checks_enabled"].get<bool>())
+        c["occlusion_enabled"] = false;
     return c;
 }
 UwbFilter::UwbFilter(const Json &o)
@@ -205,6 +268,13 @@ UwbFilter::UwbFilter(const Json &o)
                 number(config, "angle_std_deg") * scale) {
     if (scale <= 0 || (sign != 1 && sign != -1))
         throw std::invalid_argument("invalid bearing calibration");
+    if (!config["trust_checks_enabled"].get<bool>()) {
+        auto diagnostic_options = o;
+        diagnostic_options["config"] = config;
+        diagnostic_options["config"]["trust_checks_enabled"] = true;
+        diagnostic_options["config"]["occlusion_enabled"] = true;
+        diagnostic_filter = std::make_unique<UwbFilter>(diagnostic_options);
+    }
 }
 void UwbFilter::predict(double now) {
     if (!axes)
@@ -214,7 +284,8 @@ void UwbFilter::predict(double now) {
         a = a.predicted(dt, squared(number(config, "acceleration_std_mps2")));
     at = now;
 }
-Json UwbFilter::reject(double now, const std::string &why, double heading) {
+Json UwbFilter::reject(double now, const std::string &why, double heading, bool diagnose) {
+    if (diagnose && diagnostic_filter) diagnostic_filter->reject(now, why, heading);
     if (config["occlusion_enabled"] == true &&
         (why == "radio_invalid" || why == "distance_out_of_range"))
         occlusion.radio_loss();
@@ -308,6 +379,7 @@ Json UwbFilter::update(const Json &o) {
     nis = innovation = missing;
     if (!std::isfinite(now) || now <= 0)
         throw std::invalid_argument("measurement time must be positive");
+    if (diagnostic_filter) diagnostic_filter->update(o);
     auto reset_track = [&]() {
         axes.reset();
         at = last_accepted = missing;
@@ -317,22 +389,24 @@ Json UwbFilter::update(const Json &o) {
     };
     if (std::isfinite(at) && now < at) {
         reset_track();
-        return reject(now, "measurement_clock_reset", heading);
+        return reject(now, "measurement_clock_reset", heading, false);
     }
     if (!std::isfinite(distance) || distance < minimum || distance > maximum)
-        return reject(now, "distance_out_of_range", heading);
+        return reject(now, "distance_out_of_range", heading, false);
     if (!std::isfinite(azimuth) || std::abs(azimuth) > 180)
-        return reject(now, "azimuth_out_of_range", heading);
+        return reject(now, "azimuth_out_of_range", heading, false);
     if (o.contains("elevation_deg") && !o["elevation_deg"].is_null() &&
         (!std::isfinite(elevation) || std::abs(elevation) > 90))
-        return reject(now, "elevation_out_of_range", heading);
+        return reject(now, "elevation_out_of_range", heading, false);
     if (o.value("valid", true) == false)
-        return reject(now, "radio_invalid", heading);
+        return reject(now, "radio_invalid", heading, false);
     if (!std::isfinite(heading))
-        return reject(now, "heading_unavailable", heading);
+        return reject(now, "heading_unavailable", heading, false);
     const Json sequence = o.value("sequence_id", Json(nullptr)),
                identity = o.value("tag_id", Json(nullptr));
-    if ((!sequence.is_null() && sequence == last_sequence) || now == last_received) {
+    // Distinct source observations can arrive in the same serial read. Only
+    // unnumbered callers fall back to the receive clock for deduplication.
+    if (sequence.is_null() ? now == last_received : sequence == last_sequence) {
         auto r = result(now, heading);
         r["duplicate"] = true;
         return r;
@@ -343,7 +417,7 @@ Json UwbFilter::update(const Json &o) {
     if (has_tag && !tag.is_null() && tag != 0 && tag != identity) {
         reset_track();
         tag = identity;
-        return reject(now, "target_identity_changed", heading);
+        return reject(now, "target_identity_changed", heading, false);
     }
     if (has_tag)
         tag = identity;
@@ -358,15 +432,40 @@ Json UwbFilter::update(const Json &o) {
         nis = squared(residual.x) / ((*axes)[0].p00 + variance) +
               squared(residual.y) / ((*axes)[1].p00 + variance);
         innovation = residual.norm();
-        outlier = nis > number(config, "nis_threshold") ||
+        outlier = config["trust_checks_enabled"] == true &&
+                  (nis > number(config, "nis_threshold") ||
                   innovation > number(config, "absolute_gate_m") +
                                    number(config, "max_relative_speed_mps") *
-                                       std::max(0., (now - last_accepted) / 1000);
+                                       std::max(0., (now - last_accepted) / 1000));
     }
     if (config["occlusion_enabled"] == true && !occlusion.check(z, now)) {
         raw_window.clear();
         recovery_diagnostics = {{"reason", "occlusion_quarantine"}, {"hits", 0}};
-        return reject(now, outlier ? "innovation_outlier" : "occlusion_suspected", heading);
+        return reject(now, outlier ? "innovation_outlier" : "occlusion_suspected", heading, false);
+    }
+    if (config["occlusion_enabled"] == true &&
+        occlusion.diagnostics.value("reason", Json(nullptr)) == "stable_new_track_confirmed") {
+        // Reinitialize both position and velocity: the old prediction may have
+        // drifted arbitrarily far during quarantine, even with a small NIS.
+        axes = std::array<Axis, 2>{
+            Axis(z.x, variance, squared(number(config, "initial_velocity_std_mps"))),
+            Axis(z.y, variance, squared(number(config, "initial_velocity_std_mps")))};
+        (*axes)[0].velocity = occlusion.candidate_velocity.x;
+        (*axes)[1].velocity = occlusion.candidate_velocity.y;
+        at = last_accepted = now;
+        raw_window.clear();
+        ++accepted_count;
+        ++recovery_count;
+        status = "trusted";
+        reason = "stable_track_reacquired";
+        recovery_diagnostics = {{"reason", "stable_track_reacquired"},
+                                {"hits", occlusion.reacquisition.size()}};
+        occlusion.accept(z, now);
+        angular.reset();
+        update_angle(z, now);
+        auto r = result(now, heading);
+        r["accepted"] = true;
+        return r;
     }
     const auto candidate = raw_candidate(z, variance, now);
     if (!axes) {
@@ -394,7 +493,7 @@ Json UwbFilter::update(const Json &o) {
                 r["accepted"] = true;
                 return r;
             }
-            return reject(now, "innovation_outlier", heading);
+            return reject(now, "innovation_outlier", heading, false);
         }
         (*axes)[0].correct(z.x, variance);
         (*axes)[1].correct(z.y, variance);
@@ -434,6 +533,13 @@ Json UwbFilter::result(double now, double heading) const {
         {"occlusion_diagnostics", config["occlusion_enabled"] == true
                                       ? occlusion.diagnostics
                                       : Json{{"state", "disabled"}, {"reason", nullptr}}}};
+    if (diagnostic_filter) {
+        const auto diagnostic = diagnostic_filter->result(now, heading);
+        output["trust_diagnostics"] = {{"status", diagnostic["status"]},
+            {"reason", diagnostic["reason"]}, {"nis", diagnostic["nis"]},
+            {"innovationM", diagnostic["innovation_m"]},
+            {"occlusion", diagnostic["occlusion_diagnostics"]}, {"controlGating", false}};
+    }
     if (!axes)
         return output;
     const double dt = clamp((now - at) / 1000, 0, 10),

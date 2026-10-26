@@ -79,7 +79,7 @@ void RejectNmpc::observe(double now, const Json &t, const Json &r) {
         !std::isfinite(number(pos, "lon")) || !std::isfinite(number(att, "yaw")) ||
         quarantined(s) || !s.value("valid", true) ||
         s.value("measurementStatus", std::string()) != "trusted" ||
-        number(s, "receivedMeasurementAt") != number(e, "lastMeasuredAt") ||
+        number(s, "measurementSampleAt", number(s, "receivedMeasurementAt")) != number(e, "lastMeasuredAt") ||
         number(accepted, "measurementAt") == number(e, "lastMeasuredAt"))
         return;
     const auto velocity = e.value("targetVelocityNedMps", Json::object()),

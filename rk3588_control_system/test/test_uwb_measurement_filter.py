@@ -11,6 +11,36 @@ from backend.mavlink_bridge import MAVLinkBridge, FlightData, UWBData
 
 
 class MeasurementFilterTests(unittest.TestCase):
+    def test_disabled_trust_checks_accept_jumps_but_keep_smoothing_and_validation(self):
+        f = GatedUwbKalman({'trust_checks_enabled': False})
+        self.warm(f)
+        changed = f.update(15, 85, 2200, 0, sequence_id=12)
+        self.assertTrue(changed['accepted'])
+        self.assertGreater(changed['nis'], 9.21)
+        self.assertEqual(changed['occlusion_diagnostics']['state'], 'disabled')
+        self.assertEqual(changed['trust_diagnostics']['status'], 'suspect')
+        self.assertFalse(changed['trust_diagnostics']['controlGating'])
+        self.assertNotAlmostEqual(changed['distance_m'], 15)
+        self.assertTrue(f.update(15, 85, 2250, 0, sequence_id=12)['duplicate'])
+        for i, (distance, angle, valid, reason) in enumerate([
+                (float('nan'), 0, True, 'distance_out_of_range'),
+                (3, 181, True, 'azimuth_out_of_range'),
+                (3, 0, False, 'radio_invalid')]):
+            result = f.update(distance, angle, 2300 + i*25, 0, valid=valid, sequence_id=13+i)
+            self.assertFalse(result['accepted'])
+            self.assertEqual(result['reason'], reason)
+        self.assertTrue(f.update(4, -85, 2400, 0, sequence_id=20)['accepted'])
+
+    def test_shadow_quarantine_cannot_change_control_acceptance_or_radio_recovery(self):
+        f = GatedUwbKalman({'trust_checks_enabled': False})
+        for i in range(200):
+            result = f.update(3 if i < 40 else (5 if i % 2 else 7), 0, 1000+i*25, 0, sequence_id=i)
+            self.assertTrue(result['accepted'])
+        self.assertEqual(result['trust_diagnostics']['status'], 'suspect')
+        self.assertEqual(f.rejected_count, 0)
+        self.assertFalse(f.reject(6000, 'radio_invalid', 0)['accepted'])
+        self.assertTrue(f.update(8, 0, 6025, 0, sequence_id=201)['accepted'])
+
     def warm(self, f):
         for i in range(12): f.update(3, 0, 1000 + 100 * i, 0, sequence_id=i)
 
@@ -153,7 +183,42 @@ class BridgeGateTests(unittest.TestCase):
     def wire_pair(self, now, sample_time, distance=3):
         self.wire_value(now, 'UWB1_VALID', 1, sample_time)
         self.wire_value(now, 'UWB1_DIST', distance, sample_time)
-        self.wire_value(now, 'UWB1_AZ', 0, sample_time + 1)
+        self.wire_value(now, 'UWB1_EL', 0, sample_time)
+        self.wire_value(now, 'UWB1_AZ', 0, sample_time)
+
+    def test_distinct_frames_at_one_receive_time_are_not_duplicates(self):
+        self.wire_pair(1000, 100)
+        self.wire_pair(1000, 120, distance=3.1)
+        self.assertEqual(self.bridge._uwb_measurement_filters[1].accepted_count, 2)
+        self.assertGreater(self.bridge.uwb_fusion.receivers[1].distance_m, 3)
+
+    def test_near_frame_in_same_batch_invalidates_far_posterior(self):
+        self.wire_pair(1000, 100)
+        self.wire_pair(1000, 120, distance=.2)
+        sensor = self.bridge.uwb_fusion.receivers[1]
+        self.assertFalse(sensor.fresh(1000, 800))
+        self.assertEqual(sensor.raw_distance_m, .2)
+        self.assertEqual(sensor.measurement_status, 'suspect')
+
+    def test_dropped_fields_cannot_form_a_cross_frame_pair(self):
+        self.wire_value(1000, 'UWB1_DIST', 3, 100)
+        self.wire_value(1050, 'UWB1_AZ', 20, 150)
+        sensor = self.bridge.uwb_fusion.receivers[1]
+        self.assertIsNone(sensor.measurement_updated_at)
+        self.assertIsNone(self.bridge._uwb_measurement_filters[1].axes)
+        self.wire_pair(1100, 200)
+        self.assertEqual(sensor.measurement_updated_at, 1100)
+
+    def test_nonfinite_field_poisons_whole_observation(self):
+        for i, field in enumerate(('DIST', 'AZ', 'EL')):
+            stamp, now = 100 + i * 100, 1000 + i * 100
+            self.wire_value(now, 'UWB1_DIST', 3, stamp)
+            self.wire_value(now, 'UWB1_' + field, float('nan'), stamp)
+            self.wire_value(now, 'UWB1_DIST', 3, stamp)
+            self.wire_value(now, 'UWB1_AZ', 0, stamp)
+            self.assertIsNone(self.bridge.uwb_fusion.receivers[1].measurement_updated_at)
+        self.wire_pair(1400, 500)
+        self.assertEqual(self.bridge.uwb_fusion.receivers[1].measurement_updated_at, 1400)
 
     def test_new_wire_samples_stay_fresh_with_five_second_diagnostic_sequence(self):
         self.wire_value(1000, 'UWB1_SEQ', 7, 100)
@@ -195,5 +260,30 @@ class BridgeGateTests(unittest.TestCase):
         self.wire_pair(1000, 4294967200)
         self.wire_pair(1100, 0)
         self.assertEqual(self.bridge.uwb_fusion.receivers[1].measurement_updated_at, 1100)
+
+    def test_intervening_frame_does_not_allow_old_replay_to_refresh_clocks(self):
+        self.wire_pair(1000, 100)
+        self.wire_pair(1025, 125)
+        self.wire_pair(2000, 100)
+        receiver = self.bridge.uwb_fusion.receivers[1]
+        self.assertEqual(receiver.measurement_updated_at, 1025)
+        self.assertEqual(receiver.distance_sample_at, 1025)
+        self.assertFalse(receiver.fresh(2000, 800))
+
+    def test_missing_or_late_invalid_elevation_cannot_commit_or_revive(self):
+        self.wire_value(1000, 'UWB1_DIST', 3, 100)
+        self.wire_value(1000, 'UWB1_AZ', 0, 100)
+        receiver = self.bridge.uwb_fusion.receivers[1]
+        self.assertIsNone(receiver.measurement_updated_at)
+        self.wire_value(1025, 'UWB1_EL', 100, 100)
+        self.wire_pair(1025, 100)
+        self.assertIsNone(receiver.measurement_updated_at)
+        self.assertEqual(receiver.filter_reason, 'elevation_out_of_range')
+        self.wire_pair(1050, 150)
+        self.assertEqual(receiver.measurement_updated_at, 1050)
+        self.wire_value(1075, 'UWB1_EL', -100, 150)
+        self.assertFalse(receiver.fresh(1075, 800))
+        self.wire_pair(1075, 150)
+        self.assertFalse(receiver.fresh(1075, 800))
 
 if __name__ == '__main__': unittest.main()

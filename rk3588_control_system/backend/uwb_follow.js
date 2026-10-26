@@ -126,6 +126,8 @@ export class UwbFollowController {
       steeringReturnDegS: clamp(finite(config.steering_return_deg_s, 30), 1, 180),
       throttleAccelPercentS: clamp(finite(config.relative_throttle_accel_percent_s, 12), 1, 100),
       throttleDecelPercentS: clamp(finite(config.relative_throttle_decel_percent_s, 25), 1, 100),
+      turnDecelPercentS: clamp(finite(config.relative_turn_decel_percent_s, finite(config.relative_throttle_decel_percent_s, 25)), 1, 100),
+      turnMinimumThrottlePercent: clamp(finite(config.relative_turn_min_throttle_percent, 0), 0, 100),
       rangeDeadbandM: clamp(finite(config.range_deadband_m, 0.12), 0, 2),
       uwbTimeoutMs: Math.max(100, finite(config.uwb_timeout_ms, 700)),
       navigationTimeoutMs: Math.max(100, finite(config.navigation_timeout_ms, 700)),

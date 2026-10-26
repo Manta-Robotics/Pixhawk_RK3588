@@ -102,7 +102,13 @@ void ControlRuntime::guard_uwb() {
     // Preserve the original shared beacon/follow angular slew, on a service
     // clock that remains available when no browser or Web process is running.
     const double az = number(u, "azimuthDeg", 0), el = number(u, "elevationDeg", 0);
-    if (!u.value("online", false) || !u.value("fresh", false)) {
+    if (std::isfinite(number(u, "measurementSampleAt"))) {
+        // Already filtered in source time and rotated to the current IMU
+        // heading. Re-slewing it here would introduce another angular lag and
+        // detach the bearing from its declared heading/reference frame.
+        source_guard = nullptr;
+        guarded_uwb = u;
+    } else if (!u.value("online", false) || !u.value("fresh", false)) {
         source_guard = nullptr;
         guarded_uwb = u;
     } else if (mono >= next_guard || !guarded_uwb.is_object() || !source_guard.is_object()) {
@@ -401,11 +407,15 @@ Json ControlRuntime::relative_drive(Json &r) {
                                                   r),
                    bounded = normalized(number(requested, "throttle", 0),
                                         number(requested, "steering", 0));
-        const double throttle = std::max(0.0, number(bounded, "throttle")),
+        const auto allocation = allocate_forward_drive(number(bounded, "throttle"),
+            number(bounded, "steering"), throttle_span, steering_span,
+            std::min(throttle_span, throttle_limit));
+        const double throttle = number(allocation, "throttle"),
                      limit = throttle * std::max(1.0, steering_span) /
                              std::max(1.0, throttle_span) * .8;
         auto out =
-            drive(throttle, clamp(number(bounded, "steering"), -limit, limit), "UWB_IMU_RELATIVE");
+            drive(throttle, number(allocation, "steering"), "UWB_IMU_RELATIVE");
+        r["driveAllocation"] = allocation;
         controller().relative.track_applied(number(out, "throttle"), number(out, "steering"));
         r["throttlePercent"] = out["throttle"];
         r["steeringDegrees"] = out["steering"];
@@ -620,6 +630,11 @@ Json ControlRuntime::command(const Json &request, double at, double clock) {
     mono = clock;
     t = core.telemetry(wall, mono);
     guard_uwb();
+    if (t.value("uwb", Json::object()).value("clearanceStop", false)) {
+        if (active || !phase.empty() || resume->pending)
+            neutral("raw_distance_clearance");
+        core.acknowledge_uwb_clearance(wall);
+    }
     try {
         const auto name = request.value("command", std::string());
         const auto params = request.value("params", Json::object());
@@ -704,6 +719,11 @@ void ControlRuntime::tick(double at, double clock) {
     mono = clock;
     t = core.telemetry(wall, mono);
     guard_uwb();
+    if (t.value("uwb", Json::object()).value("clearanceStop", false)) {
+        if (active || !phase.empty() || resume->pending)
+            neutral("raw_distance_clearance");
+        core.acknowledge_uwb_clearance(wall);
+    }
     if (std::isfinite(last_tick) &&
         mono - last_tick > number(config, "rover_command_timeout_ms", 500) &&
         (active || !phase.empty()))

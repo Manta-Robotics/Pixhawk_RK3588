@@ -125,13 +125,17 @@ body[data-theme="light"] select{color-scheme:light}
 .imu-readout strong{font-size:16px;font-weight:600;font-family:var(--fm);color:var(--t1)}
 .imu-readout.success strong{color:var(--green)}.imu-readout.warning strong{color:var(--orange)}.imu-readout.danger strong{color:var(--red)}
 .uwb-panel{display:flex;align-items:center;gap:8px;margin-top:1px;padding-top:7px;border-top:1px solid var(--border);min-width:116px}
-.uwb-panel[data-state="offline"]{opacity:.5}.uwb-panel[data-state="online"] .uwb-dial{border-color:rgba(88,219,153,.62);box-shadow:0 0 12px rgba(88,219,153,.12)}
+.uwb-panel .uwb-dial{border-color:rgba(88,219,153,.62);box-shadow:0 0 12px rgba(88,219,153,.12)}
 .uwb-dial{position:relative;width:54px;height:54px;flex:0 0 54px;border:1px solid var(--border2);border-radius:50%;background:radial-gradient(circle,rgba(126,200,227,.08),transparent 68%);overflow:hidden}
 .uwb-dial::before,.uwb-dial::after{content:'';position:absolute;background:rgba(126,200,227,.16)}
 .uwb-dial::before{left:50%;top:7px;bottom:7px;width:1px}.uwb-dial::after{top:50%;left:7px;right:7px;height:1px}
 .uwb-dial b{position:absolute;left:50%;top:3px;transform:translateX(-50%);font:600 7px/1 var(--fm);letter-spacing:.6px;color:var(--t4)}
 .uwb-dot{position:absolute;z-index:2;left:50%;top:50%;width:7px;height:7px;border-radius:50%;background:var(--orange);box-shadow:0 0 8px var(--orange);transform:translate(-50%,-50%) translate(var(--uwb-x,0px),var(--uwb-y,0px));transition:transform .12s linear,background var(--fast)}
 .uwb-panel[data-state="online"] .uwb-dot{background:var(--green);box-shadow:0 0 8px var(--green)}
+
+@keyframes uwb-missing-point{0%,100%{opacity:1}50%{opacity:.2}}
+.uwb-dot[data-missing="true"],.relative-target[data-missing="true"],.relative-raw-target[data-missing="true"]{animation:uwb-missing-point 1.4s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){.uwb-dot[data-missing="true"],.relative-target[data-missing="true"],.relative-raw-target[data-missing="true"]{animation:none;opacity:.5}}
 .uwb-values{display:grid;gap:2px}.uwb-values span{font-size:8px;color:var(--t4);letter-spacing:.35px}.uwb-values strong{font:600 11px/1.2 var(--fm);color:var(--t1);white-space:nowrap}
 .imu-calibrate-btn{position:relative;z-index:2;font-size:11px;color:var(--ice);background:var(--ice-dim);border:none;border-radius:8px;padding:4px 10px;cursor:pointer;transition:all var(--fast)}
 .imu-calibrate-btn:hover{background:var(--ice-glow)}
@@ -156,7 +160,7 @@ body[data-theme="light"] select{color-scheme:light}
 .drive-follow-switch.active{border-color:rgba(45,212,191,.72);color:#76f7df;background:radial-gradient(circle,rgba(45,212,191,.2),rgba(45,212,191,.05) 68%);box-shadow:0 0 24px rgba(45,212,191,.14)}
 .drive-follow-switch:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
 .relative-position-panel{width:196px;height:196px;flex:0 0 196px;display:flex;flex-direction:column;padding:8px 9px 7px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(145deg,rgba(126,200,227,.055),rgba(255,255,255,.018));overflow:hidden}
-.relative-position-panel[data-state="offline"]{opacity:.5}.relative-position-panel[data-state="raw-only"]{border-color:rgba(255,169,76,.45)}.relative-position-panel[data-state="online"]{border-color:rgba(45,212,191,.32);box-shadow:inset 0 0 18px rgba(45,212,191,.035)}
+.relative-position-panel{border-color:rgba(45,212,191,.32);box-shadow:inset 0 0 18px rgba(45,212,191,.035)}
 .relative-position-head,.relative-position-foot{display:flex;align-items:center;justify-content:space-between;gap:7px;white-space:nowrap}
 .relative-position-head span{font-size:9px;font-weight:650;color:var(--t2);letter-spacing:.35px}.relative-position-head b{max-width:105px;overflow:hidden;text-overflow:ellipsis;font:600 7px/1 var(--fm);color:var(--t4);letter-spacing:.35px}
 .relative-position-plot{flex:1;min-height:0;margin:3px 0 2px}.relative-position-plot svg{display:block;width:100%;height:100%;overflow:visible}
@@ -506,7 +510,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
               <div class="imu-readout success"><span>校准状态</span><strong id="imuState">良好</strong></div>
               <div class="uwb-panel" id="uwbPanel" data-state="offline">
                 <div class="uwb-dial" aria-label="UWB 信标相对方位"><b>UWB</b><i class="uwb-dot" id="uwbDot"></i></div>
-                <div class="uwb-values"><span>距离</span><strong id="uwbDistance">-- m</strong><span>方位 / 俯仰</span><strong id="uwbAngles">--° / --°</strong></div>
+                <div class="uwb-values"><span id="uwbDistanceLabel">距离</span><strong id="uwbDistance">-- m</strong><span>方位 / 俯仰</span><strong id="uwbAngles">--° / --°</strong></div>
               </div>
             </div>
             <div class="module-offline" id="imuOffline" hidden><strong>IMU 未连接</strong><span>等待 Pixhawk 遥测</span></div>
@@ -1544,10 +1548,17 @@ function renderUwbStatus(){
   var display=uwbDisplaySmoother.view(state.connected?uwb:{},Date.now());
   var distance=display.distanceM,azimuth=display.azimuthDeg,elevation=Number(uwb.elevationDeg);
   var valid=Boolean(state.connected&&display.valid&&Number.isFinite(elevation));
+  // Display-only history: never promote held readings to valid telemetry.
+  if(!state.connected)lastCompactUwb=null;
+  if(valid)lastCompactUwb={distance:distance,azimuth:azimuth,elevation:elevation};
+  var shown=lastCompactUwb;
   panel.dataset.state=valid?"online":"offline";
-  $("#uwbDistance").textContent=valid?distance.toFixed(2)+" m":"-- m";
-  $("#uwbAngles").textContent=valid?azimuth.toFixed(1)+"° / "+elevation.toFixed(1)+"°":"--° / --°";
-  if(!valid){dot.style.setProperty("--uwb-x","0px");dot.style.setProperty("--uwb-y","0px");renderRelativePosition();return;}
+  dot.dataset.missing=String(!valid);
+  $("#uwbDistanceLabel").textContent=valid?localize("距离","Distance"):shown?localize("信号丢失 · 上次距离","Signal lost · last range"):localize("等待信号 · 距离","Waiting · range");
+  if(shown){distance=shown.distance;azimuth=shown.azimuth;elevation=shown.elevation;}
+  $("#uwbDistance").textContent=shown?distance.toFixed(2)+" m":"-- m";
+  $("#uwbAngles").textContent=shown?azimuth.toFixed(1)+"° / "+elevation.toFixed(1)+"°":"--° / --°";
+  if(!shown){dot.style.setProperty("--uwb-x","0px");dot.style.setProperty("--uwb-y","0px");renderRelativePosition();return;}
   var displayRange=Math.max(2,Math.min(20,distance)),radius=Math.min(19,19*distance/displayRange),angle=azimuth*Math.PI/180;
   dot.style.setProperty("--uwb-x",(-Math.sin(angle)*radius).toFixed(2)+"px");
   dot.style.setProperty("--uwb-y",(-Math.cos(angle)*radius).toFixed(2)+"px");
@@ -1555,6 +1566,8 @@ function renderUwbStatus(){
 }
 
 var uwbDisplaySmoother=new window.MantaUwbDisplaySmoother(120),relativeDisplaySmoother=new window.MantaUwbDisplaySmoother(120),rawUwbDisplay=new window.MantaUwbRawDisplay();
+// Held values belong only to this view and are cleared on disconnect.
+var lastCompactUwb=null,lastRelativeUwb=null,lastRawUwb=null;
 function renderRelativePosition(){
   var panel=$("#relativePositionPanel"),point=$("#relativeTargetPoint"),vector=$("#relativeTargetVector");
   if(!panel||!point||!vector)return;
@@ -1564,15 +1577,18 @@ function renderRelativePosition(){
   var predicted=Boolean(follow.active&&estimate.usable&&estimate.source==="predicted");
   if(predicted){distance=Math.hypot(estimate.relativeBodyM.x,estimate.relativeBodyM.y);azimuth=Math.atan2(-estimate.relativeBodyM.y,estimate.relativeBodyM.x)*180/Math.PI}
   var valid=Boolean(state.connected&&(predicted||display.valid)&&Number.isFinite(distance)&&Number.isFinite(azimuth));
-  point.setAttribute("visibility",valid?"visible":"hidden");vector.setAttribute("visibility",valid?"visible":"hidden");
-  rawPoint.setAttribute("visibility",raw.valid?"visible":"hidden");rawVector.setAttribute("visibility",raw.valid?"visible":"hidden");
-  point.style.opacity=predicted?"0.55":"1";vector.setAttribute("stroke-dasharray",predicted?"3 2":"none");
+  if(!state.connected){lastCompactUwb=null;lastRelativeUwb=null;lastRawUwb=null;}
+  if(raw.valid)lastRawUwb=raw;
+  var shownRaw=lastRawUwb,hasRaw=Boolean(shownRaw);
+  rawPoint.dataset.missing=String(!raw.valid);
+  rawPoint.setAttribute("visibility",hasRaw?"visible":"hidden");rawVector.setAttribute("visibility",hasRaw?"visible":"hidden");
+
   panel.dataset.state=valid?"online":raw.valid?"raw-only":"offline";
   $("#relativePositionTitle").textContent=predicted?localize("目标预测位置","Predicted target"):localize("目标相对位置","Relative target");
-  $("#relativeRawLabel").textContent=localize("○ 原始","○ Raw")+(raw.valid?localize("·基站","·RX ")+raw.receiverId:"");
-  $("#relativeRawValue").textContent=raw.valid?raw.distanceM.toFixed(2)+" m / "+raw.azimuthDeg.toFixed(1)+"°":"-- m / --°";
+  $("#relativeRawLabel").textContent=(!raw.valid&&hasRaw?localize("○ 上次原始","○ Last raw"):localize("○ 原始","○ Raw"))+(hasRaw?localize("·基站","·RX ")+shownRaw.receiverId:"");
+  $("#relativeRawValue").textContent=hasRaw?shownRaw.distanceM.toFixed(2)+" m / "+shownRaw.azimuthDeg.toFixed(1)+"°":"-- m / --°";
   $("#relativeRawValue").title=raw.valid?localize("模块原始值，未筛选，不用于控制。标签 ","Unscreened module values; not used for control. Tag ")+raw.tagId:localize("未收到新鲜完整定位帧","No fresh complete measurement");
-  $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):localize("● 可信","● Trusted");
+  $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):uwb.trustChecksEnabled===false?localize("● 平滑","● Smoothed"):localize("● 可信","● Trusted");
   var relative=predicted?estimate.relativeBodyM:follow.active&&!(follow.pausePropulsion&&estimate.source==="unavailable")?follow.relativeBodyM:null;
   if(valid&&relative&&!predicted){
     var relativeView=relativeDisplaySmoother.view(Object.assign({},uwb,{distanceM:Math.hypot(relative.x,relative.y),azimuthDeg:Math.atan2(-relative.y,relative.x)*180/Math.PI}),now);
@@ -1582,14 +1598,23 @@ function renderRelativePosition(){
   // UWB +Y is left; the controller's +Y is right.
   var forward=valid?(relative&&Number.isFinite(relative.x)?relative.x:distance*Math.cos(angle)):0;
   var left=valid?(relative&&Number.isFinite(relative.y)?-relative.y:distance*Math.sin(angle)):0;
-  var magnitude=Math.max(valid?Math.hypot(forward,left):0,raw.valid?Math.hypot(raw.forward,raw.left):0),scales=[1,2,5,10,20,50],scale=5;
-  if(valid||raw.valid){scale=scales[scales.length-1];for(var i=0;i<scales.length;i++){if(magnitude<=scales[i]*.9){scale=scales[i];break}}scale=Math.max(scale,Math.ceil(magnitude/.9));}
+  if(valid)lastRelativeUwb={forward:forward,left:left,distance:distance,azimuth:azimuth,predicted:predicted};
+  var shown=lastRelativeUwb,hasPosition=Boolean(shown),missingMeasurement=!state.connected||!display.valid;
+  if(shown){forward=shown.forward;left=shown.left;distance=shown.distance;azimuth=shown.azimuth;}
+  point.dataset.missing=String(missingMeasurement);
+  point.setAttribute("visibility",hasPosition||!hasRaw?"visible":"hidden");
+  vector.setAttribute("visibility",hasPosition?"visible":"hidden");
+  point.style.opacity=shown&&shown.predicted?"0.55":"1";
+  vector.setAttribute("stroke-dasharray",shown&&shown.predicted?"3 2":"none");
+  if(!valid&&shown)$("#relativeJudgedLabel").textContent=shown.predicted?localize("◌ 上次预测","◌ Last prediction"):localize("● 上次位置","● Last position");
+  var magnitude=Math.max(hasPosition?Math.hypot(forward,left):0,hasRaw?Math.hypot(shownRaw.forward,shownRaw.left):0),scales=[1,2,5,10,20,50],scale=5;
+  if(hasPosition||hasRaw){scale=scales[scales.length-1];for(var i=0;i<scales.length;i++){if(magnitude<=scales[i]*.9){scale=scales[i];break}}scale=Math.max(scale,Math.ceil(magnitude/.9));}
   function plot(dot,line,x,y){var px=90-clamp(y/scale,-1,1)*51,py=56-clamp(x/scale,-1,1)*51;dot.setAttribute("cx",px.toFixed(2));dot.setAttribute("cy",py.toFixed(2));line.setAttribute("x2",px.toFixed(2));line.setAttribute("y2",py.toFixed(2));}
-  if(valid)plot(point,vector,forward,left);
-  if(raw.valid)plot(rawPoint,rawVector,raw.forward,raw.left);
+  plot(point,vector,hasPosition?forward:0,hasPosition?left:0);
+  if(hasRaw)plot(rawPoint,rawVector,shownRaw.forward,shownRaw.left);
   $("#relativeRingLabel").textContent=scale+" m";
-  $("#relativePositionValue").textContent=valid?localize("前 ","FWD ")+forward.toFixed(2)+" · "+localize("左 ","LEFT ")+left.toFixed(2):localize("可信位置：暂无","Trusted position unavailable");
-  $("#relativeRangeValue").textContent=valid?distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°":state.connected&&(raw.valid||(uwb.sensors||[]).some(function(s){return s.measurementStatus==="suspect"}))?localize("拒收 / 等待恢复","Rejected / waiting"):"-- m / --°";
+  $("#relativePositionValue").textContent=hasPosition?localize("前 ","FWD ")+forward.toFixed(2)+" · "+localize("左 ","LEFT ")+left.toFixed(2):localize("可信位置：暂无","Trusted position unavailable");
+  $("#relativeRangeValue").textContent=hasPosition?distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°":state.connected&&(raw.valid||(uwb.sensors||[]).some(function(s){return s.measurementStatus==="suspect"}))?localize("拒收 / 等待恢复","Rejected / waiting"):"-- m / --°";
   var activeIds=Array.isArray(uwb.activeReceiverIds)?uwb.activeReceiverIds:[],mode=String(uwb.fusionMode||"");
   var sensors=uwb.sensors||[],sensor=sensors.find(function(s){return s.receiverId===raw.receiverId})||sensors[0]||{};
   var quarantine=sensors.some(function(s){return s.occlusionDiagnostics&&["suspect","quarantined","recovering"].includes(s.occlusionDiagnostics.state)});
@@ -1597,6 +1622,9 @@ function renderRelativePosition(){
   var reason=uwb.rejectionReason||sensor.fusionExclusionReason||sensor.filterReason||sensor.invalidReason||"";
   var reasons={occlusion_suspected:localize("突跳隔离","Jump quarantine"),innovation_outlier:localize("创新偏差过大","Innovation outlier"),outside_receiver_fov:localize("超出视野","Outside FOV"),distance_out_of_range:localize("距离超限","Range rejected"),radio_invalid:localize("无线定位无效","Radio invalid"),heading_unavailable:localize("航向不可用","Heading unavailable"),stale_measurement:localize("可信数据过期","Trusted data stale")};
   var decision=!state.connected?localize("连接已断开","Disconnected"):predicted?localize("预测，非可信实测","Prediction, not a trusted observation"):valid?localize("已接纳；原始值仅供对照","Accepted; raw values for comparison"):!raw.valid?localize("无新鲜定位帧","No fresh measurement"):localize("未接纳：","Rejected: ")+(quarantine?localize("突跳隔离","Jump quarantine"):reasons[reason]||localize("等待可信位置","Waiting for trusted position"));
+  if(state.connected&&!predicted&&uwb.trustChecksEnabled===false)decision=valid?localize("可信度仅作诊断；使用平滑测量","Trust diagnostic only; smoothed measurement"):localize("可信度仅作诊断；等待完整有效帧","Trust diagnostic only; waiting for a valid complete frame");
+  if(state.connected&&uwb.trustChecksEnabled===false&&sensor.trustDiagnostics){var diagnostic=sensor.trustDiagnostics;decision+=localize("；旁路：","; diagnostic: ")+(sensor.withinFov===false?localize("超出标称视野","outside nominal FOV"):diagnostic.status==="suspect"?localize("可疑（不停推）","suspect (no stop)"):localize("正常","normal"));}
+  if(state.connected&&!valid&&shown)decision=localize("信号丢失；显示上次位置","Signal lost; showing last position");
   $("#relativeDecision").textContent=decision;$("#relativeDecision").title=decision+(reason?" ("+reason+")":"");
 }
 

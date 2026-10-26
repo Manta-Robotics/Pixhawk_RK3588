@@ -128,6 +128,11 @@ Json IntermittentFollow::update(FollowController &controller, double now, const 
     const auto &c = controller.config;
     control_mode = c["executionMode"] == "acro" || requested == "relative_acro" ? "relative_acro"
                                                                                 : "relative_manual";
+    if (t.value("uwb", Json::object()).value("clearanceStop", false)) {
+        reset();
+        controller.reset();
+        return neutral("raw_distance_clearance", nullptr, true);
+    }
     if (!config.value("enabled", false))
         return controller.update(now, t, connected, requested);
     if (std::isfinite(last_now) && now < last_now)
@@ -189,7 +194,7 @@ Json IntermittentFollow::update(FollowController &controller, double now, const 
         u.value("online", false) && u.value("fresh", false) &&
         std::isfinite(number(u, "distanceM")) && number(u, "distanceM") > 0 &&
         std::isfinite(number(u, "azimuthDeg")) &&
-        fresh_time(number(u, "measurementUpdatedAt"), now, number(c, "uwbTimeoutMs"));
+        fresh_time(measurement_time(u), now, number(c, "uwbTimeoutMs"));
     const auto id = raw_fresh ? target_identity(u) : Json(nullptr);
     if (!id.is_null() && !target_id.is_null() && id != target_id)
         return neutral("target_identity_changed", estimate, false);
@@ -205,7 +210,7 @@ Json IntermittentFollow::update(FollowController &controller, double now, const 
         if (was_lost) {
             const auto previous = raw_recovery;
             const auto token = measurement_key(u);
-            const double at = number(u, "measurementUpdatedAt");
+            const double at = measurement_time(u);
             if (!previous.is_object() ||
                 (at > number(previous, "at") && previous["token"] != token)) {
                 const double dt = previous.is_object() ? (at - number(previous, "at")) / 1000 : 0;
@@ -238,7 +243,7 @@ Json IntermittentFollow::update(FollowController &controller, double now, const 
         const double scale = clamp((now - raw_recovered_at) / n("recovery_blend_ms"), 0, 1);
         auto e = estimate;
         e.update({{"source", "recovering"},
-                  {"lastMeasuredAt", u["measurementUpdatedAt"]},
+                  {"lastMeasuredAt", nullable(measurement_time(u))},
                   {"relativeBodyM", vector_json(body)}});
         result.update({{"status", "recovering"},
                        {"reason", "prediction_recovering"},
@@ -256,7 +261,7 @@ Json IntermittentFollow::update(FollowController &controller, double now, const 
         (source == "recovering" && estimate.value("usable", false) && position_scale == 1) ||
         (!was_lost && reason == "prediction_pose_unavailable" && u.value("online", false) &&
          u.value("fresh", false) &&
-         fresh_time(number(u, "measurementUpdatedAt"), now, number(c, "uwbTimeoutMs")));
+         fresh_time(measurement_time(u), now, number(c, "uwbTimeoutMs")));
     if (measured && source == "unavailable")
         estimator.loss_at = missing;
     const bool predicted = source == "predicted";

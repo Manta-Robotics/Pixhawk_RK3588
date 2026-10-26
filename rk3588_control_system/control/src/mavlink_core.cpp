@@ -1,6 +1,7 @@
 #include "manta/mavlink_core.hpp"
 #include <cctype>
 #include <cstring>
+#include <random>
 
 namespace manta {
 namespace {
@@ -39,6 +40,9 @@ bool fresh(double now, double at, double limit) {
 MavlinkCore::MavlinkCore(Json c, Wire w, Event e, std::function<void()> clear)
     : config(std::move(c)), uwb(config), wire(std::move(w)), event(std::move(e)),
       clear_pending(std::move(clear)) {
+    std::random_device random;
+    uwb_epoch_nonce = int64_t(((uint64_t(random()) << 32) | random()) & 0x3FFFFFFFFFFFFFFFULL);
+    uwb_source_instance = std::to_string(uwb_epoch_nonce);
     state = {
         {"position", {{"lat", 0}, {"lon", 0}, {"alt", 0}, {"source", ""}, {"updatedAt", nullptr}}},
         {"attitude",
@@ -165,6 +169,21 @@ void MavlinkCore::disconnect(double at, double clock) {
     if (online)
         emit("connection", {{"connected", false}});
     online = false;
+    uwb.expire_partial(wall, true);
+    publish_uwb_measurements();
+    // A transport session owns all UWB clocks, pending fields and filter state.
+    // Reconstruct with the configured geometry; never carry observations or
+    // source-clock high-water marks across a reboot/reconnect.
+    uwb = UwbPipeline(config);
+    uwb_streams.clear();
+    uwb_started.clear();
+    uwb_epoch_ready = false;
+    uwb_epoch_pending = false;
+    uwb_epoch_sent = -1e12;
+    uwb_timing.reset();
+    attitude_stamp_ready = false;
+    state["attitude"]["updatedAt"] = nullptr;
+    emit("uwb", uwb.payload(wall));
     state["armed"] = false;
     state["pilotSteering"] = {{"type", nullptr}, {"ready", false}};
     parameters = Json::object();
@@ -199,9 +218,29 @@ void MavlinkCore::configure_intervals() {
     interval_waiting = false;
     interval_sent = -1e12;
 }
+void MavlinkCore::request_uwb_epoch() {
+    mavlink_timesync_t value{};
+    value.ts1 = ++uwb_epoch_nonce;
+    mavlink_message_t message{};
+    mavlink_msg_timesync_encode_status(255, 0, &tx_status, &message, &value);
+    send(message);
+    uwb_epoch_sent = mono;
+    uwb_epoch_pending = true;
+}
+void MavlinkCore::publish_uwb_measurements() {
+    for (auto record : uwb.measurements) {
+        record["recordId"] = ++uwb_record_id;
+        record["sourceSession"] = uwb_session_id;
+        record["sourceInstance"] = uwb_source_instance;
+        emit("uwb_measurement", record);
+    }
+    uwb.measurements = Json::array();
+}
 void MavlinkCore::tick(double at, double clock) {
     wall = at;
     mono = clock;
+    uwb.expire_partial(wall);
+    publish_uwb_measurements();
     if (online &&
         mono - heartbeat_at > std::max(3000.0, number(config, "heartbeat_interval", 1) * 3500)) {
         log("ERROR", "Pixhawk heartbeat lost; control link closed");
@@ -222,6 +261,8 @@ void MavlinkCore::tick(double at, double clock) {
         heartbeat_sent = mono;
     }
     if (online) {
+        if (mono - uwb_epoch_sent >= 1000)
+            request_uwb_epoch();
         // ACK 511 has no message ID. Keep one interval request in flight, while
         // receiving telemetry and serving commands throughout startup.
         if (interval_waiting && mono - interval_sent >= 800) {
@@ -407,6 +448,17 @@ template <class T> void MavlinkCore::esc(const T &v, int base) {
 }
 
 void MavlinkCore::parse(const mavlink_message_t &message) {
+    // Track the entire source stream, including attitude/heartbeat packets
+    // interleaved between Lua sends. Only an actual sequence gap breaks legacy
+    // assembly; known intervening telemetry is not packet loss.
+    auto [stream, first] = uwb_streams.try_emplace(
+        std::pair<int, int>{message.sysid, message.compid}, std::pair<int, uint64_t>{message.seq, 0});
+    if (!first) {
+        if (((int(message.seq) - stream->second.first) & 255) != 1)
+            ++stream->second.second;
+        stream->second.first = message.seq;
+    }
+    const auto continuity = stream->second.second;
     if (message.msgid == MAVLINK_MSG_ID_HEARTBEAT) {
         mavlink_heartbeat_t v{};
         mavlink_msg_heartbeat_decode(&message, &v);
@@ -424,6 +476,7 @@ void MavlinkCore::parse(const mavlink_message_t &message) {
         if (!online) {
             online = true;
             emit("connection", {{"connected", true}});
+            request_uwb_epoch();
         }
         const auto mode = modes.contains(v.custom_mode)
                               ? modes.at(v.custom_mode)
@@ -451,6 +504,40 @@ void MavlinkCore::parse(const mavlink_message_t &message) {
         (message.sysid != target_system || message.compid != target_component))
         return;
     switch (message.msgid) {
+    case MAVLINK_MSG_ID_TIMESYNC: {
+        mavlink_timesync_t v{};
+        mavlink_msg_timesync_decode(&message, &v);
+        if (uwb_epoch_pending && v.tc1 > 0 && v.ts1 == uwb_epoch_nonce &&
+            mono >= uwb_epoch_sent && mono - uwb_epoch_sent <= 500) {
+            // ArduPilot echoes our unpredictable cookie in ts1 and supplies
+            // its receive boot clock (ns) in tc1. Bytes queued before this
+            // round trip cannot create a UWB frame in the new session.
+            const auto boot = uint32_t(uint64_t(v.tc1) / 1000000);
+            const bool reboot = uwb_epoch_ready &&
+                std::abs(double(int32_t(boot - uwb_epoch_boot)) - (mono - uwb_epoch_at)) > 1500;
+            if (!uwb_epoch_ready || reboot) {
+                uwb.expire_partial(wall, true);
+                publish_uwb_measurements();
+                uwb = UwbPipeline(config);
+                uwb_timing.reset();
+                attitude_stamp_ready = false;
+                ++uwb_session_id;
+                uwb_started.clear();
+                uwb_epoch_floor = boot;
+                state["attitude"]["updatedAt"] = nullptr;
+                emit("uwb", uwb.payload(wall));
+            } else if (uint32_t(boot - uwb_epoch_floor) > 500 &&
+                       uint32_t(boot - uwb_epoch_floor) < 0x80000000U)
+                uwb_epoch_floor = boot - 500;
+            uwb_epoch_boot = boot;
+            uwb_epoch_rtt = mono - uwb_epoch_sent;
+            uwb_epoch_at = mono;
+            uwb_epoch_ready = true;
+            uwb_epoch_pending = false;
+            uwb_timing.synchronize(boot, wall, uwb_epoch_rtt);
+        }
+        break;
+    }
     case MAVLINK_MSG_ID_PARAM_VALUE: {
         mavlink_param_value_t v{};
         mavlink_msg_param_value_decode(&message, &v);
@@ -474,6 +561,20 @@ void MavlinkCore::parse(const mavlink_message_t &message) {
         if (!std::isfinite(v.roll) || !std::isfinite(v.pitch) || !std::isfinite(v.yaw) ||
             !std::isfinite(v.yawspeed))
             break;
+        const bool aligned = config.value("uwb_time_alignment", Json::object()).value("enabled", true);
+        if (aligned && uwb_epoch_ready) {
+            const double age = int32_t(v.time_boot_ms - uwb_epoch_boot);
+            if (int32_t(v.time_boot_ms - uwb_epoch_floor) < 0 ||
+                age > mono - uwb_epoch_at + uwb_epoch_rtt + 250 || age < mono - uwb_epoch_at - 2000)
+                break;
+            uwb_timing.attitude(v.time_boot_ms, v.yaw / radians, v.yawspeed / radians);
+            // Keep historical poses for interpolation without rolling the live
+            // vehicle attitude back when delayed telemetry arrives.
+            if (attitude_stamp_ready && int32_t(v.time_boot_ms - attitude_stamp) <= 0) break;
+            attitude_stamp = v.time_boot_ms;
+            attitude_stamp_ready = true;
+            uwb.reference_heading = v.yaw / radians;
+        }
         state["attitude"] = {{"roll", v.roll / radians},
                              {"pitch", v.pitch / radians},
                              {"yaw", v.yaw / radians},
@@ -634,10 +735,31 @@ void MavlinkCore::parse(const mavlink_message_t &message) {
     case MAVLINK_MSG_ID_NAMED_VALUE_FLOAT: {
         mavlink_named_value_float_t v{};
         mavlink_msg_named_value_float_decode(&message, &v);
-        if (uwb.update(fixed_string(v.name, 10), v.value, wall,
+        const auto name = fixed_string(v.name, 10);
+        const auto parsed = UwbFusion::parse_name(name);
+        if (!parsed || !uwb_epoch_ready || message.sysid != target_system)
+            break;
+        const uint32_t since_floor = v.time_boot_ms - uwb_epoch_floor;
+        const double age = int32_t(v.time_boot_ms - uwb_epoch_boot);
+        // Do not let a delayed pre-reboot high timestamp poison the new
+        // source-clock high-water mark. Accommodate <=250 ms transport jitter.
+        if (since_floor == 0 || since_floor >= 0x80000000U ||
+            age > mono - uwb_epoch_at + uwb_epoch_rtt + 250 || age < mono - uwb_epoch_at - 500)
+            break;
+        const auto key = std::tuple{int(message.sysid), int(message.compid), parsed->first};
+        if (parsed->second == "DIST")
+            uwb_started.insert(key);
+        else if ((parsed->second == "EL" || parsed->second == "AZ") && !uwb_started.contains(key))
+            break;
+        std::function<Json(uint32_t, double)> align;
+        if (config.value("uwb_time_alignment", Json::object()).value("enabled", true))
+            align = [&](uint32_t stamp, double received) { return uwb_timing.alignment(stamp, received); };
+        if (uwb.update(name, v.value, wall,
                        Json::array({message.sysid, message.compid}), v.time_boot_ms,
-                       number(state["attitude"], "yaw"), number(state["attitude"], "updatedAt")))
+                       number(state["attitude"], "yaw"), number(state["attitude"], "updatedAt"),
+                       continuity, align))
             emit("uwb", uwb.payload(wall));
+        publish_uwb_measurements();
         break;
     }
     case MAVLINK_MSG_ID_STATUSTEXT: {
