@@ -1588,7 +1588,7 @@ function renderRelativePosition(){
   $("#relativeRawLabel").textContent=(!raw.valid&&hasRaw?localize("○ 上次原始","○ Last raw"):localize("○ 原始","○ Raw"))+(hasRaw?localize("·基站","·RX ")+shownRaw.receiverId:"");
   $("#relativeRawValue").textContent=hasRaw?shownRaw.distanceM.toFixed(2)+" m / "+shownRaw.azimuthDeg.toFixed(1)+"°":"-- m / --°";
   $("#relativeRawValue").title=raw.valid?localize("模块原始值，未筛选，不用于控制。标签 ","Unscreened module values; not used for control. Tag ")+raw.tagId:localize("未收到新鲜完整定位帧","No fresh complete measurement");
-  $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):uwb.trustChecksEnabled===false?localize("● 平滑","● Smoothed"):localize("● 可信","● Trusted");
+  $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):uwb.controlSource==="raw"?localize("● 原始控制","● Raw control"):uwb.trustChecksEnabled===false?localize("● 平滑","● Smoothed"):localize("● 可信","● Trusted");
   var relative=predicted?estimate.relativeBodyM:follow.active&&!(follow.pausePropulsion&&estimate.source==="unavailable")?follow.relativeBodyM:null;
   if(valid&&relative&&!predicted){
     var relativeView=relativeDisplaySmoother.view(Object.assign({},uwb,{distanceM:Math.hypot(relative.x,relative.y),azimuthDeg:Math.atan2(-relative.y,relative.x)*180/Math.PI}),now);
@@ -1624,6 +1624,7 @@ function renderRelativePosition(){
   var decision=!state.connected?localize("连接已断开","Disconnected"):predicted?localize("预测，非可信实测","Prediction, not a trusted observation"):valid?localize("已接纳；原始值仅供对照","Accepted; raw values for comparison"):!raw.valid?localize("无新鲜定位帧","No fresh measurement"):localize("未接纳：","Rejected: ")+(quarantine?localize("突跳隔离","Jump quarantine"):reasons[reason]||localize("等待可信位置","Waiting for trusted position"));
   if(state.connected&&!predicted&&uwb.trustChecksEnabled===false)decision=valid?localize("可信度仅作诊断；使用平滑测量","Trust diagnostic only; smoothed measurement"):localize("可信度仅作诊断；等待完整有效帧","Trust diagnostic only; waiting for a valid complete frame");
   if(state.connected&&uwb.trustChecksEnabled===false&&sensor.trustDiagnostics){var diagnostic=sensor.trustDiagnostics;decision+=localize("；旁路：","; diagnostic: ")+(sensor.withinFov===false?localize("超出标称视野","outside nominal FOV"):diagnostic.status==="suspect"?localize("可疑（不停推）","suspect (no stop)"):localize("正常","normal"));}
+  if(state.connected&&!predicted&&uwb.controlSource==="raw")decision=valid?localize("使用完整原始帧控制","Control uses complete raw frames"):localize("等待新鲜、完整的原始帧","Waiting for fresh complete raw frames");
   if(state.connected&&!valid&&shown)decision=localize("信号丢失；显示上次位置","Signal lost; showing last position");
   $("#relativeDecision").textContent=decision;$("#relativeDecision").title=decision+(reason?" ("+reason+")":"");
 }

@@ -18,7 +18,10 @@ class UwbPipeline {
     UwbFusion fusion;
 
   private:
+    bool raw_control = false;
     std::vector<UwbFilter> filters;
+    // Translate host "now" to each filter's fixed source timeline for prediction.
+    std::array<double, 2> filter_clock_offset{};
     struct Scalar {
         double estimate = missing, uncertainty = 1;
     };

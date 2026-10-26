@@ -4,8 +4,9 @@ namespace manta {
 static Json fusion_options(const Json &config) {
     auto options = config.value("uwb_dual", Json::object());
     const auto filter = config.value("uwb_measurement_filter", Json::object());
-    options["require_gated_measurements"] = filter.value("enabled", true);
-    options["trust_checks_enabled"] = filter.value("trust_checks_enabled", true);
+    const bool raw = filter.value("control_source", std::string("filtered")) == "raw";
+    options["require_gated_measurements"] = raw || filter.value("enabled", true);
+    options["trust_checks_enabled"] = !raw && filter.value("trust_checks_enabled", true);
     if (options.contains("position_x_m"))
         options["receiver_position_x_m"] = options["position_x_m"];
     if (options.contains("position_y_m"))
@@ -17,7 +18,9 @@ UwbPipeline::UwbPipeline(const Json &config) : fusion(fusion_options(config)) {
     stop_distance = std::max(.1, number(follow, "safety_distance_m", .45));
     resume_distance = std::max(stop_distance + .05,
                               number(follow, "hard_stop_resume_distance_m", stop_distance + .1));
-    const auto f = config.value("uwb_measurement_filter", Json::object());
+    auto f = config.value("uwb_measurement_filter", Json::object());
+    raw_control = f.value("control_source", std::string("filtered")) == "raw";
+    f.erase("control_source"); // Pipeline selector is not a Kalman parameter.
     const auto b = config.value("gimbal", Json::object()).value("beacon", Json::object());
     bearing_sign = number(b, "yaw_source_sign", -1);
     bearing_scale = number(b, "yaw_source_scale", .8148);
@@ -83,6 +86,7 @@ bool UwbPipeline::update(const std::string &name, double value, double now, cons
         heading = number(timing, "headingDeg");
     }
     const double filter_now = number(timing, "filterTimeMs", now);
+    filter_clock_offset.at(id - 1) = filter_now - number(timing, "sampleAt", now);
     Json filtered = nullptr;
     if (fusion.gated) {
         const auto &field = result->second;
@@ -106,6 +110,16 @@ bool UwbPipeline::update(const std::string &name, double value, double now, cons
                            {"tag_id", d["tagId"]}});
         } else if (field == "EL" && std::abs(value) <= 90)
             fusion.set_filtered(id, "EL", value);
+        if (raw_control && r.measurement_completed && d["valid"] != false) {
+            // The fusion parser has validated range/angle, complete frame,
+            // source identity and replay ordering. No KF/heading admission gate
+            // may suppress a fresh raw observation in explicitly selected raw mode.
+            const auto diagnostics = filtered.is_object() ? filtered.value("trust_diagnostics", Json(nullptr)) : Json(nullptr);
+            filtered = {{"trust_diagnostics", diagnostics}, {"accepted", true}, {"admission_version", 1},
+                        {"status", "trusted"}, {"reason", "raw_complete_frame"},
+                        {"distance_m", d["rawDistanceM"]}, {"azimuth_deg", d["rawAzimuthDeg"]},
+                        {"accepted_at", now}, {"angular_filter_mode", "raw"}};
+        }
         if (filtered.is_object()) {
             auto admitted = filtered;
             // Preserve the v1 receipt/admission contract; source time is an
@@ -251,7 +265,7 @@ Json UwbPipeline::payload(double now) {
     if (fusion.gated)
         for (int i = 0; i < 2; ++i)
             fusion.receivers[i].data["filterUncertaintyM"] =
-                filters[i].result(now)["uncertainty_m"];
+                raw_control ? Json(nullptr) : filters[i].result(now + filter_clock_offset[i])["uncertainty_m"];
     const auto f = fusion.fused(now);
     const bool fresh = f["fresh"];
     Json p = {{"online", fresh},
@@ -264,8 +278,9 @@ Json UwbPipeline::payload(double now) {
                          : fusion.enabled == std::vector<int>{2}
                              ? "TELEM2_NAMED_VALUE_FLOAT"
                              : "TELEM1_TELEM2_NAMED_VALUE_FLOAT"},
+              {"controlSource", raw_control ? "raw" : "filtered"},
               {"trustChecksEnabled", fusion.trust_checks},
-              {"filter", fusion.gated ? (fusion.trust_checks ? "raw_validation_innovation_gate_cv_kalman_then_fusion"
+              {"filter", raw_control ? "complete_frame_raw_then_body_xy_fusion" : fusion.gated ? (fusion.trust_checks ? "raw_validation_innovation_gate_cv_kalman_then_fusion"
                                                              : "complete_frame_cv_kalman_then_fusion")
                                       : "fast_per_receiver_kalman_then_body_xy_fusion"},
               {"measurementStatus", fresh ? "trusted" : "unavailable"},

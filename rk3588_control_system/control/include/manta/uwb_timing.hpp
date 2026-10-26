@@ -3,9 +3,10 @@
 #include <deque>
 
 namespace manta {
-// Source time advances the filter; receipt time remains transport diagnostics.
-// The offset is fixed within a session: a slower TIMESYNC reply must not move
-// already accepted observations backwards or change their relative spacing.
+// Keep two clocks: a session-fixed source timeline for filter/pose spacing,
+// and a refreshed host mapping for freshness. Host/FCU oscillator skew (including
+// VM clock corrections) must not accumulate into fictitious transport delay.
+// Refreshing the mapping never changes timestamps of already admitted samples.
 class UwbTiming {
   public:
     void reset() { poses.clear(); ready = false; }
@@ -13,13 +14,16 @@ class UwbTiming {
         const double midpoint = received - rtt / 2;
         if (!ready) {
             anchor = midpoint;
-            uncertainty = rtt / 2 + 1;
             ready = true;
         } else {
             anchor += int32_t(boot - origin);
-            uncertainty = std::max(rtt / 2 + 1, std::abs(anchor - midpoint) + 1);
         }
         origin = boot;
+        // tc1 lies inside this authenticated round trip. Use its send bound,
+        // not packet receipt, so real queued data cannot be made artificially
+        // younger. A slower reply conservatively increases age by at most RTT.
+        age_anchor = received - rtt;
+        uncertainty = rtt + 1; // Includes source milliseconds quantization.
     }
     double mapped(uint32_t stamp) const {
         return ready ? anchor + int32_t(stamp - origin) : missing;
@@ -36,11 +40,13 @@ class UwbTiming {
     }
     Json alignment(uint32_t stamp, double received) const {
         const double at = mapped(stamp);
+        const double sample = ready ? age_anchor + int32_t(stamp - origin) : missing;
         Json out = {{"sourceTimeBootMs", stamp}, {"sourceTimeKind", "lua_processing"},
-                    {"filterTimeMs", nullable(at)}, {"sampleAt", nullable(std::min(at, received))},
+                    {"filterTimeMs", nullable(at)}, {"sampleAt", nullable(std::min(sample, received))},
                     {"receivedAt", received}, {"clockUncertaintyMs", uncertainty},
-                    {"clockLeadMs", nullable(std::max(0., at - received))},
-                    {"transportDelayMs", nullable(std::max(0., received - at))},
+                    {"clockLeadMs", nullable(std::max(0., sample - received))},
+                    {"clockOffsetCorrectionMs", nullable(age_anchor - anchor)},
+                    {"transportDelayMs", nullable(std::max(0., received - sample))},
                     {"headingDeg", nullptr}, {"headingMethod", "unavailable"},
                     {"headingSpanMs", nullptr}};
         if (!std::isfinite(at) || poses.empty()) return out;
@@ -65,7 +71,7 @@ class UwbTiming {
     struct Pose { double at, yaw, rate; };
     bool ready = false;
     uint32_t origin = 0;
-    double anchor = missing, uncertainty = missing;
+    double anchor = missing, age_anchor = missing, uncertainty = missing;
     std::deque<Pose> poses;
 };
 } // namespace manta

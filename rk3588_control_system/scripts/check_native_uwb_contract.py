@@ -35,6 +35,7 @@ class UwbWireContractTests(unittest.TestCase):
         # Existing admission regressions exercise the optional guarded mode.
         # The deployed smoothing-only mode is covered separately below.
         self.config['uwb_measurement_filter']['trust_checks_enabled'] = True
+        self.config['uwb_measurement_filter']['control_source'] = 'filtered'
         self.sender = mav.MAVLink(None, srcSystem=1, srcComponent=1)
         self.now = 1_000_000
         self.requests = [dict(op='reset', config=self.config)]
@@ -197,6 +198,102 @@ class UwbWireContractTests(unittest.TestCase):
         last = self.results()[-1]
         self.assertEqual(sample(last)['headingMethod'], 'unavailable')
         self.assertFalse(last['state']['uwb']['fresh'])
+
+    def test_clock_skew_of_5800_ms_keeps_new_frames_fresh_and_filter_spacing_stable(self):
+        for step in (900, 1100):
+            with self.subTest(source_step=step):
+                self.setUp()
+                start = self.now
+                indices = []
+                for i in range(59):
+                    self.now = start + i * 1000
+                    self.receive([mav.MAVLink_heartbeat_message(10, 3, 129, 0, 4, 3)])
+                    self.requests.append(dict(op='tick', wall_ms=self.now, mono_ms=self.now))
+                    self.sync_session(1000 + i * step, heading=False)
+                    self.now += 40
+                    stamp = 1020 + i * step
+                    self.receive([self.pose(stamp, 0)] + self.pair(stamp))
+                    indices.append(len(self.requests)-1)
+                rows = self.results()
+                previous = None
+                for index in indices:
+                    u = rows[index]['state']['uwb']
+                    self.assertTrue(u['fresh'])
+                    sensor = u['sensors'][0]
+                    timing = sensor['sampleTiming']
+                    self.assertAlmostEqual(timing['transportDelayMs'], 20)
+                    self.assertLess(sensor['filterUncertaintyM'], 2)
+                    if previous is not None:
+                        self.assertAlmostEqual(timing['filterTimeMs']-previous, step)
+                    previous = timing['filterTimeMs']
+                self.assertAlmostEqual(abs(timing['clockOffsetCorrectionMs']), 5800)
+                # Feed the actual wire result to recovery: the very first new
+                # observation must permit recovery, without moving real hardware.
+                config = copy.deepcopy(self.config['uwb_follow'])
+                config.update(execution_mode='relative_imu', bearing_sign=1,
+                              bearing_scale=1, bearing_offset_deg=0)
+                t = rows[-1]['state']
+                pre = replay(FOLLOW, [dict(op='reset', config=config),
+                    dict(op='preflight', now=self.now, telemetry=t, connected=True)])[-1]
+                recovered = replay(FOLLOW, [dict(op='resume_reset', config=config),
+                    dict(op='resume_search'), dict(op='resume_observe', now=self.now,
+                         telemetry=t, preflight=pre)])[-1]
+                self.assertTrue(recovered)
+
+    def test_resync_cannot_refresh_cached_or_delayed_measurements(self):
+        self.sync_session(999, heading=False)
+        self.now += 40
+        self.receive([self.pose(1000, 0)] + self.pair(1000))
+        accepted = len(self.requests)-1
+        self.now += 1000
+        self.receive([mav.MAVLink_heartbeat_message(10, 3, 129, 0, 4, 3)])
+        self.requests.append(dict(op='tick', wall_ms=self.now, mono_ms=self.now))
+        self.now += 200  # Real round-trip delay must remain in the sample age.
+        self.sync_session(2039, heading=False)
+        cached = len(self.requests)-1
+        self.now += 40
+        self.receive([self.pose(2049, 0)] + self.pair(2049))
+        delayed = len(self.requests)-1
+        rows = self.results()
+        self.assertFalse(rows[cached]['state']['uwb']['fresh'])
+        self.assertEqual(rows[accepted]['state']['uwb']['sensors'][0]['measurementSampleAt'],
+                         rows[cached]['state']['uwb']['sensors'][0]['measurementSampleAt'])
+        timing = rows[delayed]['state']['uwb']['sensors'][0]['sampleTiming']
+        self.assertAlmostEqual(timing['transportDelayMs'], 230)
+        self.now += 801
+        self.requests.append(dict(op='state', wall_ms=self.now, mono_ms=self.now))
+        self.assertFalse(self.results()[-1]['state']['uwb']['fresh'])
+
+    def test_raw_control_uses_complete_frame_without_filter_warmup_or_heading_gate(self):
+        self.config['uwb_measurement_filter']['control_source'] = 'raw'
+        self.sync_heading = False
+        for i, (distance, angle) in enumerate(((3, 0), (8, 85), (2, -80))):
+            self.now += 20
+            self.receive(self.pair(100+i*20, distance, angle))
+            u = self.results()[-1]['state']['uwb']
+            self.assertTrue(u['fresh'])
+            self.assertEqual(u['controlSource'], 'raw')
+            self.assertAlmostEqual(u['distanceM'], distance)
+            self.assertAlmostEqual(u['azimuthDeg'], angle)
+        at = u['sensors'][0]['measurementUpdatedAt']
+        self.now += 20
+        self.receive([self.value(160, 'DIST', 5)])  # Partial cannot refresh control.
+        self.assertEqual(self.results()[-1]['state']['uwb']['sensors'][0]['measurementUpdatedAt'], at)
+        self.now += 801
+        self.requests.append(dict(op='state', wall_ms=self.now, mono_ms=self.now))
+        self.assertFalse(self.results()[-1]['state']['uwb']['fresh'])
+
+    def test_raw_control_still_rejects_replay_invalid_frames_and_latches_near_distance(self):
+        self.config['uwb_measurement_filter']['control_source'] = 'raw'
+        self.receive(self.pair(100))
+        self.now += 20
+        self.receive(self.pair(100, 9))
+        self.assertAlmostEqual(self.results()[-1]['state']['uwb']['distanceM'], 3)
+        self.receive(self.pair(120, .2))
+        self.assertTrue(self.results()[-1]['state']['uwb']['clearanceStop'])
+        self.now += 20
+        self.receive([self.value(140, 'VALID', 0)])
+        self.assertFalse(self.results()[-1]['state']['uwb']['fresh'])
 
     def test_records_preserve_every_batch_frame_and_do_not_label_old_values_as_new(self):
         self.receive(self.pair(100) + [self.value(120, 'DIST', .2)] + self.pair(140))
