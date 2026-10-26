@@ -17,6 +17,7 @@ class UwbSessionTests(unittest.TestCase):
         b = self.bridge = MAVLinkBridge.__new__(MAVLinkBridge)
         b.flight_data, b.uwb_data = FlightData(), UWBData()
         b.uwb_filter_enabled = True
+        b.uwb_raw_control = False  # This fixture exercises filtered admission.
         b.uwb_fusion = DualUwbFusion(enabled_receiver_ids=(1,), require_gated_measurements=True,
                                      mount_yaw_deg=(12, 90), receiver_position_x_m=(.1, .2))
         b._uwb_measurement_filters = {i: GatedUwbKalman(mount_yaw_deg=r.mount_yaw_deg)
