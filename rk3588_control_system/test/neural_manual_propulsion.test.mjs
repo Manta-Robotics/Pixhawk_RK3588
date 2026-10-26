@@ -1,4 +1,3 @@
-// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -131,7 +130,7 @@ test('the newest near-distance measurement stops immediately despite the neural 
 });
 
 test('server neural drive dispatch uses the manual output path and stop emits no velocity command', () => {
-  const source = fs.readFileSync(path.join(root, 'test/fixtures/legacy-server-control.txt'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'backend/server.js'), 'utf8');
   const drive = source.slice(source.indexOf('function sendUwbRelativeDrive('), source.indexOf('function holdOutputsAreNeutral('));
   const stop = source.slice(source.indexOf('function sendUwbFollowStop('), source.indexOf('function idleUwbFollowResult('));
   const calls = [];
@@ -148,7 +147,7 @@ test('server neural drive dispatch uses the manual output path and stop emits no
 });
 
 test('neural propulsion uses the manual command lease and disarms on stale output commands', () => {
-  const source = fs.readFileSync(path.join(root, 'test/fixtures/legacy-server-control.txt'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'backend/server.js'), 'utf8');
   const watcher = source.slice(source.indexOf('function updateManualRoverSlew('), source.indexOf('function disarmAndReturnManual('));
   const calls = [];
   const context = vm.createContext({ Date: { now: () => 2000 }, uwbFollowState: { active: true },

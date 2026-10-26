@@ -1,21 +1,5 @@
 # UWB 原始测量门控与卡尔曼滤波
 
-## 当前运行配置：关闭统计可信检测
-
-`uwb_measurement_filter.trust_checks_enabled=false` 关闭 NIS/创新残差拒收、遮挡突跳隔离、接收器视野拒收和稳定性权重。`enabled` 仍为 `true`：完整 DIST/EL/AZ 帧继续按测量时间对齐，经二维卡尔曼和角度平滑后进入控制。内部 `trusted` 状态仅表示已接纳，界面显示“平滑”，不代表已验证测量准确性。缺省未配置此开关时仍使用原有门控模式。
-
-旧 Lua 的 5 ms 有序配对、协议 2 同时间戳配对、序号连续性、重连会话隔离、有限数/量程/VALID 校验和近距离原始观测锁存均保持。当前使用传统相对控制（`relative_nmpc.enabled=false`），普通刹车和大角度转向不再绕过减速斜率；加推限制 20 个百分点/秒，减推 25 个百分点/秒。信号跳变会影响平滑结果，但不会因为统计拒收进入隔离等待。实际断连、超时、人工停止和近距离保护仍走停止路径。
-
-关闭门控时仍运行独立的原门控滤波器作为旁路诊断，输出 `sensors[].trustDiagnostics`（状态、原因、NIS、创新残差、遮挡/恢复状态和 `controlGating=false`）。旁路状态不会改写控制测量、时效、帧锁存或武装状态；重连随会话一起清空。前端同时显示平滑位置和旁路异常，逐帧测量 CSV 也保留诊断及视野信息。
-
-转弯兼顾：`relative_turn_decel_percent_s=40` 使减推上限随平滑方位从 20° 到 55° 连续地由 25 提升到 40 个百分点/秒；`steering_slew_deg_s=18` 独立限制转向命令变化（不是船体实际角速度）。`relative_turn_min_throttle_percent=20` 在远于 1.2 m、没有过快接近且仍有实测位置时保留低推力差速转弯，避免大角度降到零后失去转向能力。近距、过快接近和纯预测时不增加这份转弯推力。缺省未配置的最低转弯推力为零，兼容原控制参数。
-
-输出分配先将转向命令换算成差速分量，再保留差速并降低共同推力，使两个电机均不超过上限且仍同向。示例：前进 100%、转向 18（差速 40%）分配为共同推力 60%、左右 100%/20%，不再截断成 100%/60%。实际分配反馈到下一控制周期，避免饱和解除时推力跳回。转向指令需求本身也可将减推上限连续提高到 40。现有 IMU 实际 yaw rate 阻尼反馈继续修正转向，新增目标/实际转速误差、分配前后推力和转向余量日志，供实船校准与过冲、响应时间对比。
-
-算法参考：[ArduPilot Rover 差速饱和分配](https://raw.githubusercontent.com/ArduPilot/ardupilot/master/libraries/AR_Motors/AP_MotorsUGV.cpp)的转向优先思路，以及 [Nav2 Velocity Smoother](https://docs.nav2.org/rolling/configuration_and_development/configuration_guide/core_servers/configuring_velocity_smoother/)的分轴速率限制。这里直接实现轻量分配与限幅，不引入 ROS；Ruckig 的 jerk 约束留待实际推力标定后评估。
-
-以下介绍可选的门控模式（`trust_checks_enabled=true`）。
-
 处理顺序：原始 UWB → 有限数/量程/角度/完整测量对/时效校验 → 与卡尔曼预测比较 → 可信则更新；可疑则仅预测并放大协方差 → 融合可信接收器 → 跟随控制。
 
 ## 实现
@@ -53,8 +37,6 @@
 近期可疑原始距离落入 1.2 m 间距门槛时，也暂停预测推进；它仅有否决推进的作用，不会作为目标坐标参与卡尔曼校正。原始距离有独立更新时间，元数据心跳不能使旧近距离测量重新变新。
 
 ## 诊断和验证
-
-原生 `OcclusionGuard` 和 Python 参考实现的隔离恢复使用独立的二维运动拟合，避免把移动目标要求为静止聚簇。新轨迹仍需连续 1.5 秒确认；所有候选点检查位置/方位拟合残差、拟合速度及逐包运动预算。恢复时继承拟合速度，持续交替突跳、锯齿跳变和大幅往返不能借助持续时间自动恢复。`occlusionDiagnostics` 的候选诊断增加 `candidate_speed_mps`、`candidate_residual_m`。完整协议、时间对齐和详细阈值见 [原生控制说明](native-control.md)。平滑偏置轨迹与真实运动仅凭这些观测不能完全区分。
 
 每个接收器提供 `measurementStatus`、`filterReason`、`filterNis`、`filterInnovationM`、`filterUncertaintyM`、`rejectedCount`、最后可信时间和原始接收时间。`/api/telemetry` 的 UWB 总体状态增加 `measurementStatus`、`rejectionReason`、`measurementNis`；原始值与可信滤波值保留分离。`/api/uwb-follow/state` 返回当前 measurementFilter 配置。
 

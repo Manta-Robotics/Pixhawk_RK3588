@@ -8,25 +8,15 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_FILE="${MANTA_CONFIG_FILE:-${MANTA_CONFIG_PATH:-$PROJECT_DIR/config/system.config.json}}"
-export MANTA_CONFIG_FILE="$CONFIG_FILE"
+CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
 RUN_USER="${MANTA_RUN_USER:-root}"
 SKIP_BOOT_CONFIG="${MANTA_SKIP_BOOT_CONFIG:-0}"
-
-if [[ "$SKIP_BOOT_CONFIG" != "1" ]]; then
-    python3 "$PROJECT_DIR/scripts/validate_board_profile.py" "$CONFIG_FILE"
-fi
 
 if [[ -d /opt/node20/bin ]]; then
     export PATH="/opt/node20/bin:$PATH"
 fi
 
 node "$PROJECT_DIR/scripts/validate_config.mjs" "$CONFIG_FILE"
-if [[ ! -x "$PROJECT_DIR/control/bin/manta-control" ]]; then
-    echo '[install-boot] Build the native service first: bash scripts/build_native_control.sh' >&2
-    exit 1
-fi
-"$PROJECT_DIR/control/bin/manta-control" --config "$CONFIG_FILE" --check-config
 
 if ! id "$RUN_USER" >/dev/null 2>&1; then
     echo "[install-boot] Unknown run user: $RUN_USER" >&2

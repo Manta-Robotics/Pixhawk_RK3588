@@ -1,4 +1,3 @@
-// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
@@ -45,7 +44,7 @@ test('prediction accepts ACRO, retains ACRO during waiting and never increases b
   assert.equal(p.governAcro({safe:true,forwardSpeedMps:1,intermittentThrottleCap:15,targetEstimate:{source:'predicted'}},2,14,18,70).forwardSpeedMps,0);
 });
 test('both server adapters emit physical-unit ROVER_ACRO rather than the manual propulsion mixer',()=>{
-  const source=fs.readFileSync(new URL('./fixtures/legacy-server-control.txt',import.meta.url),'utf8');
+  const source=fs.readFileSync(new URL('../backend/server.js',import.meta.url),'utf8');
   const fn=source.slice(source.indexOf('function sendUwbRelativeDrive('),source.indexOf('function holdOutputsAreNeutral('));
   const commands=[];const sandbox={Date,Math,intermittentUwbFollow:new IntermittentUwbFollow(),uwbFollowController:new UwbFollowController(config),
     sendMavlinkCommand:(name,payload)=>commands.push({name,payload}),lastRoverCommandAt:0};

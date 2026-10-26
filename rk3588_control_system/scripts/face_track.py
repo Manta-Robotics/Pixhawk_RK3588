@@ -16,7 +16,6 @@ import sys
 import threading
 import time
 from pathlib import Path
-from rockchip_runtime import compatible_rknn_model, npu_core_mask
 
 THREAD_ENV_DEFAULT = os.environ.get("MANTA_TRACK_THREADS") or os.environ.get("TORCH_NUM_THREADS") or os.environ.get("OMP_NUM_THREADS") or "2"
 for env_name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS", "TORCH_NUM_THREADS"):
@@ -343,10 +342,9 @@ class YoloFaceDetector:
 
 
 class RknnFaceDetector:
-    """YOLOv8 face detector using the running Rockchip board's model and cores."""
+    """YOLOv8 face detector accelerated by RK3588's three-core NPU."""
 
     def __init__(self, model_path: Path, conf: float, iou: float, imgsz: int) -> None:
-        model_path = compatible_rknn_model(model_path)
         from rknnlite.api import RKNNLite
 
         self.conf = float(conf)
@@ -355,9 +353,8 @@ class RknnFaceDetector:
         self.runtime = RKNNLite(verbose=False)
         ret = self.runtime.load_rknn(str(model_path))
         if ret != 0:
-            self.runtime.release()
             raise RuntimeError(f"Cannot load RKNN face model ({ret}): {model_path}")
-        ret = self.runtime.init_runtime(core_mask=npu_core_mask(RKNNLite))
+        ret = self.runtime.init_runtime(core_mask=RKNNLite.NPU_CORE_0_1_2)
         if ret != 0:
             self.runtime.release()
             raise RuntimeError(f"Cannot initialize RKNN runtime ({ret})")

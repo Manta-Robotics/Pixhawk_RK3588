@@ -1,4 +1,3 @@
-// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -61,7 +60,7 @@ test('trusted returned measurements with inflated KF covariance use an independe
  assert.equal(p.p.max_uncertainty_m,.5);
 });
 
-const source=fs.readFileSync(new URL('./fixtures/legacy-server-control.txt',import.meta.url),'utf8');
+const source=fs.readFileSync(new URL('../backend/server.js',import.meta.url),'utf8');
 function server(){
  const gate=new UwbAutoResume(config),controller=new UwbFollowController(config);
  const session=new IntermittentUwbFollow(config.prediction,config),commands=[];

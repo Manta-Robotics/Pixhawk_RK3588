@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
-"""Export YOLOv8 face weights for the selected Rockchip NPU."""
+"""Export the configured YOLOv8 face model and compile it for RK3588 NPU."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from rockchip_runtime import detect_soc
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Convert YOLOv8 face weights to an RK3576/RK3588 FP16 RKNN model")
+    parser = argparse.ArgumentParser(description="Convert YOLOv8 face weights to an RK3588 FP16 RKNN model")
     parser.add_argument("--weights", default="scripts/models/yolov8n-face-lindevs.pt")
     parser.add_argument("--onnx", default="scripts/models/yolov8n-face-lindevs.onnx")
-    soc = detect_soc()
-    parser.add_argument("--target", choices=('rk3576', 'rk3588'), default=soc if soc in ('rk3576', 'rk3588') else 'rk3588')
-    parser.add_argument("--output", default=None)
+    parser.add_argument("--output", default="scripts/models/yolov8n-face-lindevs-rk3588-fp16.rknn")
     parser.add_argument("--imgsz", type=int, default=384)
     parser.add_argument("--force-onnx", action="store_true")
     args = parser.parse_args()
 
     weights = Path(args.weights)
     onnx_path = Path(args.onnx)
-    output_path = Path(args.output or f'scripts/models/yolov8n-face-lindevs-{args.target}-fp16.rknn')
+    output_path = Path(args.output)
     imgsz = int(max(160, args.imgsz))
     if not weights.exists():
         raise SystemExit(f"Face weights not found: {weights}")
@@ -47,7 +44,7 @@ def main() -> int:
     rknn = RKNN(verbose=False)
     try:
         ret = rknn.config(
-            target_platform=args.target,
+            target_platform="rk3588",
             mean_values=[[0, 0, 0]],
             std_values=[[255, 255, 255]],
             optimization_level=3,
@@ -68,7 +65,7 @@ def main() -> int:
 
     print(f"ONNX: {onnx_path}")
     print(f"RKNN: {output_path}")
-    print(f"Input: {imgsz}x{imgsz}, FP16, target {args.target}")
+    print(f"Input: {imgsz}x{imgsz}, FP16, target rk3588")
     return 0
 
 

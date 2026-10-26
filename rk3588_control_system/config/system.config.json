@@ -79,6 +79,7 @@
     "message_names": "UWB1_* only; TELEM1 front-facing receiver"
   },
   "uwb_follow": {
+    "control_input": "raw",
     "enabled": true,
     "tracking_method": "traditional",
     "neural_model_path": "models/smart_usv_uwb_policy.json",
@@ -137,12 +138,10 @@
     "relative_min_effective_throttle_percent": 35,
     "minimum_throttle_range_error_m": 0.4,
     "relative_steering_limit_deg": 18,
-    "steering_slew_deg_s": 18,
+    "steering_slew_deg_s": 9,
     "steering_return_deg_s": 26,
-    "relative_throttle_accel_percent_s": 20,
-    "relative_throttle_decel_percent_s": 25,
-    "relative_turn_decel_percent_s": 40,
-    "relative_turn_min_throttle_percent": 20,
+    "relative_throttle_accel_percent_s": 30,
+    "relative_throttle_decel_percent_s": 45,
     "uwb_timeout_ms": 450,
     "navigation_timeout_ms": 700,
     "minimum_gps_fix_type": 2,
@@ -183,7 +182,7 @@
       "maximum_observed_speed_mps": 5
     },
     "relative_nmpc": {
-      "enabled": false,
+      "enabled": true,
       "horizon_s": 2.4,
       "solve_budget_ms": 15,
       "surge_time_constant_s": 1,
@@ -540,7 +539,6 @@
   },
   "uwb_measurement_filter": {
     "enabled": true,
-    "trust_checks_enabled": false,
     "distance_std_m": 0.12,
     "angle_std_deg": 2.0,
     "acceleration_std_mps2": 2.0,

@@ -7,15 +7,11 @@
   "scripts": {
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
-    "dev:web": "vite",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
-    "preview": "vite preview --host 127.0.0.1 --port 4175 --strictPort",
-    "preview:original": "node scripts/serve-preview.mjs",
+    "preview": "node scripts/serve-preview.mjs",
     "check": "node scripts/check_project.mjs",
     "check:config": "node scripts/validate_config.mjs",
     "test": "node --test",
-    "maintenance": "npm test && npm run check && npm run build"
+    "maintenance": "npm test && npm run check"
   },
   "keywords": [
     "RK3588",
@@ -30,18 +26,10 @@
     "body-parser": "^1.20.6",
     "bonjour-service": "^1.4.4",
     "express": "^4.22.2",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.4"
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "nodemon": "^3.1.14",
-    "parse5": "^7.3.0",
-    "typescript": "^5.9.3",
-    "vite": "^7.3.7"
+    "nodemon": "^3.1.14"
   },
   "overrides": {
     "engine.io": "^6.6.9",
@@ -50,6 +38,6 @@
     "ws": "^8.21.3"
   },
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=20.0.0"
   }
 }

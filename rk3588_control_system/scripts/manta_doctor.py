@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-SYSTEM_CONFIG = Path(os.environ.get('MANTA_CONFIG_FILE') or os.environ.get('MANTA_CONFIG_PATH') or PROJECT_DIR / 'config' / 'system.config.json')
+SYSTEM_CONFIG = PROJECT_DIR / "config" / "system.config.json"
 DEVICE_ENV = Path("/etc/manta/manta.env")
 SERVICES = (
     "manta-backend.service",
@@ -90,8 +90,7 @@ def load_config(report):
 def check_source(report, config):
     required = (
         "backend/server.js",
-        "control/bin/manta-control",
-        "scripts/native_control_service.sh",
+        "backend/mavlink_bridge.py",
         "frontend/mobile-preview-kimi-k26.html",
         "frontend/assets/manta-app/manta-hero.jpg",
         "frontend/js/gps-map-core.js",
@@ -155,7 +154,7 @@ def check_runtime(report, installed):
     else:
         report.warn("MediaMTX", "not installed yet")
 
-    python_modules = ("pymavlink", "serial", "cv2", "numpy", "torch", "ultralytics", "psutil", "dbus", "gi")
+    python_modules = ("pymavlink", "serial", "cv2", "numpy", "ultralytics", "psutil", "dbus", "gi")
     missing_modules = [name for name in python_modules if importlib.util.find_spec(name) is None]
     if missing_modules and installed:
         report.fail("Python modules", "missing: " + ", ".join(missing_modules))

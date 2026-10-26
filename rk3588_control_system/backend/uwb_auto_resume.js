@@ -53,6 +53,16 @@ export class UwbAutoResume {
  observe(now,telemetry,preflight,{duringAttempt=false}={}){
   if(!this.pending||(this.attempting&&!duringAttempt))return false;
   const u=telemetry.uwb||{},a=telemetry.attitude||{};
+  if(u.controlSource==='raw'){
+   const at=u.measurementUpdatedAt,range=u.distanceM;
+   if(this.transitionFailure(now,telemetry,preflight)||!preflight.safe||!u.online||!u.fresh
+     ||!finite(at)||at>now||now-at>(this.c.uwb_timeout_ms??450)
+     ||!finite(range)||range<=(this.c.safety_distance_m??.3)||!finite(u.azimuthDeg)){
+    this.clearWindow();return false;
+   }
+   const id=targetId(u);if(this.target===null&&id!==null)this.target=id;
+   this.firstAt=this.lastAt=at;this.windowTarget=id;this.samples=1;return true;
+  }
   const sensors=(u.sensors||[]).filter(s=>!(u.activeReceiverIds||[]).length||u.activeReceiverIds.includes(s.receiverId));
   const trusted=u.measurementStatus==='trusted'||(sensors.length>0&&sensors.every(s=>s.measurementStatus==='trusted'));
   const at=u.measurementUpdatedAt,range=u.distanceM;

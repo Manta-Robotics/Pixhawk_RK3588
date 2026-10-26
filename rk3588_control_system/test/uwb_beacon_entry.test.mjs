@@ -1,4 +1,3 @@
-// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,7 +10,7 @@ const dashboardHtml = fs.readFileSync(path.join(appRoot, "frontend", "index.html
 const gimbalScript = fs.readFileSync(path.join(appRoot, "frontend", "js", "page_gimbal.js"), "utf8");
 const mobileHtml = fs.readFileSync(path.join(appRoot, "frontend", "mobile-preview-kimi-k26.html"), "utf8");
 const transportScript = fs.readFileSync(path.join(appRoot, "frontend", "js", "manta-app-transport.js"), "utf8");
-const serverScript = fs.readFileSync(path.join(appRoot, "test", "fixtures", "legacy-server-control.txt"), "utf8");
+const serverScript = fs.readFileSync(path.join(appRoot, "backend", "server.js"), "utf8");
 
 test("dashboard exposes a direct UWB Beacon entry", () => {
     assert.match(

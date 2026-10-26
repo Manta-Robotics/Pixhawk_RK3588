@@ -5,7 +5,7 @@
 | 服务 | 监听/设备 | 责任 |
 | --- | --- | --- |
 | `manta-backend` | TCP 3000、UDP 14551/14552、`/dev/ttyS3` | Web、控制 API、云台命令、录像 |
-| `manta-bridge` | `/dev/ttyS1`、UDP 14551/14552 | C++ MAVLink、UWB 融合、跟随与手动推进控制 |
+| `manta-bridge` | `/dev/ttyS1`、UDP 14551/14552 | Pixhawk MAVLink 桥接 |
 | `manta-gimbal-stream` | TCP 8091、云台 RTSP | 原始识别流与手机低码率流 |
 | `manta-camera` | TCP 8090、V4L2 | OV8858 快照和 MJPEG |
 | `manta-gimbal-route` | `eth0` | 配置云台专用网段和主机路由 |
@@ -17,11 +17,10 @@
 
 ```text
 Browser -> Socket.IO/REST -> backend/server.js
-        -> UDP operator intent -> control/bin/manta-control -> /dev/ttyS1 -> Pixhawk
+        -> UDP command -> mavlink_bridge.py -> /dev/ttyS1 -> Pixhawk
 ```
 
-Web 后端负责 API、状态展示、云台和媒体；C++ 进程负责控制限幅、状态机、串口、融合与独立看门狗。
-重启 Web 不会停止已授权跟随，手动请求中断仍会超时归零。部署及验证见 [native-control.md](native-control.md)。
+后端负责输入限幅、状态聚合和命令审计；MAVLink 桥接只负责协议与串口边界。
 
 ## 云台链路
 

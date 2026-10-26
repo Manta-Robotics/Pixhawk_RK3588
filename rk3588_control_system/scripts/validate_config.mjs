@@ -194,18 +194,11 @@ export function validateSystemConfig(config) {
   }
   if (executionMode === 'acro' && (Number(config.uwb_follow.max_speed_mps) > 2
       || Number(config.uwb_follow.commissioning_speed_mps) > 2)) errors.push('ACRO follow speed limit must not exceed 2 m/s');
-  for (const [key, min, max] of [['relative_turn_decel_percent_s', 1, 100], ['relative_turn_min_throttle_percent', 0, 100]]) {
-    const value = config.uwb_follow?.[key];
-    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max))
-      errors.push(`uwb_follow.${key} must be between ${min} and ${max}`);
-  }
   const measurementFilter = config.uwb_measurement_filter;
   if (measurementFilter !== undefined) {
     if (!isObject(measurementFilter)) errors.push('uwb_measurement_filter must be an object');
     else {
       if (typeof measurementFilter.enabled !== 'boolean') errors.push('uwb_measurement_filter.enabled must be boolean');
-      if (measurementFilter.trust_checks_enabled !== undefined && typeof measurementFilter.trust_checks_enabled !== 'boolean')
-        errors.push('uwb_measurement_filter.trust_checks_enabled must be boolean');
       if (measurementFilter.occlusion_enabled !== undefined && typeof measurementFilter.occlusion_enabled !== 'boolean')
         errors.push('uwb_measurement_filter.occlusion_enabled must be boolean');
       if (measurementFilter.adaptive_enabled !== undefined && typeof measurementFilter.adaptive_enabled !== 'boolean')
@@ -252,6 +245,8 @@ export function validateSystemConfig(config) {
       if (p.measurement_noise_m >= p.max_uncertainty_m) errors.push('prediction measurement noise must be below uncertainty limit');
     }
   }
+  if (config.uwb_follow?.control_input !== undefined && !['raw', 'filtered'].includes(config.uwb_follow.control_input))
+    errors.push('uwb_follow.control_input must be raw or filtered');
   if (config.uwb_follow?.waiting_drift_hold !== undefined && typeof config.uwb_follow.waiting_drift_hold !== 'boolean') errors.push('uwb_follow.waiting_drift_hold must be boolean');
   return errors;
 }

@@ -1,4 +1,3 @@
-// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -131,7 +130,7 @@ test('traditional preflight requires MANUAL with or without navigation and rejec
 });
 
 test('real server traditional sender uses the joystick sender and marks motor target semantics', () => {
-  const source = fs.readFileSync(new URL('./fixtures/legacy-server-control.txt', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('../backend/server.js', import.meta.url), 'utf8');
   const functions = [
     source.slice(source.indexOf('function normalizeRoverControl('), source.indexOf('let lastRoverCommandAt')),
     source.slice(source.indexOf('function sendManualRoverOutput('), source.indexOf('function applyRoverControl(')),

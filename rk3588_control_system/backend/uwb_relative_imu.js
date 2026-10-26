@@ -17,11 +17,8 @@ export class RelativeImuControl {
   const cruise=this.cruise;this.reset();this.cruise=cruise;
  }
  trackApplied(throttle,steering){
-  if(Number.isFinite(throttle)&&Number.isFinite(steering)){
-   if(throttle<this.throttle)this.cruise=Math.min(this.cruise,throttle);
-   this.throttle=throttle;this.steering=steering;
-  }
-  if(this.c.relativeNmpc?.enabled)this.nmpc.trackApplied(throttle,steering);
+  if(!this.c.relativeNmpc?.enabled)return;
+  this.throttle=throttle;this.steering=steering;this.nmpc.trackApplied(throttle,steering);
  }
  updatePredictive({now,dt,d,preflight,telemetry,estimate,referenceThrottle,desiredClosing}){
   const c=this.c,safety=d<=c.safetyDistanceM;
@@ -61,8 +58,9 @@ export class RelativeImuControl {
   const c=this.c,d=preflight.distanceM;
   const dt=this.at===null?.1:clamp((now-this.at)/1000,.001,.25);
   const bearing=wrap(preflight.azimuthDeg*c.bearingSign*c.bearingScale+c.bearingOffsetDeg);
-  this.bearing=this.bearing===null?bearing:wrap(this.bearing+c.bearingFilterAlpha*wrap(bearing-this.bearing));
-  const sampleAt=telemetry.uwb.measurementSampleAt??telemetry.uwb.measurementUpdatedAt;
+  const rawControl=telemetry.uwb?.controlSource==='raw';
+  this.bearing=rawControl||this.bearing===null?bearing:wrap(this.bearing+c.bearingFilterAlpha*wrap(bearing-this.bearing));
+  const sampleAt=telemetry.uwb.measurementUpdatedAt;
   const observed=!estimate || ['measured','recovering'].includes(estimate.source);
   if(observed && Number.isFinite(sampleAt) && (this.measurementAt===null || sampleAt>this.measurementAt)){
    if(this.distance!==null && this.measurementAt!==null && sampleAt-this.measurementAt<=c.uwbTimeoutMs){
@@ -81,7 +79,7 @@ export class RelativeImuControl {
   const progress=clamp((d-c.distanceHoldUpperM)/Math.max(.01,c.safetyResumeDistanceM-c.distanceHoldUpperM),0,1);
   const approachLimit=c.closeApproachMaxSpeedMps*progress+c.rangeGain*Math.max(0,d-c.safetyResumeDistanceM);
   const deceleration=Math.max(.05,c.prediction.braking_deceleration_mps2??.3);
-  const age=Math.max(0,(now-sampleAt)/1000);
+  const age=Math.max(0,(now-telemetry.uwb.measurementUpdatedAt)/1000);
   const reaction=.6+Math.min(age,c.uwbTimeoutMs/1000);
   const margin=Math.max(.05,c.prediction.measurement_noise_m??.12);
   const clearance=Math.max(0,d-c.followingDistanceM-margin);
@@ -98,7 +96,7 @@ export class RelativeImuControl {
   if((requested>c.relativeThrottleLimitPercent && rateError>0)||(requested<0 && rateError<0))this.cruise=previousCruise;
   requested=clamp(this.cruise+kp*rateError,0,c.relativeThrottleLimitPercent);
   if(policy)requested=clamp(policy.nominalThrottlePercent,0,c.relativeThrottleLimitPercent);
-  if(c.relativeNmpc?.enabled)return this.updatePredictive({now,dt,d,preflight,telemetry,estimate,
+  if(c.relativeNmpc?.enabled&&!rawControl)return this.updatePredictive({now,dt,d,preflight,telemetry,estimate,
    referenceThrottle:requested,desiredClosing});
   const gps=this.gpsSpeed.update({now,telemetry,bearingDeg:this.bearing,rangeRateMps:this.rangeRate,
    desiredClosingMps:desiredClosing,appliedThrottle:this.throttle,policySpeedMps:policy?.nominalSpeedMps,
@@ -114,15 +112,10 @@ export class RelativeImuControl {
   const alignment=clamp((c.bearingStopDeg-Math.abs(this.bearing))/(c.bearingStopDeg-c.bearingSlowdownDeg),0,1);
   requested*=turn.speedScale*alignment;
   const safety=d<=c.safetyDistanceM;
-  const turning=Math.abs(this.bearing)>c.bearingSlowdownDeg&&d>c.safetyResumeDistanceM&&!braking
-   &&(!estimate||['measured','recovering'].includes(estimate.source));
-  if(turning)requested=Math.max(requested,Math.min(c.turnMinimumThrottlePercent,c.relativeThrottleLimitPercent));
   if(safety){requested=0;this.cruise=Math.min(this.cruise,this.throttle);}
-  const turnFraction=Math.max(1-alignment,clamp(Math.abs(turn.desiredYawRateDegS)/c.maxYawRateDegS,0,1));
-  const decelRate=c.throttleDecelPercentS+turnFraction*Math.max(0,c.turnDecelPercentS-c.throttleDecelPercentS);
-  const step=(requested<this.throttle?decelRate:c.throttleAccelPercentS)*dt;
+  const step=(requested<this.throttle?c.throttleDecelPercentS:c.throttleAccelPercentS)*dt;
   this.throttle+=clamp(requested-this.throttle,-step,step);
-  if(safety)this.throttle=Math.min(this.throttle,requested);
+  if(safety || braking || alignment===0)this.throttle=Math.min(this.throttle,requested);
   // Track the applied actuator, including slew/braking/turn saturation. A
   // cruise-thrust integrator must not wind up behind a constrained output.
   this.cruise=policy?0:clamp(this.cruise+(this.throttle-(this.cruise+kp*rateError))*dt,0,c.relativeThrottleLimitPercent);
@@ -131,8 +124,6 @@ export class RelativeImuControl {
   if(safety)this.steering=0;
   this.gpsSpeed.trackApplied(this.throttle,dt);
   return {safe:true,reason:safety?'holding_distance':'tracking',status:safety?'holding':'tracking',
-   turningThrustActive:turning&&c.turnMinimumThrottlePercent>0,throttleDecelLimitPercentS:decelRate,
-   measuredYawRateDegS:preflight.measuredYawRateDegS??0,yawRateErrorDegS:turn.desiredYawRateDegS-(preflight.measuredYawRateDegS??0),
    controlMode:'relative_manual',requiredFlightMode:'MANUAL',commandFrame:'BODY_RELATIVE',
    relativeImuControl:true,navigationAvailable:gps.active,navigationReason:gps.active?null:'uwb_imu_only',
    gpsSpeedControlActive:gps.active,gpsSpeedControlReason:gps.reason,

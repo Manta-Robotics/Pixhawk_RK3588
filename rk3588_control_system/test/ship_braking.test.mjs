@@ -1,4 +1,3 @@
-// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -193,7 +192,7 @@ test('ACRO faces a target near the edge of view before accelerating forward',()=
 });
 
 test('production start establishes a neutral ACRO command before exposing an active watchdog lease',async()=>{
- const source=fs.readFileSync(new URL('./fixtures/legacy-server-control.txt',import.meta.url),'utf8');
+ const source=fs.readFileSync(new URL('../backend/server.js',import.meta.url),'utf8');
  const route=source.slice(source.indexOf("app.post('/api/uwb-follow/start'"),source.indexOf("app.post('/api/uwb-follow/stop'"));
  const events=[];let handler;
  const box={app:{post:(_path,fn)=>{handler=fn;}},UWB_FOLLOW_ENABLED:true,uwbGpsDriftHold:new UwbGpsDriftHold(),uwbAutoResume:new UwbAutoResume(),

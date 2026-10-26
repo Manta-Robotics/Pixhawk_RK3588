@@ -90,7 +90,6 @@ class HighRateUwbTests(unittest.TestCase):
             bridge.flight_data.attitude_updated_at = at
             with patch('backend.mavlink_bridge.time.time', return_value=at / 1000):
                 bridge._update_uwb_named_value('UWB1_DIST', 3, sample_time_boot_ms=at)
-                bridge._update_uwb_named_value('UWB1_EL', 0, sample_time_boot_ms=at)
                 bridge._update_uwb_named_value('UWB1_AZ', angle, sample_time_boot_ms=at)
         pair(1000, 0)
         f = bridge._uwb_measurement_filters[1]

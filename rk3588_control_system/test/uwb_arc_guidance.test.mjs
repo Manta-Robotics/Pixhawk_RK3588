@@ -1,4 +1,3 @@
-// Legacy behavioral baseline; replacement is checked by check_native_*.py/mjs.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -6,7 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const server = fs.readFileSync(path.join(projectRoot, 'test', 'fixtures', 'legacy-server-control.txt'), 'utf8');
+const server = fs.readFileSync(path.join(projectRoot, 'backend', 'server.js'), 'utf8');
 const controller = fs.readFileSync(path.join(projectRoot, 'backend', 'uwb_follow.js'), 'utf8');
 
 test('UWB guidance uses ILOS lookahead and bounded curvature', () => {

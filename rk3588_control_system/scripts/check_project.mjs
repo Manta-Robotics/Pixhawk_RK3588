@@ -151,16 +151,11 @@ for (const filePath of walk(SYSTEMD_DIR).filter((file) => file.endsWith('.servic
   }
 }
 
-for (const template of ['manta-camera', 'manta-captive-portal', 'manta-gimbal-stream', 'manta-bluetooth-pan']) {
+for (const template of ['manta-bridge', 'manta-camera', 'manta-captive-portal', 'manta-gimbal-stream', 'manta-bluetooth-pan']) {
   const content = fs.readFileSync(path.join(SYSTEMD_DIR, `${template}.service.template`), 'utf8');
   if (!content.includes('scripts/python_service.sh')) {
     failures.push(`systemd/${template}.service.template: must use scripts/python_service.sh`);
   }
-}
-
-const nativeUnit = fs.readFileSync(path.join(SYSTEMD_DIR, 'manta-bridge.service.template'), 'utf8');
-if (!nativeUnit.includes('scripts/native_control_service.sh') || nativeUnit.includes('mavlink_bridge.py')) {
-  failures.push('manta-bridge must run the independent native control service');
 }
 
 for (const template of ['manta-hotspot', 'manta-bluetooth-pan']) {
