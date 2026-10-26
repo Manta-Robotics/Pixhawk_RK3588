@@ -13,7 +13,7 @@ test('all inline scripts in the control page parse after prediction UI changes',
 test('lost raw UWB still renders an explicitly labelled dashed predicted target', () => {
   const elements = new Map();
   const $ = (id) => {
-    if (!elements.has(id)) elements.set(id, { style: {}, dataset: {}, attributes: {},
+    if (!elements.has(id)) elements.set(id, { style: {}, dataset: {}, attributes: {}, classList: { toggle() {} },
       setAttribute(k, v) { this.attributes[k] = v; } });
     return elements.get(id);
   };
@@ -21,6 +21,7 @@ test('lost raw UWB still renders an explicitly labelled dashed predicted target'
     uwbFollow: { active: true, relativeBodyM: { x: 3, y: 1 }, targetEstimate: {
       usable: true, source: 'predicted', relativeBodyM: { x: 3, y: 1 } } } };
   const context = vm.createContext({ state, $, localize: (zh) => zh, clamp: (x, lo, hi) => Math.min(hi, Math.max(lo, x)) });
+  vm.runInContext('var transport=null;\n'+html.slice(html.indexOf('function uwbDisplayIdentity('),html.indexOf('function renderUwbStatus(){')),context);
   vm.runInContext('var window=globalThis;\n' + fs.readFileSync(new URL('../frontend/js/uwb-display-smoother.js', import.meta.url), 'utf8'), context);
   vm.runInContext(fs.readFileSync(new URL('../frontend/js/uwb-raw-display.js', import.meta.url), 'utf8'), context);
   vm.runInContext(html.slice(html.indexOf('var uwbDisplaySmoother='), html.indexOf('function renderRelativePosition(){')), context);
@@ -51,7 +52,7 @@ test('lost raw UWB still renders an explicitly labelled dashed predicted target'
 
 test('rejected fresh raw position is visible alongside an independently admitted position', () => {
   const elements = new Map(), $ = id => {
-    if (!elements.has(id)) elements.set(id, { style: {}, dataset: {}, attributes: {},
+    if (!elements.has(id)) elements.set(id, { style: {}, dataset: {}, attributes: {}, classList: { toggle() {} },
       setAttribute(k, v) { this.attributes[k] = v; } });
     return elements.get(id);
   };
@@ -63,6 +64,7 @@ test('rejected fresh raw position is visible alongside an independently admitted
       occlusionDiagnostics: { state: 'quarantined' } }] } };
   const context = vm.createContext({ state, $, Date: { now: () => now }, localize: zh => zh,
     clamp: (x, lo, hi) => Math.min(hi, Math.max(lo, x)) });
+  vm.runInContext('var transport=null;\n'+html.slice(html.indexOf('function uwbDisplayIdentity('),html.indexOf('function renderUwbStatus(){')),context);
   for (const name of ['uwb-display-smoother', 'uwb-raw-display']) {
     vm.runInContext('var window=globalThis;\n' + fs.readFileSync(new URL('../frontend/js/' + name + '.js', import.meta.url), 'utf8'), context);
   }

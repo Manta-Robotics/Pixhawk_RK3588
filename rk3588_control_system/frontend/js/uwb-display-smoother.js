@@ -41,5 +41,50 @@
     if (this.moving) this.angle = this.target;
     return { valid: true, distanceM: packet.distanceM, azimuthDeg: this.angle };
   };
+  // Chart range is presentation state, independent of measurement admission.
+  // Expand only when the current range is exceeded; shrink after a sustained
+  // smaller range, so noise near an automatic zoom threshold cannot bounce it.
+  function UwbPlotScale() { this.reset(); }
+  UwbPlotScale.prototype.reset = function () {
+    this.scale = this.smaller = this.since = this.at = null;
+  };
+  UwbPlotScale.prototype.view = function (magnitude, now) {
+    if (!finite(magnitude) || magnitude < 0 || !finite(now)) return this.scale || 5;
+    if (this.at !== null && now < this.at) this.reset();
+    this.at = now;
+    var ranges = [1, 2, 5, 10, 20, 50], wanted = Math.ceil(magnitude / .9);
+    for (var i = 0; i < ranges.length; i++) {
+      if (magnitude <= ranges[i] * .9) { wanted = ranges[i]; break; }
+    }
+    wanted = Math.max(1, wanted);
+    var smaller = Math.max(1, Math.ceil(magnitude / .65));
+    for (var j = 0; j < ranges.length; j++) {
+      if (magnitude <= ranges[j] * .65) { smaller = ranges[j]; break; }
+    }
+    if (this.scale === null || magnitude > this.scale) {
+      this.scale = wanted; this.smaller = this.since = null;
+    } else if (smaller < this.scale) {
+      if (this.smaller !== smaller) { this.smaller = smaller; this.since = now; }
+      if (now - this.since >= 2000) { this.scale = smaller; this.smaller = this.since = null; }
+    } else {
+      this.smaller = this.since = null;
+    }
+    return this.scale;
+  };
+  // Presentation-only memory. A retained point never becomes an admitted
+  // observation, and is cleared across disconnects or receiver/tag changes.
+  function UwbDisplayHold() { this.reset(); }
+  UwbDisplayHold.prototype.reset = function () { this.last = null; this.key = null; };
+  UwbDisplayHold.prototype.view = function (sample, connected, key) {
+    if (!connected) { this.reset(); return { valid: false, stale: false }; }
+    if (key !== this.key) { this.last = null; this.key = key; }
+    if (sample && sample.valid) {
+      this.last = Object.assign({}, sample);
+      return Object.assign({}, sample, { stale: false });
+    }
+    return this.last ? Object.assign({}, this.last, { stale: true }) : { valid: false, stale: false };
+  };
+  root.MantaUwbDisplayHold = UwbDisplayHold;
   root.MantaUwbDisplaySmoother = UwbDisplaySmoother;
+  root.MantaUwbPlotScale = UwbPlotScale;
 })(typeof window !== 'undefined' ? window : globalThis);

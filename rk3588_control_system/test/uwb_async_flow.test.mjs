@@ -105,6 +105,19 @@ test('camera requests remain active while standalone UWB and full telemetry keep
   while (!packets.some(([name]) => name === 'telemetry_update') && Date.now() < fullDeadline) await delay(10);
   assert.ok(packets.some(([name]) => name === 'motor_output_update'));
   assert.ok(packets.some(([name]) => name === 'telemetry_update'));
+  // Exercise the production UDP -> Socket.IO path with 40 Hz observations.
+  const streamStart = performance.now();
+  for (let index = 0; index < 80; index++) {
+    const wait = streamStart + index * 25 - performance.now();
+    if (wait > 0) await delay(wait);
+    await send({ type: 'uwb', payload: { distanceM: 1.23, azimuthDeg: 4,
+      fresh: true, online: true, measurementStatus: 'trusted', measurementUpdatedAt: 2000 + index * 25 } });
+  }
+  const received = () => new Set(packets.filter(([name, data]) => name === 'uwb_update' && data.measurementUpdatedAt >= 2000)
+    .map(([, data]) => data.measurementUpdatedAt));
+  const streamDeadline = performance.now() + 1000;
+  while (received().size < 80 && performance.now() < streamDeadline) await delay(10);
+  assert.equal(received().size, 80, 'every distinct 40 Hz UWB observation reaches the browser transport');
   assert.equal((await snapshot).status, 200);
   assert.ok(requests.includes('/healthz'));
   assert.ok(requests.includes('/snapshot.jpg'));

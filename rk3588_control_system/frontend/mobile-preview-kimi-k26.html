@@ -125,7 +125,7 @@ body[data-theme="light"] select{color-scheme:light}
 .imu-readout strong{font-size:16px;font-weight:600;font-family:var(--fm);color:var(--t1)}
 .imu-readout.success strong{color:var(--green)}.imu-readout.warning strong{color:var(--orange)}.imu-readout.danger strong{color:var(--red)}
 .uwb-panel{display:flex;align-items:center;gap:8px;margin-top:1px;padding-top:7px;border-top:1px solid var(--border);min-width:116px}
-.uwb-panel[data-state="offline"]{opacity:.5}.uwb-panel[data-state="online"] .uwb-dial{border-color:rgba(88,219,153,.62);box-shadow:0 0 12px rgba(88,219,153,.12)}
+.uwb-panel[data-state="offline"]{opacity:1}.uwb-panel[data-state="online"] .uwb-dial{border-color:rgba(88,219,153,.62);box-shadow:0 0 12px rgba(88,219,153,.12)}
 .uwb-dial{position:relative;width:54px;height:54px;flex:0 0 54px;border:1px solid var(--border2);border-radius:50%;background:radial-gradient(circle,rgba(126,200,227,.08),transparent 68%);overflow:hidden}
 .uwb-dial::before,.uwb-dial::after{content:'';position:absolute;background:rgba(126,200,227,.16)}
 .uwb-dial::before{left:50%;top:7px;bottom:7px;width:1px}.uwb-dial::after{top:50%;left:7px;right:7px;height:1px}
@@ -156,7 +156,7 @@ body[data-theme="light"] select{color-scheme:light}
 .drive-follow-switch.active{border-color:rgba(45,212,191,.72);color:#76f7df;background:radial-gradient(circle,rgba(45,212,191,.2),rgba(45,212,191,.05) 68%);box-shadow:0 0 24px rgba(45,212,191,.14)}
 .drive-follow-switch:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
 .relative-position-panel{width:196px;height:196px;flex:0 0 196px;display:flex;flex-direction:column;padding:8px 9px 7px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(145deg,rgba(126,200,227,.055),rgba(255,255,255,.018));overflow:hidden}
-.relative-position-panel[data-state="offline"]{opacity:.5}.relative-position-panel[data-state="raw-only"]{border-color:rgba(255,169,76,.45)}.relative-position-panel[data-state="online"]{border-color:rgba(45,212,191,.32);box-shadow:inset 0 0 18px rgba(45,212,191,.035)}
+.relative-position-panel[data-state="offline"]{opacity:1}.relative-position-panel[data-state="raw-only"]{border-color:rgba(255,169,76,.45)}.relative-position-panel[data-state="online"]{border-color:rgba(45,212,191,.32);box-shadow:inset 0 0 18px rgba(45,212,191,.035)}
 .relative-position-head,.relative-position-foot{display:flex;align-items:center;justify-content:space-between;gap:7px;white-space:nowrap}
 .relative-position-head span{font-size:9px;font-weight:650;color:var(--t2);letter-spacing:.35px}.relative-position-head b{max-width:105px;overflow:hidden;text-overflow:ellipsis;font:600 7px/1 var(--fm);color:var(--t4);letter-spacing:.35px}
 .relative-position-plot{flex:1;min-height:0;margin:3px 0 2px}.relative-position-plot svg{display:block;width:100%;height:100%;overflow:visible}
@@ -416,6 +416,36 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 @media(max-height:600px) and (orientation:landscape){.app-header{height:44px;min-height:44px}.landing-view{padding:7px;gap:7px}.landing-panel{max-width:330px}.landing-hero,.device-card{border-radius:12px}.device-card{padding:10px;gap:6px}.device-desc{display:none}.device-meta{padding:6px 0}.device-meta-item span,.device-meta-item small{font-size:8px}.connect-btn{padding:9px 12px;font-size:13px}.pairing-hint{font-size:9px}.control-toolbar{padding:4px 8px}.control-mode{display:none}.quad-header{min-height:30px;padding:5px 9px}.quad-header-left b{font-size:11px}.quad-header-left small,.quad-header-right{font-size:8px}.attitude-orb{width:min(30vh,118px)}.imu-body{grid-template-columns:minmax(112px,1.35fr) minmax(78px,.65fr);gap:6px;padding:3px 7px}.imu-readouts{gap:3px}.imu-readout strong{font-size:11px}.drive-body{padding:3px 7px;gap:8px}.joystick-wrap{width:86px;height:86px}.joystick-stick{width:34px;height:34px}.drive-side{gap:4px;min-width:155px}.drive-speed-readout{padding-bottom:3px}.drive-speed-readout strong{font-size:14px}.motor-status-row{gap:3px}.motor-status-card{padding:4px}.motor-status-card header{font-size:7px}.motor-status-card strong{margin-top:3px;font-size:9px}.motor-status-card small{margin-top:2px;font-size:6px}.arm-control{margin-top:0;gap:3px}.arm-slider,.disarm-button{width:100%;height:27px;min-height:27px}.arm-slider-thumb{width:19px;height:19px}.arm-slider-label{font-size:8px;inset:0 3px 0 26px}.log-body{padding:5px 8px;font-size:8px}.log-entry{grid-template-columns:42px 48px 1fr;gap:5px}.video-overlay{padding:7px}.gimbal-mode-btn{padding:3px 6px}.gimbal-action-btn{width:26px;height:26px}.modal{max-height:calc(100vh - 12px);overflow:auto;padding:14px;max-width:460px}.modal-close{top:7px;right:7px}.modal-kicker{margin-bottom:4px}.modal h2{font-size:18px;margin-bottom:3px}.modal>p{font-size:11px;line-height:1.3;margin-bottom:8px}.cal-progress{margin-bottom:6px}.cal-progress-bar{margin-bottom:8px}.cal-pose-stage{width:78px;height:72px;margin-bottom:4px}.cal-pose-device{width:64px;height:38px}.cal-pose-title{font-size:13px;margin-bottom:3px}.cal-pose-instruction{font-size:10px;line-height:1.3;margin-bottom:8px}.cal-actions button{padding:7px}.pin-input{height:44px}.pin-inputs{margin-bottom:8px}}
 @media(max-height:600px) and (orientation:landscape){.control-mode{display:flex;padding:2px}.control-mode button{font-size:8px;padding:3px 6px}.drive-follow-control{width:86px;height:86px}.drive-follow-switch{width:76px;height:76px;gap:3px}.drive-follow-switch strong{font-size:11px}.drive-follow-switch small{max-width:66px;font-size:6px}}
 @media(max-width:768px){.app-header{padding:0 10px}.brand span{display:none}.nav-tab{padding:5px 10px;font-size:12px}.nav-tab svg{display:none}.status-bar{gap:10px}.status-item span{display:none}.drawer{width:100%;border-left:none;border-top:1px solid var(--border)}}
+/* Fit all three controls inside their quadrant; short panels scroll from the top. */
+.quadrant-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.quad{min-width:0}
+.drive-body{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.05fr) minmax(0,1.15fr);gap:clamp(5px,1vw,14px);align-items:center;justify-content:normal;overflow:auto;align-content:safe center}
+.drive-body>#joystick,.drive-body>#driveFollowControl{grid-column:1;grid-row:1;justify-self:center;width:min(100%,160px);height:auto;aspect-ratio:1}
+.drive-body>.relative-position-panel{grid-column:2;grid-row:1;width:100%;min-width:0;height:196px;padding:7px 5px}
+.drive-body>.drive-side{grid-column:3;grid-row:1;min-width:0;width:100%}
+.drive-follow-switch{width:85%;height:auto;aspect-ratio:1}
+.relative-position-head{gap:3px;flex-wrap:wrap;white-space:normal}
+.relative-sample-row{font-size:7px;flex-wrap:wrap;gap:0 3px}
+.motor-status-row{min-width:0}.motor-status-card{min-width:0}.motor-status-card header{overflow-wrap:anywhere}
+.tracking-method-head{flex-wrap:wrap;gap:2px}.tracking-method-switch{gap:3px}.tracking-method-btn{padding:5px 3px}
+@media(max-height:600px) and (orientation:landscape){
+ .drive-body{align-items:start;align-content:start;padding:5px;gap:5px}
+ .drive-body>#joystick,.drive-body>#driveFollowControl{width:min(100%,86px);align-self:start;margin-top:4px}
+ .drive-body>.relative-position-panel{height:clamp(95px,calc(50dvh - 100px),150px);padding:5px 3px}
+ .drive-side{gap:4px}.drive-follow-switch{width:90%}
+ .relative-position-head span{font-size:8px}.relative-sample-row{font-size:6px}
+ .relative-position-foot strong{font-size:7px}.relative-decision{font-size:6px}
+}
+@media(max-height:450px) and (orientation:landscape){.drive-side .drive-speed-readout{display:none}.drive-side{gap:3px}}
+/* Joystick motion belongs to control input, never page panning. */
+.drive-body{overflow-x:hidden;overflow-y:auto;overscroll-behavior-x:none}
+.joystick-wrap{touch-action:none;user-select:none;-webkit-user-select:none;overscroll-behavior:contain}
+.joystick-wrap *{pointer-events:none;-webkit-user-drag:none}
+.joystick-wrap .joystick-stick{transition:box-shadow var(--fast)}
+/* Only a retained last-known point blinks; the instruments stay stable. */
+.is-last-position{animation:uwb-last-position 1.2s ease-in-out infinite}
+@keyframes uwb-last-position{0%,100%{opacity:1}50%{opacity:.28}}
+@media(prefers-reduced-motion:reduce){.is-last-position{animation:none;opacity:.6}}
 </style>
 </head>
 <body data-theme="dark" data-language="zh">
@@ -506,7 +536,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
               <div class="imu-readout success"><span>校准状态</span><strong id="imuState">良好</strong></div>
               <div class="uwb-panel" id="uwbPanel" data-state="offline">
                 <div class="uwb-dial" aria-label="UWB 信标相对方位"><b>UWB</b><i class="uwb-dot" id="uwbDot"></i></div>
-                <div class="uwb-values"><span>距离</span><strong id="uwbDistance">-- m</strong><span>方位 / 俯仰</span><strong id="uwbAngles">--° / --°</strong></div>
+                <div class="uwb-values"><span id="uwbDistanceLabel">距离</span><strong id="uwbDistance">-- m</strong><span>方位 / 俯仰</span><strong id="uwbAngles">--° / --°</strong></div>
               </div>
             </div>
             <div class="module-offline" id="imuOffline" hidden><strong>IMU 未连接</strong><span>等待 Pixhawk 遥测</span></div>
@@ -868,8 +898,8 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <script src="/socket.io/socket.io.js"></script>
 <script src="js/mediamtx-webrtc-reader.js?v=1.19.2"></script>
 <script src="js/offline-satellite-map.js?v=20260825v3"></script>
-<script src="js/manta-app-transport.js?v=20260827dualmethod2"></script>
-<script src="js/uwb-display-smoother.js?v=20261023dual1"></script>
+<script src="js/manta-app-transport.js?v=20261026integrated1"></script>
+<script src="js/uwb-display-smoother.js?v=20261026integrated1"></script>
 <script src="js/uwb-raw-display.js?v=20261023dual1"></script>
 <script>
 document.addEventListener("click",function(event){
@@ -892,6 +922,23 @@ var toastTimer,recordTimerHandle,downloadTimer,telemetryTimer,mediaSeeking=false
 var transport=null,liveRecordings=[],gimbalModeBusy=false,beaconCalibration=null,beaconCalibrationBusy=false,gimbalWebrtcReader=null,gimbalWebrtcFallbackTimer=null,gimbalMjpegRetryTimer=null,gimbalWebrtcFallbackLogged=false,gimbalStreamGeneration=0,gimbalVideoStatus="offline",gimbalVideoTransport="";
 var offlineMap=null,mapInitStarted=false,mapProvider="offline-satellite",mapSourceLabel="板载深圳离线卫星图 · GPS：Pixhawk",mapSourceLabelEn="Offline Shenzhen satellite · GPS: Pixhawk",lastGpsSourceTimestamp=0,lastGpsReceivedAt=0;
 
+// Telemetry may arrive at 100 Hz; paint the latest state at most 20 Hz.
+// Commands and safety state changes remain synchronous.
+var telemetryPaintTimer=null,telemetryPaintHardware=false,telemetryPaintFollow=false;
+function scheduleTelemetryPaint(hardware,follow){
+  telemetryPaintHardware=telemetryPaintHardware||Boolean(hardware);
+  telemetryPaintFollow=telemetryPaintFollow||Boolean(follow);
+  if(telemetryPaintTimer!==null)return;
+  telemetryPaintTimer=setTimeout(function(){
+    telemetryPaintTimer=null;
+    var paintHardware=telemetryPaintHardware,paintFollow=telemetryPaintFollow;
+    telemetryPaintHardware=telemetryPaintFollow=false;
+    if(paintHardware)renderConnection();
+    else if(paintFollow)renderUwbFollow();
+    renderTelemetry();renderGpsStatus();
+  },50);
+}
+
 function ensureTransport(){
   if(transport&&transport.mode===state.transportMode)return transport;
   if(transport)transport.disconnect().catch(function(){});
@@ -908,7 +955,7 @@ function ensureTransport(){
     if(payload.ekf)state.ekf=payload.ekf;
     if(Object.prototype.hasOwnProperty.call(payload,"armed"))state.armed=Boolean(payload.armed);
     if(payload.flightMode)state.flightMode=String(payload.flightMode);
-    renderTelemetry();renderGpsStatus();
+    scheduleTelemetryPaint(false,false);
   });
   transport.on("connection",function(payload){
     if(payload&&payload.degraded){state.boardOnline=false;state.connection="degraded";state.controlLink=false;state.speed=0;if(window.resetMantaJoystick)window.resetMantaJoystick();}
@@ -927,7 +974,7 @@ function ensureTransport(){
     if(payload.leftMotor)state.motorLinks.left=payload.leftMotor;
     if(payload.rightMotor)state.motorLinks.right=payload.rightMotor;
     if(state.connected){state.connection=state.boardOnline?(state.pixhawkOnline?"connected":"offline"):"degraded";state.controlLink=state.boardOnline&&state.pixhawkOnline;}
-    renderConnection();renderTelemetry();renderHardwareStatus();
+    scheduleTelemetryPaint(true,false);
   });
   transport.on("gimbalState",function(payload){applyGimbalState(payload||{});renderHardwareStatus()});
   transport.on("gimbalTarget",function(payload){
@@ -939,7 +986,7 @@ function ensureTransport(){
     if(!payload||state.gimbalMode==="click")return;
     state.trackStatus=payload;if(payload.mode){state.runningTrackMode=payload.mode==="beacon"?"beacon":payload.mode==="swimmer"?"swimmer":"face";if(state.trackingActive){state.trackMode=state.runningTrackMode;state.gimbalMode=state.runningTrackMode}}if(!payload.locked)state.trackTarget=null;renderTrackingMode();
   });
-  transport.on("uwbFollow",function(payload){state.uwbFollow=payload||state.uwbFollow;renderUwbFollow()});
+  transport.on("uwbFollow",function(payload){state.uwbFollow=payload||state.uwbFollow;scheduleTelemetryPaint(false,true)});
   return transport;
 }
 
@@ -1538,12 +1585,21 @@ function renderTelemetry(){
   }
 }
 
+function uwbDisplayIdentity(uwb){return JSON.stringify((uwb.sensors||[]).map(function(sensor){return [sensor.receiverId,sensor.tagId]}));}
+function uwbDisplayNow(){return transport&&transport.boardNow?transport.boardNow():Date.now();}
+
 function renderUwbStatus(){
   var uwb=state.uwb||{},panel=$("#uwbPanel"),dot=$("#uwbDot");
   if(!panel||!dot)return;
-  var display=uwbDisplaySmoother.view(state.connected?uwb:{},Date.now());
+  var display=uwbDisplaySmoother.view(state.connected?uwb:{},uwbDisplayNow());
   var distance=display.distanceM,azimuth=display.azimuthDeg,elevation=Number(uwb.elevationDeg);
   var valid=Boolean(state.connected&&display.valid&&Number.isFinite(elevation));
+  var held=uwbStatusHold.view({valid:valid,distanceM:distance,azimuthDeg:azimuth,elevationDeg:elevation},state.connected,uwbDisplayIdentity(uwb));
+  dot.classList.toggle("is-last-position",Boolean(held.stale));
+  panel.dataset.stale=String(Boolean(held.stale));
+  $("#uwbDistanceLabel").textContent=held.stale?localize("上次距离","Last distance"):localize("距离","Distance");
+  panel.title=held.stale?localize("上次位置，等待新的有效测量","Last position; waiting for a fresh measurement"):"";
+  if(held.valid){valid=true;distance=held.distanceM;azimuth=held.azimuthDeg;elevation=held.elevationDeg;}
   panel.dataset.state=valid?"online":"offline";
   $("#uwbDistance").textContent=valid?distance.toFixed(2)+" m":"-- m";
   $("#uwbAngles").textContent=valid?azimuth.toFixed(1)+"° / "+elevation.toFixed(1)+"°":"--° / --°";
@@ -1554,11 +1610,11 @@ function renderUwbStatus(){
   renderRelativePosition();
 }
 
-var uwbDisplaySmoother=new window.MantaUwbDisplaySmoother(120),relativeDisplaySmoother=new window.MantaUwbDisplaySmoother(120),rawUwbDisplay=new window.MantaUwbRawDisplay();
+var uwbDisplaySmoother=new window.MantaUwbDisplaySmoother(120),relativeDisplaySmoother=new window.MantaUwbDisplaySmoother(120),rawUwbDisplay=new window.MantaUwbRawDisplay(),relativePlotScale=new window.MantaUwbPlotScale(),uwbStatusHold=new window.MantaUwbDisplayHold(),relativePositionHold=new window.MantaUwbDisplayHold();
 function renderRelativePosition(){
   var panel=$("#relativePositionPanel"),point=$("#relativeTargetPoint"),vector=$("#relativeTargetVector");
   if(!panel||!point||!vector)return;
-  var now=Date.now(),uwb=state.uwb||{},display=uwbDisplaySmoother.view(state.connected?uwb:{},now),distance=display.distanceM,azimuth=display.azimuthDeg;
+  var now=uwbDisplayNow(),uwb=state.uwb||{},display=uwbDisplaySmoother.view(state.connected?uwb:{},now),distance=display.distanceM,azimuth=display.azimuthDeg;
   var raw=rawUwbDisplay.view(uwb,now,state.connected),rawPoint=$("#relativeRawPoint"),rawVector=$("#relativeRawVector");
   var follow=state.uwbFollow||{},estimate=follow.targetEstimate||{};
   var predicted=Boolean(follow.active&&estimate.usable&&estimate.source==="predicted");
@@ -1573,7 +1629,9 @@ function renderRelativePosition(){
   $("#relativeRawValue").textContent=raw.valid?raw.distanceM.toFixed(2)+" m / "+raw.azimuthDeg.toFixed(1)+"°":"-- m / --°";
   $("#relativeRawValue").title=raw.valid?localize("模块原始值，未筛选，不用于控制。标签 ","Unscreened module values; not used for control. Tag ")+raw.tagId:localize("未收到新鲜完整定位帧","No fresh complete measurement");
   $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):localize("● 可信","● Trusted");
-  var relative=predicted?estimate.relativeBodyM:follow.active&&!(follow.pausePropulsion&&estimate.source==="unavailable")?follow.relativeBodyM:null;
+  // Trusted points always describe admitted UWB, not the raw control target.
+  var relative=predicted?estimate.relativeBodyM:null;
+  if(valid&&!predicted&&Number.isFinite(uwb.relativeXM)&&Number.isFinite(uwb.relativeYM))relative={x:uwb.relativeXM,y:-uwb.relativeYM};
   if(valid&&relative&&!predicted){
     var relativeView=relativeDisplaySmoother.view(Object.assign({},uwb,{distanceM:Math.hypot(relative.x,relative.y),azimuthDeg:Math.atan2(-relative.y,relative.x)*180/Math.PI}),now);
     if(relativeView.valid)relative={x:relativeView.distanceM*Math.cos(relativeView.azimuthDeg*Math.PI/180),y:-relativeView.distanceM*Math.sin(relativeView.azimuthDeg*Math.PI/180)};
@@ -1582,11 +1640,21 @@ function renderRelativePosition(){
   // UWB +Y is left; the controller's +Y is right.
   var forward=valid?(relative&&Number.isFinite(relative.x)?relative.x:distance*Math.cos(angle)):0;
   var left=valid?(relative&&Number.isFinite(relative.y)?-relative.y:distance*Math.sin(angle)):0;
-  var magnitude=Math.max(valid?Math.hypot(forward,left):0,raw.valid?Math.hypot(raw.forward,raw.left):0),scales=[1,2,5,10,20,50],scale=5;
-  if(valid||raw.valid){scale=scales[scales.length-1];for(var i=0;i<scales.length;i++){if(magnitude<=scales[i]*.9){scale=scales[i];break}}scale=Math.max(scale,Math.ceil(magnitude/.9));}
-  function plot(dot,line,x,y){var px=90-clamp(y/scale,-1,1)*51,py=56-clamp(x/scale,-1,1)*51;dot.setAttribute("cx",px.toFixed(2));dot.setAttribute("cy",py.toFixed(2));line.setAttribute("x2",px.toFixed(2));line.setAttribute("y2",py.toFixed(2));}
-  if(valid)plot(point,vector,forward,left);
+  var retained=relativePositionHold.view({valid:valid&&!predicted,forward:forward,left:left,distanceM:distance,azimuthDeg:azimuth},state.connected,uwbDisplayIdentity(uwb));
+  if(predicted)retained={valid:true,stale:false,forward:forward,left:left,distanceM:distance,azimuthDeg:azimuth};
+  if(retained.stale){forward=retained.forward;left=retained.left;distance=retained.distanceM;azimuth=retained.azimuthDeg;}
+  point.classList.toggle("is-last-position",Boolean(retained.stale));
+  panel.dataset.stale=String(Boolean(retained.stale));
+  point.setAttribute("visibility",retained.valid?"visible":"hidden");
+  vector.setAttribute("visibility",retained.valid?"visible":"hidden");
+  if(!state.connected)relativePlotScale.reset();
+  var magnitude=retained.valid?Math.hypot(forward,left):raw.valid?Math.hypot(raw.forward,raw.left):NaN,scale=relativePlotScale.view(magnitude,now);
+  function plot(dot,line,x,y){var clip=Math.max(1,Math.hypot(x,y)/scale),px=90-y/scale/clip*51,py=56-x/scale/clip*51;dot.setAttribute("cx",px.toFixed(2));dot.setAttribute("cy",py.toFixed(2));line.setAttribute("x2",px.toFixed(2));line.setAttribute("y2",py.toFixed(2));}
+  if(retained.valid)plot(point,vector,forward,left);
   if(raw.valid)plot(rawPoint,rawVector,raw.forward,raw.left);
+  var rawOutside=raw.valid&&Math.hypot(raw.forward,raw.left)>scale;
+  rawPoint.setAttribute("data-outside-range",String(rawOutside));rawPoint.style.opacity=rawOutside?"0.55":"1";
+  if(rawOutside)$("#relativeRawValue").title+=localize("；原始点超出当前图示范围，请以数值为准","; raw point outside chart range; see numeric values");
   $("#relativeRingLabel").textContent=scale+" m";
   $("#relativePositionValue").textContent=valid?localize("前 ","FWD ")+forward.toFixed(2)+" · "+localize("左 ","LEFT ")+left.toFixed(2):localize("可信位置：暂无","Trusted position unavailable");
   $("#relativeRangeValue").textContent=valid?distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°":state.connected&&(raw.valid||(uwb.sensors||[]).some(function(s){return s.measurementStatus==="suspect"}))?localize("拒收 / 等待恢复","Rejected / waiting"):"-- m / --°";
@@ -1598,6 +1666,15 @@ function renderRelativePosition(){
   var reasons={occlusion_suspected:localize("突跳隔离","Jump quarantine"),innovation_outlier:localize("创新偏差过大","Innovation outlier"),outside_receiver_fov:localize("超出视野","Outside FOV"),distance_out_of_range:localize("距离超限","Range rejected"),radio_invalid:localize("无线定位无效","Radio invalid"),heading_unavailable:localize("航向不可用","Heading unavailable"),stale_measurement:localize("可信数据过期","Trusted data stale")};
   var decision=!state.connected?localize("连接已断开","Disconnected"):predicted?localize("预测，非可信实测","Prediction, not a trusted observation"):valid?localize("已接纳；原始值仅供对照","Accepted; raw values for comparison"):!raw.valid?localize("无新鲜定位帧","No fresh measurement"):localize("未接纳：","Rejected: ")+(quarantine?localize("突跳隔离","Jump quarantine"):reasons[reason]||localize("等待可信位置","Waiting for trusted position"));
   $("#relativeDecision").textContent=decision;$("#relativeDecision").title=decision+(reason?" ("+reason+")":"");
+  if(retained.stale){
+    panel.dataset.state="held";vector.setAttribute("stroke-dasharray","3 2");
+    $("#relativeJudgedLabel").textContent=localize("● 上次位置","● Last position");
+    $("#relativePositionValue").textContent=localize("上次：前 ","Last: FWD ")+forward.toFixed(2)+" · "+localize("左 ","LEFT ")+left.toFixed(2);
+    $("#relativeRangeValue").textContent=distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°";
+    $("#relativeFusionMode").textContent=localize("等待 UWB · 上次位置","WAITING UWB · LAST POSITION");
+    $("#relativeDecision").textContent=localize("上次有效位置，不代表当前定位","Last valid position; not a current measurement");
+    $("#relativeDecision").title=$("#relativeDecision").textContent;
+  }
 }
 
 function currentMapLocation(){
@@ -1869,39 +1946,51 @@ function startMockTelemetry(){
 
 function installJoystick(){
   var root=$("#joystick"),stick=$("#joyStick");
-  var activePointer=null;
+  var activePointer=null,origin=null;
+  function enabled(){return state.connected&&state.controlLink&&state.armed&&!state.calibrating&&state.driveMode!=="auto";}
+  function preventGesture(e){if(e.cancelable)e.preventDefault();}
   function update(cx,cy){
-    if(!state.connected||!state.controlLink||!state.armed||state.calibrating)return;
-    var rect=root.getBoundingClientRect();
-    var radius=rect.width*.34;
-    var dx=cx-(rect.left+rect.width/2);
-    var dy=cy-(rect.top+rect.height/2);
+    if(!enabled()){reset();return;}
+    if(!origin)return;
+    var radius=origin.radius,dx=cx-origin.x,dy=cy-origin.y;
     var dist=Math.hypot(dx,dy);
-    if(dist>radius){dx=dx/dist*radius;dy=dy/dist*radius}
+    if(dist>radius){dx=dx/dist*radius;dy=dy/dist*radius;}
     state.vector={x:dx/radius,y:dy/radius};
     var activeTransport=ensureTransport();if(activeTransport)activeTransport.drive(state.vector);
     stick.style.transform="translate(calc(-50% + "+dx+"px), calc(-50% + "+dy+"px))";
     $("#driveOutput").textContent="X "+state.vector.x.toFixed(2)+" · Y "+(-state.vector.y).toFixed(2);
     root.setAttribute("aria-valuetext","X "+state.vector.x.toFixed(2)+", Y "+(-state.vector.y).toFixed(2));
-    // Motor cards display only confirmed Pixhawk output telemetry.
   }
   function reset(){
-    activePointer=null;state.vector={x:0,y:0};
-    var activeTransport=ensureTransport();if(activeTransport)activeTransport.drive(state.vector);
+    var pointer=activePointer,wasActive=pointer!==null||Math.hypot(state.vector.x,state.vector.y)>0;
+    activePointer=null;origin=null;state.vector={x:0,y:0};
+    if(pointer!==null&&root.hasPointerCapture(pointer))root.releasePointerCapture(pointer);
+    if(wasActive){var activeTransport=ensureTransport();if(activeTransport)activeTransport.drive(state.vector);}
     stick.style.transform="translate(-50%, -50%)";
     $("#driveOutput").textContent="X 0.00 · Y 0.00";
     root.setAttribute("aria-valuetext",localize("停止","Stopped"));
-    setMotorOutput(1500,1500);
+    if(wasActive)setMotorOutput(1500,1500);
   }
   root.addEventListener("pointerdown",function(e){
-    if(!state.connected||!state.controlLink||!state.armed||state.calibrating)return;
+    if(!enabled()||activePointer!==null||(e.pointerType==="mouse"&&e.button!==0))return;
+    preventGesture(e);
+    var rect=root.getBoundingClientRect(),thumb=stick.getBoundingClientRect();
+    origin={x:rect.left+rect.width/2,y:rect.top+rect.height/2,
+      radius:Math.max(1,(Math.min(rect.width,rect.height)-Math.max(thumb.width,thumb.height))/2)};
     activePointer=e.pointerId;root.setPointerCapture(activePointer);update(e.clientX,e.clientY);
-  });
-  root.addEventListener("pointermove",function(e){if(e.pointerId===activePointer)update(e.clientX,e.clientY)});
-  root.addEventListener("pointerup",reset);root.addEventListener("pointercancel",reset);
-  root.addEventListener("lostpointercapture",reset);
+  },{passive:false});
+  root.addEventListener("pointermove",function(e){
+    if(e.pointerId!==activePointer)return;
+    preventGesture(e);update(e.clientX,e.clientY);
+  },{passive:false});
+  function finish(e){if(e.pointerId!==activePointer)return;preventGesture(e);reset();}
+  root.addEventListener("pointerup",finish);
+  root.addEventListener("pointercancel",finish);
+  root.addEventListener("lostpointercapture",finish);
+  root.addEventListener("dragstart",function(e){e.preventDefault();});
   window.addEventListener("blur",reset);
-  document.addEventListener("visibilitychange",function(){if(document.hidden)reset()});
+  window.addEventListener("resize",reset);
+  document.addEventListener("visibilitychange",function(){if(document.hidden)reset();});
   window.resetMantaJoystick=reset;
 }
 
