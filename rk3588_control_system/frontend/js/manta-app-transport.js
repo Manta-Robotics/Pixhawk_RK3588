@@ -247,8 +247,11 @@
     function LiveTransport() {
         TransportBase.call(this);
         this.mode = "live";
+        this.boardClock = null;
         this.socket = null;
         this.pollTimer = null;
+        this.pollInFlight = false;
+        this.pollAbort = null;
         this.lastDriveAt = 0;
         this.pendingDrive = null;
         this.driveTimer = null;
@@ -329,23 +332,50 @@
     LiveTransport.prototype.startPolling = function () {
         clearInterval(this.pollTimer);
         this.pollTimer = setInterval(function () {
-            if (!this.connected) return;
-            var startedAt = performance.now();
-            fetch("/api/status", { cache: "no-store" }).then(function (response) { if (!response.ok) throw new Error("HTTP " + response.status); return response.json(); }).then(function (payload) {
+            if (!this.connected || this.pollInFlight) return;
+            this.pollInFlight = true;
+            var controller = new AbortController(), startedAt = performance.now();
+            this.pollAbort = controller;
+            var deadline = setTimeout(function () { controller.abort(); }, 3500);
+            fetch("/api/status", { cache: "no-store", signal: controller.signal }).then(function (response) {
+                if (!response.ok) throw new Error("HTTP " + response.status);
+                return response.json();
+            }).then(function (payload) {
+                if (!this.connected) return;
                 this.lastLatency = performance.now() - startedAt;
                 this.pollFailures = 0;
                 this.applyStatus(payload);
-                this.refreshGimbalState();
                 this.emit("connection", { connected: true, degraded: false, hardwareOnline: this.pixhawkOnline });
+                return this.refreshGimbalState(controller.signal);
             }.bind(this)).catch(function (error) {
+                if (!this.connected) return;
                 this.pollFailures += 1;
                 this.log("WARNING", "LINK", "状态轮询失败：" + error.message, "hardware");
                 if (this.pollFailures >= 2) this.emit("connection", { connected: false, degraded: true });
+            }.bind(this)).finally(function () {
+                clearTimeout(deadline);
+                if (this.pollAbort === controller) { this.pollAbort = null; this.pollInFlight = false; }
             }.bind(this));
         }.bind(this), 2000);
     };
 
+    // Keep display freshness in the board clock domain. Browser wall clocks
+    // can differ by seconds; performance.now also survives wall-clock changes.
+    // Use the RTT upper bound: asymmetric latency must not put a new sample
+    // in the display clock's future. Slow links expire conservatively.
+    LiveTransport.prototype.boardNow = function () {
+        return this.boardClock
+            ? this.boardClock.serverAt + performance.now() - this.boardClock.localAt
+            : Date.now();
+    };
+
     LiveTransport.prototype.applyStatus = function (payload) {
+        var serverAt = payload && (typeof payload.timestamp === "number"
+            ? payload.timestamp : Date.parse(payload.timestamp));
+        if (Number.isFinite(serverAt)) {
+            this.boardClock = { serverAt: serverAt + Math.max(0, Number(this.lastLatency) || 0),
+                localAt: performance.now() };
+        }
         var data = payload && payload.data ? payload.data : {};
         var hardware = data.hardware || {};
         var pixhawk = hardware.pixhawk || {};
@@ -376,8 +406,8 @@
         if (data.uwbFollow) this.emit("uwbFollow", data.uwbFollow);
     };
 
-    LiveTransport.prototype.refreshGimbalState = function () {
-        return fetch("/api/gimbal/state", { cache: "no-store" }).then(function (response) { if (!response.ok) throw new Error("HTTP " + response.status); return response.json(); }).then(function (payload) {
+    LiveTransport.prototype.refreshGimbalState = function (signal) {
+        return fetch("/api/gimbal/state", { cache: "no-store", signal: signal }).then(function (response) { if (!response.ok) throw new Error("HTTP " + response.status); return response.json(); }).then(function (payload) {
             var state = payload && payload.state ? payload.state : {};
             this.applyGimbalTrackingState(state);
             this.emit("gimbalState", state);
@@ -610,6 +640,7 @@
     };
 
     LiveTransport.prototype.disconnect = function () {
+        if (this.pollAbort) this.pollAbort.abort();
         this.drive({ x: 0, y: 0 });
         this.connected = false;
         clearInterval(this.pollTimer);
