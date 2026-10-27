@@ -23,8 +23,11 @@ sudo journalctl -u manta-backend.service -n 100 --no-pager
 
 ## 接口检查
 
+控制 API 需要设备配对。`/health` 保持公开；只读维护脚本会从设备环境或私有 PIN 文件创建临时会话，不申请控制权。详情与 PIN 获取方式见 [控制配对与权限](CONTROL_ACCESS.md)。
+
 ```bash
 curl -fsS http://127.0.0.1:3000/health
+python3 scripts/device_api.py --url http://127.0.0.1:3000/api/status
 curl -fsS http://127.0.0.1:8091/health
 curl -I http://10.42.0.1/generate_204
 python3 backend/mavlink_bridge.py --help

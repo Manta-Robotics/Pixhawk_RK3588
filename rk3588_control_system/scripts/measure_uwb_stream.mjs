@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Passive measurement of real Socket.IO observations, never a motion command.
 import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
 
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 function statistics(values) {
@@ -64,17 +65,29 @@ export class UwbStreamMeter {
 
 async function main() {
   const args=process.argv.slice(2);
-  if(args.includes('--help')){console.log('node scripts/measure_uwb_stream.mjs [--url http://127.0.0.1:3000] [--seconds 30]');return;}
+  if(args.includes('--help')){console.log('node scripts/measure_uwb_stream.mjs [--url http://127.0.0.1:3000] [--seconds 30] [--pin-file PRIVATE_FILE]\nRequires MANTA_CONTROL_PIN or --pin-file. Creates a read-only session; never claims control.');return;}
   const value=(key,fallback)=>{const i=args.indexOf(key);return i<0?fallback:args[i+1];};
   const url=new URL(value('--url','http://127.0.0.1:3000'));
   const seconds=Number(value('--seconds','30'));
   if(!['http:','https:'].includes(url.protocol)||!finite(seconds)||seconds<5||seconds>3600)throw new Error('Use an HTTP(S) URL and a duration from 5 to 3600 seconds');
-  const status=await (await fetch(new URL('/api/status',url),{signal:AbortSignal.timeout(4000)})).json();
+  const pinFile=value('--pin-file',null);
+  const pin=pinFile?(await readFile(pinFile,'utf8')).trim():process.env.MANTA_CONTROL_PIN;
+  if(!/^\d{6}$/.test(pin||''))throw new Error('Set MANTA_CONTROL_PIN or supply a private six-digit --pin-file');
+  const paired=await fetch(new URL('/api/auth/pair',url),{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pin}),signal:AbortSignal.timeout(4000)});
+  if(!paired.ok)throw new Error(`Device pairing failed (HTTP ${paired.status})`);
+  const cookie=paired.headers.get('set-cookie')?.split(';')[0];
+  if(!cookie)throw new Error('Device did not issue a pairing session');
+  const headers={Cookie:cookie};
+  try {
+  const statusResponse=await fetch(new URL('/api/status',url),{headers,signal:AbortSignal.timeout(4000)});
+  if(!statusResponse.ok)throw new Error(`Device status unavailable (HTTP ${statusResponse.status})`);
+  const status=await statusResponse.json();
   if(status.data?.isConnected!==true)throw new Error('Flight controller is disconnected; no live rate measurement taken');
   const {default:WebSocket}=await import('ws');
   const address=new URL('/socket.io/?EIO=4&transport=websocket',url);
   address.protocol=url.protocol==='https:'?'wss:':'ws:';
-  const socket=new WebSocket(address), meter=new UwbStreamMeter();
+  const socket=new WebSocket(address,{headers}), meter=new UwbStreamMeter();
   let started=null;
   await new Promise((resolve,reject)=>{
     let done=false;
@@ -87,6 +100,7 @@ async function main() {
       const raw=buffer.toString();
       if(raw.startsWith('0'))socket.send('40');
       else if(raw==='2')socket.send('3');
+      else if(raw.startsWith('44'))finish(new Error('Device rejected the read-only session'));
       else if(raw.startsWith('40')&&started===null){
         clearTimeout(connectTimer);started=performance.now();sampleTimer=setTimeout(()=>finish(),seconds*1000);
       }else if(raw.startsWith('42')&&started!==null){
@@ -101,6 +115,9 @@ async function main() {
   const report=meter.report((performance.now()-started)/1000);
   console.log(JSON.stringify(report,null,2));
   if(!report.receivers.some(r=>r.receivedHz>0))process.exitCode=2;
+  } finally {
+    await fetch(new URL('/api/auth/logout',url),{method:'POST',headers,signal:AbortSignal.timeout(4000)}).catch(()=>{});
+  }
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)main().catch(error=>{console.error(error.message);process.exitCode=2;});

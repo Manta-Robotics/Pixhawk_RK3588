@@ -20,6 +20,7 @@ import https from 'https';
 import { Bonjour } from 'bonjour-service';
 import { validateSystemConfig } from '../scripts/validate_config.mjs';
 import { isSameOriginRequest, rejectCrossOrigin } from './origin_policy.js';
+import { createControlAccess, loadControlPin } from './control_access.js';
 import { computeBeaconControl, normalizeAngleDeg } from './gimbal_beacon.js';
 import { fitBeaconCalibration, generateBeaconCalibrationPoints } from './gimbal_beacon_calibration.js';
 import { shapeRoverAxis } from './rover_slew.js';
@@ -280,6 +281,30 @@ const io = new Server(httpServer, {
   transports: ['polling', 'websocket'],
   perMessageDeflate: false
 });
+
+const controlAccess = createControlAccess({
+  pin: loadControlPin(PROJECT_ROOT),
+  onControlLost(reason) {
+    if (reason === 'transport_lost') {
+      if (uwbFollowState.active || uwbFollowTransitionBusy || uwbAutoResume.pending) return true;
+      const current = systemState.roverControl || {}, target = manualRoverSlew.target || {};
+      if (Number(current.throttle) || Number(current.steering) || Number(target.throttle) || Number(target.steering)) {
+        forceNeutralRoverControl('CONTROL_OWNER_DISCONNECTED', 'control_owner_disconnected');
+      }
+      return false;
+    }
+    stopUwbFollow(reason, { disarm: true });
+    forceNeutralRoverControl('CONTROL_SESSION_ENDED', reason);
+    if (isVisionActive()) stopVision();
+    return false;
+  },
+  onChange() {
+    for (const socket of io.sockets.sockets.values()) {
+      socket.emit('control_session', controlAccess.state(socket.data.controlSession, socket.data.controlClient));
+    }
+  }
+});
+io.use(controlAccess.authenticateSocket);
 
 const commandSocket = dgram.createSocket('udp4');
 const telemetrySocket = dgram.createSocket('udp4');
@@ -929,8 +954,10 @@ app.use((_req, res, next) => {
   );
   next();
 });
-app.use(bodyParser.json({ limit: '1mb' }));
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: '1mb', inflate: false }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '64kb', parameterLimit: 100, inflate: false }));
+controlAccess.installRoutes(app);
+app.use('/api', controlAccess.middleware);
 app.get(['/', '/index.html'], (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
@@ -4457,6 +4484,7 @@ app.get('/api/status', (req, res) => {
   }
   res.json({
     success: true,
+    controlSession: controlAccess.state(req.controlSession, String(req.headers['x-manta-client'] || '')),
     timestamp: new Date().toISOString(),
     data: systemState,
     limits: {
@@ -5328,6 +5356,7 @@ app.post('/api/emergency/stop', (req, res) => {
     protocol: ROVER_CONTROL_PROTOCOL
   });
   disarmAndReturnManual('emergency_stop');
+  controlAccess.clearDisconnectedOwner('emergency_stop');
   systemState.telemetry.armed = false;
 
   io.emit('aircraft_disarmed');
@@ -5361,19 +5390,21 @@ app.use('/api', (req, res) => {
 
 app.use((error, _req, res, _next) => {
   const badJson = error && error.type === 'entity.parse.failed';
-  const status = badJson ? 400 : 500;
-  if (!badJson) console.error(`[HTTP] ${error && error.stack ? error.stack : error}`);
+  const status = Number(error?.status) >= 400 && Number(error?.status) < 500 ? Number(error.status) : 500;
+  if (status === 500) console.error(`[HTTP] ${error && error.stack ? error.stack : error}`);
   res.status(status).json({
     success: false,
-    message: badJson ? 'Invalid JSON request body' : 'Internal server error'
+    message: badJson ? 'Invalid JSON request body' : status === 500 ? 'Internal server error' : 'Unsupported or oversized request body'
   });
 });
 
 io.on('connection', (socket) => {
   addLog('INFO', `Web client connected: ${socket.id}`);
+  socket.emit('control_session', controlAccess.state(socket.data.controlSession, socket.data.controlClient));
   socket.emit('system_state', systemState);
 
   socket.on('motor_control', (data = {}) => {
+    if (!controlAccess.authorizeSocket(socket, true)) return;
     const result = handleMotorControl(data.channel, data.pwm, `WEB:${socket.id}`);
     if (!result.ok) {
       socket.emit('error_message', { message: result.error });
@@ -5381,6 +5412,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('rover_drive', (data = {}) => {
+    if (!controlAccess.authorizeSocket(socket, true)) return;
     const result = applyRoverControl({ throttle: data.throttle, steering: data.steering }, `SOCKET:${socket.id}`);
     if (!result.ok) {
       socket.emit('error_message', { message: result.error });
@@ -5390,6 +5422,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('arm', () => {
+    if (!controlAccess.authorizeSocket(socket, true)) return;
     if (systemState.telemetry.armed) {
       socket.emit('info_message', { message: 'Rover already armed' });
       return;
@@ -5400,7 +5433,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disarm', () => {
+    if (!controlAccess.authorizeSocket(socket, false)) return;
     stopUwbFollow('operator_disarm');
+    controlAccess.clearDisconnectedOwner('operator_disarm');
     if (!systemState.telemetry.armed) {
       socket.emit('info_message', { message: 'Rover already disarmed' });
       return;
@@ -5411,20 +5446,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('request_telemetry', () => {
+    if (!controlAccess.authorizeSocket(socket, false)) return;
     socket.emit('telemetry_update', systemState.telemetry);
   });
 
   socket.on('disconnect', () => {
     addLog('INFO', `Web client disconnected: ${socket.id}`);
-    const current = systemState.roverControl || {};
-    const target = manualRoverSlew.target || {};
-    const manualMotionPending = Number(current.throttle) !== 0
-      || Number(current.steering) !== 0
-      || Number(target.throttle) !== 0
-      || Number(target.steering) !== 0;
-    if (!uwbFollowState.active && manualMotionPending) {
-      forceNeutralRoverControl(`SOCKET_DISCONNECT:${socket.id}`, 'web_client_disconnected');
-    }
+    controlAccess.disconnectSocket(socket);
   });
 
   socket.on('error', (error) => {
@@ -5490,6 +5518,7 @@ function shutdown() {
   }, 2500);
   forceExitTimer.unref();
 
+  controlAccess.close();
   flushTelemetryCsv(true);
   addLog('INFO', 'Server shutting down');
   clearInterval(uwbFollowTimer);

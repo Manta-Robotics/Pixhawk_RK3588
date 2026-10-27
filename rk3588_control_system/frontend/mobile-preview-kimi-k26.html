@@ -515,6 +515,8 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
           <button type="button" id="manualFollowButton" class="active">手动跟随</button>
           <button type="button" id="autoFollowButton">自动跟随</button>
         </div>
+        <button class="disconnect-btn" id="claimControlButton" type="button" hidden>获取控制</button>
+        <span id="controlSessionLabel"></span>
         <button class="disconnect-btn" id="disconnectButton" type="button">断开</button>
       </div>
       <div class="quadrant-grid" id="quadrantGrid">
@@ -806,7 +808,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
       <input class="pin-input" inputmode="numeric" maxlength="1" aria-label="第5位">
       <input class="pin-input" inputmode="numeric" maxlength="1" aria-label="第6位">
     </div>
-    <small id="pairingHint" style="display:block;text-align:center;color:var(--t3);margin-bottom:16px">Preview 测试码：<b>240724</b></small>
+    <small id="pairingHint" style="display:block;text-align:center;color:var(--t3);margin-bottom:16px">使用船端配置中的六位控制配对码</small>
     <button class="modal-action" id="pairButton" type="button" disabled>验证并连接</button>
   </div>
 </div>
@@ -898,8 +900,8 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <script src="/socket.io/socket.io.js"></script>
 <script src="js/mediamtx-webrtc-reader.js?v=1.19.2"></script>
 <script src="js/offline-satellite-map.js?v=20260825v3"></script>
-<script src="js/manta-app-transport.js?v=20261026integrated1"></script>
-<script src="js/uwb-display-smoother.js?v=20261026integrated1"></script>
+<script src="js/manta-app-transport.js?v=20261027access1"></script>
+<script src="js/uwb-display-smoother.js?v=20261027access1"></script>
 <script src="js/uwb-raw-display.js?v=20261023dual1"></script>
 <script>
 document.addEventListener("click",function(event){
@@ -939,6 +941,8 @@ function scheduleTelemetryPaint(hardware,follow){
   },50);
 }
 
+function pageCanControl(){return state.transportMode!=="live"||Boolean(transport&&transport.canControl);}
+
 function ensureTransport(){
   if(transport&&transport.mode===state.transportMode)return transport;
   if(transport)transport.disconnect().catch(function(){});
@@ -959,7 +963,7 @@ function ensureTransport(){
   });
   transport.on("connection",function(payload){
     if(payload&&payload.degraded){state.boardOnline=false;state.connection="degraded";state.controlLink=false;state.speed=0;if(window.resetMantaJoystick)window.resetMantaJoystick();}
-    else if(payload&&payload.connected){state.boardOnline=true;state.connection=state.pixhawkOnline?"connected":"offline";state.controlLink=state.pixhawkOnline;}
+    else if(payload&&payload.connected){state.boardOnline=true;state.connection=state.pixhawkOnline?"connected":"offline";state.controlLink=state.pixhawkOnline&&pageCanControl();}
     renderConnection();renderTelemetry();renderHardwareStatus();
   });
   transport.on("log",function(entry){addLog(entry||{})});
@@ -973,8 +977,12 @@ function ensureTransport(){
     payload=payload||{};["boardOnline","pixhawkOnline","imuOnline","motorsOnline","gimbalOnline","gimbalOutputAvailable"].forEach(function(key){if(Object.prototype.hasOwnProperty.call(payload,key))state[key]=Boolean(payload[key])});
     if(payload.leftMotor)state.motorLinks.left=payload.leftMotor;
     if(payload.rightMotor)state.motorLinks.right=payload.rightMotor;
-    if(state.connected){state.connection=state.boardOnline?(state.pixhawkOnline?"connected":"offline"):"degraded";state.controlLink=state.boardOnline&&state.pixhawkOnline;}
+    if(state.connected){state.connection=state.boardOnline?(state.pixhawkOnline?"connected":"offline"):"degraded";state.controlLink=state.boardOnline&&state.pixhawkOnline&&pageCanControl();}
     scheduleTelemetryPaint(true,false);
+  });
+  transport.on("controlSession",function(session){
+    state.controlLink=state.boardOnline&&state.pixhawkOnline&&session.canControl===true;
+    renderConnection();
   });
   transport.on("gimbalState",function(payload){applyGimbalState(payload||{});renderHardwareStatus()});
   transport.on("gimbalTarget",function(payload){
@@ -1241,6 +1249,7 @@ var STATIC_EN={
 function localize(zh,en){return state.language==="en"?(en||STATIC_EN[zh]||zh):zh}
 
 function renderTransportMode(){
+  $("#pairingHint").textContent=state.transportMode==="live"?localize("使用船端配置中的六位控制配对码","Use the six-digit control PIN from the device configuration"):localize("Preview 测试码：240724","Preview test code: 240724");
   $("#transportToggle").textContent=state.transportMode==="live"?"LIVE":"SIM";
   $("#transportHint").textContent=state.transportMode==="live"?localize("当前 Manta 后端接口","Current Manta backend"):localize("Preview 模拟通信","Preview simulation");
 }
@@ -1333,7 +1342,7 @@ function renderUwbFollow(){
   $("#trackingMethodState").textContent=trackingMethod==="neural"?"SMARTUSV PPO":"TRADITIONAL";
   button.classList.toggle("active",requested);
   button.classList.toggle("busy",busy);
-  button.disabled=state.driveMode!=="auto"||(!requested&&(!state.connected||!state.controlLink));
+  button.disabled=!pageCanControl()||state.driveMode!=="auto"||(!requested&&(!state.connected||!state.controlLink));
   label.textContent=follow.active?localize("停止跟随","Stop follow"):searching?localize("停止搜索","Stop search"):busy?localize("取消启动","Cancel start"):localize("启动跟随","Start follow");
   var labels={awaiting_signal:localize("搜索 UWB","Searching for UWB"),awaiting_trusted_uwb:localize("搜索 UWB","Searching for UWB"),auto_resume_ready:localize("UWB 已找到，准备跟随","UWB acquired; preparing to follow"),confirming_recovered_uwb:localize("确认连续有效 UWB","Confirming valid UWB samples"),auto_resume_recovering:localize("定位恢复中","Recovering target"),acro_velocity_unavailable:localize("等待有效航速数据","Waiting for valid velocity"),acro_parameters_not_ready:localize("等待ACRO控制参数","Waiting for ACRO parameters"),imu_stale:localize("航向数据过期，已退出","Stale heading; stopped"),prediction_clock_reset:localize("时钟变化，已退出","Clock changed; stopped"),predicting:localize("短时预测跟随","Predicted following"),waiting_target:localize("等待目标出水","Waiting for swimmer"),recovering:localize("定位恢复中","Recovering target"),prediction_tracking:localize("短时预测跟随","Predicted following"),prediction_recovering:localize("定位恢复中","Recovering target"),prediction_reacquiring:localize("校验出水测量","Checking new measurements"),prediction_pose_unavailable:localize("运动状态不足，等待出水","Motion estimate unavailable; waiting"),prediction_warming_up:localize("等待连续有效测量","Waiting for valid samples"),prediction_limit:localize("预测到限，等待出水","Prediction limit; waiting"),prediction_clearance:localize("间距不足，等待出水","Insufficient clearance; waiting"),prediction_speed_limit:localize("船速过高，暂停预测推进","Vessel too fast; waiting"),prediction_wait_timeout:localize("目标失联超时，已退出","Target timeout; stopped"),target_identity_changed:localize("目标身份变化，已退出","Target changed; stopped"),tracking:localize("跟随中","Tracking"),holding:localize("间距保护，保持停止","Separation protection; holding"),holding_distance:localize("间距保护，保持停止","Separation protection; holding"),method_selected:localize("等待启动","Ready to start"),disarming:localize("正在解除武装","Disarming"),switching_mode:localize("正在切换控制模式","Switching control mode"),arming:localize("正在自动武装","Auto arming"),gps_fix_invalid:localize("GPS无效","GPS invalid"),ekf_unhealthy:localize("EKF无效","EKF invalid"),imu_invalid:localize("IMU航向无效","IMU yaw invalid"),uwb_stale:localize("UWB失效","UWB stale"),guided_required:localize("需要GUIDED模式","GUIDED required"),manual_required:localize("需要MANUAL模式","MANUAL required"),pilot_steering_not_ready:localize("等待电机控制参数","Waiting for motor control parameters"),manual_mode_timeout:localize("MANUAL切换超时","MANUAL timeout"),acro_required:localize("需要ACRO模式","ACRO required"),guided_mode_timeout:localize("GUIDED切换超时","GUIDED timeout"),acro_mode_timeout:localize("ACRO切换超时","ACRO timeout"),arming_timeout:localize("武装超时","Arming timeout"),manual_stop:localize("已停止","Stopped"),not_started:localize("未启动","Not started")};
   var estimate=follow.targetEstimate||{};
@@ -1532,6 +1541,10 @@ function renderLogs(){
 function escapeHtml(v){return String(v).replace(/[&<>'"]/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[c]})}
 
 function renderConnection(){
+  var controlButton=$("#claimControlButton"),controlLabel=$("#controlSessionLabel");
+  if(controlButton){controlButton.hidden=!state.connected||state.transportMode!=="live"||pageCanControl();controlButton.disabled=Boolean(transport&&transport.controlSession&&transport.controlSession.ownerPresent);}
+  if(controlLabel)controlLabel.textContent=state.connected&&state.transportMode==="live"?(pageCanControl()?localize("控制中","Controlling"):localize("只读","Read only")):"";
+
   shell.dataset.connection=state.connection;
   var labels={idle:localize("未连接","Offline"),discovering:localize("正在发现","Discovering"),selecting:localize("选择设备","Choose device"),pairing:localize("正在配对","Pairing"),connecting:localize("正在连接","Connecting"),connected:localize("已连接","Connected"),degraded:localize("链路降级","Degraded"),offline:localize("设备离线","Device Offline"),emergency:localize("已解除武装","Disarmed")};
   $("#connectionMetric").textContent=labels[state.connection]||state.connection;
@@ -1902,11 +1915,11 @@ function completePairing(){
   var activeTransport=ensureTransport();
   var pairing=activeTransport?activeTransport.pair(pin).then(function(){state.connection="connecting";renderConnection();return activeTransport.connect()}):Promise.reject(new Error("通信模块未加载"));
   pairing.then(function(){
-    state.connected=true;state.boardOnline=true;state.controlLink=state.pixhawkOnline;state.connection=state.pixhawkOnline?"connected":"offline";state.emergency=false;state.armed=false;
+    state.connected=true;state.boardOnline=true;state.controlLink=state.pixhawkOnline&&pageCanControl();state.connection=state.pixhawkOnline?"connected":"offline";state.emergency=false;state.armed=false;
     setModal("pairingModal",false);$$("#pinInputs input").forEach(function(i){i.value=""});
     renderConnection();showView("device");
     showToast(state.pixhawkOnline?localize("Manta 已连接，互联网保持在线","Manta connected. Internet remains online."):localize("已连接 Manta 主机，等待 Pixhawk、IMU 与电机上线","Manta host connected; waiting for Pixhawk, IMU, and motors"));
-    addLog(state.pixhawkOnline?{level:"INFO",source:"APP",message:"控制权已授予本机",messageEn:"Control granted to this device",category:"system"}:{level:"WARNING",source:"APP",message:"已建立板端会话，控制保持锁定直到 Pixhawk 上线",messageEn:"Board session established; control remains locked until Pixhawk is online",category:"hardware"});
+    addLog(state.pixhawkOnline?{level:"INFO",source:"APP",message:pageCanControl()?"控制权已授予本机":"已连接，当前页面为只读",messageEn:pageCanControl()?"Control granted to this device":"Connected in read-only mode",category:"system"}:{level:"WARNING",source:"APP",message:"已建立板端会话，控制保持锁定直到 Pixhawk 上线",messageEn:"Board session established; control remains locked until Pixhawk is online",category:"hardware"});
   }).catch(function(error){state.connection="pairing";renderConnection();showToast(error.message||"配对码不正确","Incorrect pairing code");btn.textContent=localize("验证并连接","Verify and Connect");validatePin()});
 }
 
@@ -2522,6 +2535,11 @@ function installEvents(){
   $("#rescanDevices").addEventListener("click",function(){setModal("devicePickerModal",false);startConnection()});
   $("#devicePickerList").addEventListener("click",function(event){var option=event.target.closest("[data-device-index]");if(option)selectDiscoveredDevice(Number(option.dataset.deviceIndex))});
   $("#pairButton").addEventListener("click",completePairing);
+  $("#claimControlButton").addEventListener("click",function(){
+    if(!transport||state.transportMode!=="live")return;
+    transport.claimControl().then(function(){renderConnection();showToast(localize("已获取控制权","Control acquired"));})
+      .catch(function(error){showToast(error.message||localize("无法获取控制权","Cannot acquire control"));});
+  });
   $("#disconnectButton").addEventListener("click",disconnect);
   $("#manualFollowButton").addEventListener("click",function(){setDriveMode("manual")});
   $("#autoFollowButton").addEventListener("click",function(){setDriveMode("auto")});
