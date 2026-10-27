@@ -40,14 +40,14 @@ WEB_PORT=$(grep -o '"web_port"[^,]*' "$CONFIG_FILE" | grep -o '[0-9]*' | head -n
 WEB_PORT=${WEB_PORT:-3000}
 STATUS_URL="http://127.0.0.1:${WEB_PORT}/api/status"
 
-if ! command -v curl >/dev/null 2>&1; then
-    echo "[status-report] curl not found"
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[status-report] python3 not found"
     exit 1
 fi
 
 STATUS_JSON=""
 for _attempt in 1 2 3 4 5; do
-    STATUS_JSON=$(curl -fsS --max-time 2 "$STATUS_URL" 2>/dev/null)
+    STATUS_JSON=$(python3 "$PROJECT_DIR/scripts/device_api.py" --url "$STATUS_URL")
     if [ -n "$STATUS_JSON" ]; then
         break
     fi

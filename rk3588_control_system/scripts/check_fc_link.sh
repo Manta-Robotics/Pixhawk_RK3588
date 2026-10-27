@@ -44,10 +44,13 @@ if command -v curl >/dev/null 2>&1; then
   echo ""
   echo "status summary:"
   python3 - <<'PY'
-import json, urllib.request
+import json, sys
+sys.path.insert(0, 'scripts')
+from device_api import DeviceApiSession
 try:
-    raw = urllib.request.urlopen('http://127.0.0.1:3000/api/status', timeout=2).read()
-    d = json.loads(raw.decode('utf-8'))
+    with DeviceApiSession('http://127.0.0.1:3000') as session:
+        with session.open('http://127.0.0.1:3000/api/status') as response:
+            d = json.load(response)
     data = d.get('data', {})
     print('pixhawkStatus=', data.get('pixhawkStatus'))
     print('isConnected=', data.get('isConnected'))

@@ -8,6 +8,21 @@
         { name: "MANTA ROBOTIC", model: "MANTA", serial: "0931", rssi: -73 }
     ];
 
+    var CONTROL_CLIENT_ID = (function () {
+        var bytes = new Uint8Array(16);
+        if (window.crypto && window.crypto.getRandomValues) {
+            window.crypto.getRandomValues(bytes);
+            return Array.from(bytes, function (value) { return value.toString(16).padStart(2, "0"); }).join("");
+        }
+        return "page-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    })();
+    function apiFetch(url, options) {
+        options = Object.assign({}, options || {});
+        options.credentials = "same-origin";
+        options.headers = Object.assign({}, options.headers || {}, { "X-Manta-Client": CONTROL_CLIENT_ID });
+        return fetch(url, options);
+    }
+
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, Number(value) || 0));
     }
@@ -22,16 +37,17 @@
         return Number(temperature.flightController || temperature.hostBoard || 0);
     }
 
-    function postJson(url, body) {
-        return fetch(url, {
+    function postJson(url, body, options) {
+        return apiFetch(url, Object.assign({}, options || {}, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body || {})
-        }).then(function (response) {
+        })).then(function (response) {
             return response.json().catch(function () { return {}; }).then(function (payload) {
                 if (!response.ok || payload.success === false || payload.ok === false) {
                     var error = new Error(payload.message || ("HTTP " + response.status));
                     error.payload = payload;
+                    error.status = response.status;
                     throw error;
                 }
                 return payload;
@@ -248,6 +264,11 @@
         TransportBase.call(this);
         this.mode = "live";
         this.boardClock = null;
+        this.canControl = false;
+        this.controlRevision = -1;
+        this.connectGeneration = 0;
+        this.connectAbort = null;
+        this.releasePromise = Promise.resolve();
         this.socket = null;
         this.pollTimer = null;
         this.pollInFlight = false;
@@ -277,31 +298,101 @@
 
     LiveTransport.prototype.pair = function (pin) {
         if (!/^\d{6}$/.test(String(pin))) return Promise.reject(new Error("请输入六位配对码"));
-        // 当前后端尚未提供配对端点；只在 UI 层验证格式，真实令牌端点上线后替换这里。
-        return Promise.resolve({ token: "local-preview" });
+        return postJson("/api/auth/pair", { pin: String(pin) });
+    };
+
+    LiveTransport.prototype.applyControlSession = function (session) {
+        session = session || {};
+        if (Number(session.revision) < this.controlRevision) return;
+        this.controlRevision = Number(session.revision) || 0;
+        this.canControl = session.canControl === true;
+        this.controlSession = session;
+        if (!this.canControl) {
+            this.driveVector = { x: 0, y: 0 };
+            clearTimeout(this.driveTimer);
+        }
+        this.emit("controlSession", session);
+        this.emit("hardwareStatus", { controlAuthorized: this.canControl });
+    };
+
+    LiveTransport.prototype.claimControl = function (options) {
+        return postJson("/api/control/claim", {}, options).then(function (payload) {
+            if (!this.connected || options && options.signal && options.signal.aborted) throw new Error("连接已取消");
+            this.applyControlSession(payload.controlSession);
+            return payload;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.waitForSocket = function (signal) {
+        if (!this.socket) return Promise.reject(new Error("实时通信模块未加载"));
+        var socket = this.socket;
+        if (socket.connected) return Promise.resolve();
+        return new Promise(function (resolve, reject) {
+            function cleanup() {
+                socket.off("connect", connected); socket.off("connect_error", failed);
+                signal.removeEventListener("abort", aborted);
+            }
+            function connected() { cleanup(); resolve(); }
+            function failed(error) { cleanup(); reject(error); }
+            function aborted() { cleanup(); reject(new Error("连接已取消或超时")); }
+            socket.on("connect", connected); socket.on("connect_error", failed);
+            signal.addEventListener("abort", aborted, { once: true });
+            if (signal.aborted) aborted();
+        });
     };
 
     LiveTransport.prototype.connect = function () {
-        var requestStartedAt = performance.now();
-        return fetch("/api/status", { cache: "no-store" }).then(function (response) {
-            if (!response.ok) throw new Error("Manta 状态接口不可用");
-            return response.json();
-        }).then(function (payload) {
-            if (!payload || payload.success === false) throw new Error(payload.message || "Manta 返回无效状态");
-            this.lastLatency = performance.now() - requestStartedAt;
-            this.connected = true;
-            this.connectSocket();
-            this.applyStatus(payload);
-            this.startPolling();
-            this.startDriveKeepalive();
-            this.log("INFO", "LINK", "已连接 Manta 真实控制服务", "hardware");
-            return this.openGimbalLink().then(function () { return { device: DEFAULT_DEVICE }; });
+        var generation = ++this.connectGeneration, controller = new AbortController();
+        // A restarted backend begins a fresh ownership revision sequence.
+        this.controlRevision = -1; this.controlSession = null; this.canControl = false;
+        this.connectAbort = controller;
+        var deadline = setTimeout(function () { controller.abort(); }, 6000);
+        var current = function () { return generation === this.connectGeneration && !controller.signal.aborted; }.bind(this);
+        return this.releasePromise.then(function () {
+            if (!current()) throw new Error("连接已取消");
+            var startedAt = performance.now();
+            return apiFetch("/api/status", { cache: "no-store", signal: controller.signal }).then(function (response) {
+                if (!response.ok) throw new Error("请先使用船端配对码登录");
+                return response.json();
+            }).then(function (payload) {
+                if (!current()) throw new Error("连接已取消");
+                if (!payload || payload.success === false) throw new Error(payload.message || "Manta 返回无效状态");
+                this.lastLatency = performance.now() - startedAt;
+                this.connected = true;
+                this.applyStatus(payload);
+                this.connectSocket();
+                return this.waitForSocket(controller.signal);
+            }.bind(this)).then(function () {
+                if (!current()) throw new Error("连接已取消");
+                return this.claimControl({ signal: controller.signal }).catch(function (error) {
+                    if (error.status !== 409) throw error;
+                    this.canControl = false;
+                    this.log("INFO", "LINK", "另一页面正在控制，当前为只读", "hardware");
+                }.bind(this));
+            }.bind(this)).then(function () {
+                if (!current()) throw new Error("连接已取消");
+                this.startPolling(); this.startDriveKeepalive();
+                this.log("INFO", "LINK", "已连接 Manta 真实控制服务", "hardware");
+                if (this.canControl) this.openGimbalLink().catch(function () {});
+                return { device: DEFAULT_DEVICE };
+            }.bind(this));
+        }.bind(this)).catch(function (error) {
+            if (generation === this.connectGeneration) {
+                this.connected = false; this.canControl = false;
+                if (this.socket) this.socket.disconnect();
+                this.socket = null;
+            }
+            throw error;
+        }.bind(this)).finally(function () {
+            clearTimeout(deadline);
+            if (this.connectAbort === controller) this.connectAbort = null;
         }.bind(this));
     };
 
     LiveTransport.prototype.connectSocket = function () {
         if (!window.io) return;
-        this.socket = window.io({ transports: ["websocket", "polling"], timeout: 5000 });
+        this.socket = window.io({ transports: ["websocket", "polling"], timeout: 5000, auth: { clientId: CONTROL_CLIENT_ID } });
+        this.socket.on("control_session", function (session) { this.applyControlSession(session); }.bind(this));
         this.socket.on("connect", function () { this.emit("connection", { connected: true, degraded: false }); }.bind(this));
         this.socket.on("telemetry_update", function (telemetry) { this.applyTelemetry(telemetry); }.bind(this));
         this.socket.on("uwb_update", function (uwb) { this.emit("telemetry", { uwb: uwb || {} }); }.bind(this));
@@ -326,29 +417,34 @@
         this.socket.on("log_entry", function (entry) {
             this.log(entry.level, entry.source || "BOARD", entry.message, /motor|gimbal|pixhawk/i.test(entry.source || "") ? "hardware" : "system");
         }.bind(this));
-        this.socket.on("disconnect", function () { this.emit("connection", { connected: false, degraded: true }); }.bind(this));
+        this.socket.on("disconnect", function () {
+            this.canControl = false;
+            this.driveVector = { x: 0, y: 0 }; clearTimeout(this.driveTimer);
+            this.emit("connection", { connected: false, degraded: true });
+        }.bind(this));
     };
 
     LiveTransport.prototype.startPolling = function () {
         clearInterval(this.pollTimer);
+        var generation = this.connectGeneration;
         this.pollTimer = setInterval(function () {
             if (!this.connected || this.pollInFlight) return;
             this.pollInFlight = true;
             var controller = new AbortController(), startedAt = performance.now();
             this.pollAbort = controller;
             var deadline = setTimeout(function () { controller.abort(); }, 3500);
-            fetch("/api/status", { cache: "no-store", signal: controller.signal }).then(function (response) {
+            apiFetch("/api/status", { cache: "no-store", signal: controller.signal }).then(function (response) {
                 if (!response.ok) throw new Error("HTTP " + response.status);
                 return response.json();
             }).then(function (payload) {
-                if (!this.connected) return;
+                if (!this.connected || generation !== this.connectGeneration) return;
                 this.lastLatency = performance.now() - startedAt;
                 this.pollFailures = 0;
                 this.applyStatus(payload);
                 this.emit("connection", { connected: true, degraded: false, hardwareOnline: this.pixhawkOnline });
                 return this.refreshGimbalState(controller.signal);
             }.bind(this)).catch(function (error) {
-                if (!this.connected) return;
+                if (!this.connected || generation !== this.connectGeneration) return;
                 this.pollFailures += 1;
                 this.log("WARNING", "LINK", "状态轮询失败：" + error.message, "hardware");
                 if (this.pollFailures >= 2) this.emit("connection", { connected: false, degraded: true });
@@ -370,6 +466,7 @@
     };
 
     LiveTransport.prototype.applyStatus = function (payload) {
+        if (payload && payload.controlSession) this.applyControlSession(payload.controlSession);
         var serverAt = payload && (typeof payload.timestamp === "number"
             ? payload.timestamp : Date.parse(payload.timestamp));
         if (Number.isFinite(serverAt)) {
@@ -407,7 +504,7 @@
     };
 
     LiveTransport.prototype.refreshGimbalState = function (signal) {
-        return fetch("/api/gimbal/state", { cache: "no-store", signal: signal }).then(function (response) { if (!response.ok) throw new Error("HTTP " + response.status); return response.json(); }).then(function (payload) {
+        return apiFetch("/api/gimbal/state", { cache: "no-store", signal: signal }).then(function (response) { if (!response.ok) throw new Error("HTTP " + response.status); return response.json(); }).then(function (payload) {
             var state = payload && payload.state ? payload.state : {};
             this.applyGimbalTrackingState(state);
             this.emit("gimbalState", state);
@@ -478,6 +575,7 @@
     };
 
     LiveTransport.prototype.drive = function (vector) {
+        if (!this.connected || !this.canControl) return;
         var nextVector = { x: clamp(vector.x, -1, 1), y: clamp(vector.y, -1, 1) };
         var payload = {
             throttle: Math.round(-nextVector.y * this.driveLimits.throttle * 10) / 10,
@@ -486,6 +584,7 @@
         if ((!this.driveEnabled || this.motionLocked) && (payload.throttle !== 0 || payload.steering !== 0)) return;
         this.driveVector = nextVector;
         var send = function () {
+            if (!this.connected || !this.canControl) return;
             this.lastDriveAt = Date.now();
             this.pendingDrive = null;
             if (this.socket && this.socket.connected) {
@@ -533,6 +632,7 @@
     };
 
     LiveTransport.prototype.arm = function () {
+        if (!this.canControl) return Promise.reject(new Error("当前页面为只读，请先获取控制权"));
         if (!this.socket || !this.socket.connected) return Promise.reject(new Error("实时控制链路未连接，拒绝武装"));
         return new Promise(function (resolve, reject) {
             var settled = false;
@@ -619,7 +719,7 @@
     };
 
     LiveTransport.prototype.getBeaconCalibration = function () {
-        return fetch("/api/gimbal/beacon/calibration", { cache: "no-store" }).then(function (response) {
+        return apiFetch("/api/gimbal/beacon/calibration", { cache: "no-store" }).then(function (response) {
             return response.json();
         });
     };
@@ -633,23 +733,25 @@
     };
 
     LiveTransport.prototype.getRecordings = function () {
-        return fetch("/api/gimbal/recordings", { cache: "no-store" }).then(function (response) { return response.json(); }).then(function (payload) {
+        return apiFetch("/api/gimbal/recordings", { cache: "no-store" }).then(function (response) { return response.json(); }).then(function (payload) {
             if (!payload.success) throw new Error(payload.message || "录像列表不可用");
             return payload.recordings || [];
         });
     };
 
     LiveTransport.prototype.disconnect = function () {
+        ++this.connectGeneration;
+        if (this.connectAbort) this.connectAbort.abort();
         if (this.pollAbort) this.pollAbort.abort();
+        var ownedControl = this.canControl;
         this.drive({ x: 0, y: 0 });
-        this.connected = false;
-        clearInterval(this.pollTimer);
-        clearInterval(this.driveKeepaliveTimer);
-        this.driveKeepaliveTimer = null;
-        clearTimeout(this.driveTimer);
+        this.connected = false; this.canControl = false;
+        clearInterval(this.pollTimer); clearInterval(this.driveKeepaliveTimer);
+        this.driveKeepaliveTimer = null; clearTimeout(this.driveTimer);
         if (this.socket) this.socket.disconnect();
         this.socket = null;
-        return Promise.resolve();
+        if (ownedControl) this.releasePromise = postJson("/api/control/release", {}).catch(function () {});
+        return this.releasePromise;
     };
 
     function GimbalHealthMonitor(options) {

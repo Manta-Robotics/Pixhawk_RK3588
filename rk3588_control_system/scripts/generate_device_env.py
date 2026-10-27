@@ -28,6 +28,7 @@ def generated_values(existing):
         "MANTA_BLUETOOTH_PIN",
         os.environ.get("MANTA_BLUETOOTH_PIN") or f"{secrets.randbelow(1_000_000):06d}",
     )
+    values.setdefault("MANTA_CONTROL_PIN", os.environ.get("MANTA_CONTROL_PIN") or f"{secrets.randbelow(1_000_000):06d}")
     values.pop("MANTA_AMAP_JS_KEY", None)
     values.pop("MANTA_AMAP_SECURITY_CODE", None)
     return values

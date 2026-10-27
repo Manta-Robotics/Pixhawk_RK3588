@@ -54,7 +54,7 @@ test('camera requests remain active while standalone UWB and full telemetry keep
   const configFile = path.join(directory, 'config.json');
   await fs.writeFile(configFile, JSON.stringify(config));
   const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: root, env: { ...process.env, MANTA_CONFIG_PATH: configFile }, windowsHide: true,
+    cwd: root, env: { ...process.env, MANTA_CONFIG_PATH: configFile, MANTA_CONTROL_PIN: '123456' }, windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let output = '';
@@ -70,7 +70,12 @@ test('camera requests remain active while standalone UWB and full telemetry keep
     assert.ok(Date.now() < deadline, output);
     await delay(20);
   }
-  const socket = new WebSocket(`${base.replace('http:', 'ws:')}/socket.io/?EIO=4&transport=websocket`);
+  const paired = await fetch(`${base}/api/auth/pair`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '123456' }) });
+  assert.equal(paired.status, 200);
+  const headers = { Cookie: paired.headers.get('set-cookie').split(';')[0] };
+  const read = route => fetch(`${base}${route}`, { headers });
+  const socket = new WebSocket(`${base.replace('http:', 'ws:')}/socket.io/?EIO=4&transport=websocket`, { headers });
   const packets = [];
   let ready;
   const connected = new Promise((resolve) => { ready = resolve; });
@@ -83,7 +88,7 @@ test('camera requests remain active while standalone UWB and full telemetry keep
   });
   t.after(() => socket.close());
   await connected;
-  const snapshot = fetch(`${base}/api/camera/snapshot`);
+  const snapshot = read('/api/camera/snapshot');
   const sender = dgram.createSocket('udp4');
   t.after(() => sender.close());
   const send = (packet) => new Promise((resolve, reject) => sender.send(Buffer.from(JSON.stringify(packet)),
@@ -95,11 +100,11 @@ test('camera requests remain active while standalone UWB and full telemetry keep
   assert.ok(packets.some(([name, data]) => name === 'uwb_update' && data.distanceM === 1.23));
   assert.ok(performance.now() - started < 400, 'slow camera requests must not delay UWB publication');
   const statusStarted = performance.now();
-  const status = await (await fetch(`${base}/api/status`)).json();
+  const status = await (await read('/api/status')).json();
   assert.ok(performance.now() - statusStarted < 400, 'status reads return without waiting for camera health');
   assert.equal(status.data.camera.enabled, true);
   assert.equal(status.data.telemetry.uwb.distanceM, 1.23);
-  assert.equal((await fetch(`${base}/api/gimbal/state`)).status, 200, 'gimbal requests remain available');
+  assert.equal((await read('/api/gimbal/state')).status, 200, 'gimbal requests remain available');
   await send({ type: 'telemetry', payload: { servoOutputs: { ch1: 1500, ch3: 1500 } } });
   const fullDeadline = Date.now() + 1000;
   while (!packets.some(([name]) => name === 'telemetry_update') && Date.now() < fullDeadline) await delay(10);

@@ -37,8 +37,8 @@ def angle_error_deg(first: float, second: float) -> float:
     return abs((float(first) - float(second) + 180.0) % 360.0 - 180.0)
 
 
-def fetch_uwb(url: str, timeout: float) -> Dict[str, Any]:
-    with urlopen(url, timeout=timeout) as response:
+def fetch_uwb(url: str, timeout: float, opener=None) -> Dict[str, Any]:
+    with (opener or urlopen)(url, timeout=timeout) as response:
         payload = json.load(response)
     telemetry = payload.get("telemetry", payload)
     uwb = telemetry.get("uwb")
@@ -235,8 +235,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
+def run(args, opener=None) -> int:
     if args.rate <= 0 or args.print_rate < 0 or args.duration < 0:
         print("rate must be > 0; print-rate and duration must be >= 0", file=sys.stderr)
         return 2
@@ -268,7 +267,7 @@ def main() -> int:
                 continue
             next_sample += 1.0 / args.rate
             try:
-                uwb = fetch_uwb(args.url, args.timeout)
+                uwb = fetch_uwb(args.url, args.timeout, opener)
             except (OSError, URLError, ValueError, json.JSONDecodeError) as exc:
                 request_errors += 1
                 if request_errors <= 3 or request_errors % 10 == 0:
@@ -323,6 +322,17 @@ def main() -> int:
         return 0 if args.allow_partial else 1
     print("RESULT: FAIL - neither receiver produced a valid measurement")
     return 1
+
+
+def main() -> int:
+    from device_api import DeviceApiSession
+    args = parse_args()
+    try:
+        with DeviceApiSession(args.url) as session:
+            return run(args, session.open)
+    except (OSError, ValueError) as error:
+        print(f'Device pairing failed: {error}', file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

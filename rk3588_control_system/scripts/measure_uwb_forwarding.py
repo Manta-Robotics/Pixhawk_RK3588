@@ -34,23 +34,23 @@ class CounterWindow:
         return (self.last[0] - self.first[0]) / (self.last[1] - self.first[1])
 
 
-def fetch(url):
-    with urlopen(url, timeout=2) as response:
+def fetch(url, opener=None):
+    with (opener or urlopen)(url, timeout=2) as response:
         payload = json.load(response)
     return payload.get('telemetry', payload)
 
 
-def connected(url):
+def connected(url, opener=None):
     # /api/telemetry contains only telemetry. Connection state lives in the
     # status envelope, not in telemetry.connected.
-    with urlopen(urljoin(url, 'status'), timeout=2) as response:
+    with (opener or urlopen)(urljoin(url, 'status'), timeout=2) as response:
         payload = json.load(response)
     return payload.get('data', {}).get('pixhawkStatus') == 'connected'
 
 
-def measure(url, duration, interval):
-    telemetry = fetch(url)
-    if not connected(url):
+def measure(url, duration, interval, opener=None):
+    telemetry = fetch(url, opener)
+    if not connected(url, opener):
         raise RuntimeError('Flight controller is disconnected; no live measurement was taken.')
     rows = {}
     for sensor in telemetry.get('uwb', {}).get('sensors', []):
@@ -65,11 +65,11 @@ def measure(url, duration, interval):
     disconnected = False
     next_connection_check = started + 1
     while time.monotonic() - started < duration:
-        telemetry = fetch(url)
+        telemetry = fetch(url, opener)
         at = time.monotonic()
         requests += 1
         if at >= next_connection_check:
-            if not connected(url):
+            if not connected(url, opener):
                 disconnected = True
                 break
             next_connection_check = time.monotonic() + 1
@@ -111,11 +111,14 @@ def main():
     parser.add_argument('--url', default='http://127.0.0.1:3000/api/telemetry')
     parser.add_argument('--seconds', type=float, default=30)
     parser.add_argument('--interval', type=float, default=0.01)
+    parser.add_argument('--pin-file', help='private six-digit control PIN file; otherwise use device environment')
     args = parser.parse_args()
     if args.seconds < 5 or args.interval < 0.005:
         parser.error('--seconds must be >= 5 and --interval must be >= 0.005')
     try:
-        result = measure(args.url, args.seconds, args.interval)
+        from device_api import DeviceApiSession
+        with DeviceApiSession(args.url, args.pin_file) as session:
+            result = measure(args.url, args.seconds, args.interval, session.open)
     except (OSError, ValueError, RuntimeError) as error:
         parser.exit(2, f'{error}\n')
     print(json.dumps(result, indent=2))

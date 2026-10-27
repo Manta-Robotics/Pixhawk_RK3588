@@ -82,6 +82,8 @@ sudo journalctl -u manta-backend.service -f
 
 前端提供设备状态、控制、视频、云台和 GPS 地图界面，可由手机或电脑通过 MANTA 网络访问。GPS 位置来自 Pixhawk，地图支持板载离线影像。
 
+控制台必须使用设备独立的 `MANTA_CONTROL_PIN` 完成后端配对。安装器将其写入 `/etc/manta/manta.env`；直接运行后端时自动生成私有 `data/control-pin`。同一时间仅一个页面持有控制权，其他已配对页面为只读并保留急停能力。配对码获取、断连行为、维护工具和接口迁移见 [控制配对与权限](docs/CONTROL_ACCESS.md)。
+
 ## 6. 云台视频与录像
 
 - 内部识别流：原始分辨率 MJPEG，仅供跟踪算法使用。

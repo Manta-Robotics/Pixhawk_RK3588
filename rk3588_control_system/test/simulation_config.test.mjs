@@ -30,7 +30,7 @@ async function startServer(t, { legacy = false, invalid = false } = {}) {
   config.recordings.dir = path.join(directory, 'recordings');
   const configFile = path.join(directory, 'config.json');
   await fs.writeFile(configFile, JSON.stringify(config));
-  const environment = { ...process.env, MANTA_SIMULATION: '1' };
+  const environment = { ...process.env, MANTA_SIMULATION: '1', MANTA_CONTROL_PIN: '123456' };
   delete environment.MANTA_CONFIG_FILE;
   delete environment.MANTA_CONFIG_PATH;
   if (legacy) environment.MANTA_CONFIG_PATH = configFile;

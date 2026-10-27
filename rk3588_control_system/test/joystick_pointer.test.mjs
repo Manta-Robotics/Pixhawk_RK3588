@@ -87,6 +87,8 @@ test('actual live transport maps right/left/up/down to the intended command sign
   const scope = { window: {}, Date, console, clearTimeout() {}, setTimeout: fn => { fn(); return 1; } };
   vm.runInNewContext(fs.readFileSync(new URL('../frontend/js/manta-app-transport.js', import.meta.url), 'utf8'), scope);
   const transport = scope.window.MantaAppTransport.create('live');
+  transport.connected = true;
+  transport.canControl = true;
   transport.socket = { connected: true, emit: (event, payload) => sent.push({ event, ...payload }) };
   for (const vector of [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }]) {
     transport.lastDriveAt = 0; transport.drive(vector);
