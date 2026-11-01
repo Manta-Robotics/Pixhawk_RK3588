@@ -81,7 +81,9 @@ export function createControlAccess({ pin, now = Date.now, lifetimeMs = 8 * 60 *
   }
   function middleware(request, response, next) {
     requireSession(request, response, () => {
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)
+      const videoRead = ['POST', 'PATCH', 'DELETE'].includes(request.method)
+        && /^\/gimbal\/webrtc\/whep(?:\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i.test(request.path);
+      if (!videoRead && !['GET', 'HEAD', 'OPTIONS'].includes(request.method)
           && request.path !== '/emergency/stop'
           && (!owns(request.controlSession, clientId(request)) || !hasChannel(request.controlSession, clientId(request)))) {
         return deny(response, 403, 'This page does not own control of the device');

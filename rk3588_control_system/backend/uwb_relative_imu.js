@@ -3,6 +3,7 @@
 // is NOT an absolute speed measurement.
 import { UwbGpsSpeedLoop } from './uwb_gps_speed.js';
 import { UwbRelativeNmpc } from './uwb_relative_nmpc.js';
+import {usableUwbPath} from './uwb_path_integration.js';
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const wrap=x=>((x+180)%360+360)%360-180;
 export class RelativeImuControl {
@@ -58,7 +59,7 @@ export class RelativeImuControl {
   const c=this.c,d=preflight.distanceM;
   const dt=this.at===null?.1:clamp((now-this.at)/1000,.001,.25);
   const bearing=wrap(preflight.azimuthDeg*c.bearingSign*c.bearingScale+c.bearingOffsetDeg);
-  const rawControl=telemetry.uwb?.controlSource==='raw';
+  const rawControl=telemetry.uwb?.controlSource==='raw'||telemetry.uwb?.directControl===true;
   this.bearing=rawControl||this.bearing===null?bearing:wrap(this.bearing+c.bearingFilterAlpha*wrap(bearing-this.bearing));
   const sampleAt=telemetry.uwb.measurementUpdatedAt;
   const observed=!estimate || ['measured','recovering'].includes(estimate.source);
@@ -96,35 +97,42 @@ export class RelativeImuControl {
   if((requested>c.relativeThrottleLimitPercent && rateError>0)||(requested<0 && rateError<0))this.cruise=previousCruise;
   requested=clamp(this.cruise+kp*rateError,0,c.relativeThrottleLimitPercent);
   if(policy)requested=clamp(policy.nominalThrottlePercent,0,c.relativeThrottleLimitPercent);
-  if(c.relativeNmpc?.enabled&&!rawControl)return this.updatePredictive({now,dt,d,preflight,telemetry,estimate,
+  const path=telemetry.uwbPath;
+  const pathReady=!policy&&c.pathFollow?.enabled===true&&c.gpsSpeedClosedLoop?.enabled===true&&usableUwbPath(path,telemetry,now,c);
+  if(c.relativeNmpc?.enabled&&!rawControl&&!pathReady)return this.updatePredictive({now,dt,d,preflight,telemetry,estimate,
    referenceThrottle:requested,desiredClosing});
   const gps=this.gpsSpeed.update({now,telemetry,bearingDeg:this.bearing,rangeRateMps:this.rangeRate,
-   desiredClosingMps:desiredClosing,appliedThrottle:this.throttle,policySpeedMps:policy?.nominalSpeedMps,
+   desiredClosingMps:desiredClosing,appliedThrottle:this.throttle,policySpeedMps:policy?.nominalSpeedMps??(pathReady?path.desiredSpeedMps:undefined),
    stop:d<=c.safetyDistanceM});
   if(gps.active)requested=gps.throttlePercent;
   const closing=Math.max(0,-this.rangeRate);
   const braking=closing>brakingLimit+.02;
   if(braking)requested=Math.min(requested,Math.max(0,this.throttle-c.throttleDecelPercentS*dt-kp*(closing-brakingLimit)));
-  const turn=policy?{speedScale:Math.max(0,Math.cos(policy.headingErrorDeg*Math.PI/180)),
+  const pathActive=pathReady&&gps.active;
+  const turn=pathActive?{speedScale:Math.max(0,Math.cos(path.headingErrorDeg*Math.PI/180)),desiredYawRateDegS:clamp(path.yawRateDegS,-c.maxYawRateDegS,c.maxYawRateDegS)}:policy?{speedScale:Math.max(0,Math.cos(policy.headingErrorDeg*Math.PI/180)),
    desiredYawRateDegS:clamp(policy.yawRateDegS,-c.maxYawRateDegS,c.maxYawRateDegS)}
    :guidance.command({headingErrorDeg:this.bearing,measuredYawRateDegS:preflight.measuredYawRateDegS,
     forwardSpeedMps:0,maximumYawRateDegS:c.maxYawRateDegS});
   const alignment=clamp((c.bearingStopDeg-Math.abs(this.bearing))/(c.bearingStopDeg-c.bearingSlowdownDeg),0,1);
   requested*=turn.speedScale*alignment;
   const safety=d<=c.safetyDistanceM;
-  if(safety){requested=0;this.cruise=Math.min(this.cruise,this.throttle);}
+  const pathHolding=pathActive&&path.desiredSpeedMps<=1e-6;
+  if(safety||pathHolding){requested=0;this.cruise=Math.min(this.cruise,this.throttle);}
   const step=(requested<this.throttle?c.throttleDecelPercentS:c.throttleAccelPercentS)*dt;
   this.throttle+=clamp(requested-this.throttle,-step,step);
-  if(safety || braking || alignment===0)this.throttle=Math.min(this.throttle,requested);
+  if(safety || pathHolding || braking || alignment===0)this.throttle=Math.min(this.throttle,requested);
   // Track the applied actuator, including slew/braking/turn saturation. A
   // cruise-thrust integrator must not wind up behind a constrained output.
   this.cruise=policy?0:clamp(this.cruise+(this.throttle-(this.cruise+kp*rateError))*dt,0,c.relativeThrottleLimitPercent);
   const steering=clamp(turn.desiredYawRateDegS/c.maxYawRateDegS*c.relativeSteeringLimitDeg,-c.relativeSteeringLimitDeg,c.relativeSteeringLimitDeg);
   this.steering+=clamp(steering-this.steering,-c.steeringSlewDegS*dt,c.steeringSlewDegS*dt);
-  if(safety)this.steering=0;
+  if(safety||pathHolding)this.steering=0;
   this.gpsSpeed.trackApplied(this.throttle,dt);
-  return {safe:true,reason:safety?'holding_distance':'tracking',status:safety?'holding':'tracking',
+  return {safe:true,reason:safety||pathHolding?'holding_distance':'tracking',status:safety||pathHolding?'holding':'tracking',
    controlMode:'relative_manual',requiredFlightMode:'MANUAL',commandFrame:'BODY_RELATIVE',
+   pathFollowActive:pathActive,pathFollowReason:pathActive?'gps_path_follow':pathReady?'speed_feedback_pending':path?.active?'path_reference_unavailable':path?.reason||'disabled',
+   guidanceBearingDeg:pathActive?path.headingErrorDeg:this.bearing,
+   pathReference:path?{active:path.active,reason:path.reason,pointCount:path.pointCount,pathLengthM:path.pathLengthM,remainingM:path.remainingM,crossTrackErrorM:path.crossTrackErrorM,lookaheadM:path.lookaheadM,desiredSpeedMps:path.desiredSpeedMps,inputUpdatedAt:path.inputUpdatedAt}:null,
    relativeImuControl:true,navigationAvailable:gps.active,navigationReason:gps.active?null:'uwb_imu_only',
    gpsSpeedControlActive:gps.active,gpsSpeedControlReason:gps.reason,
    speedControlMode:gps.active?'gps_speed_closed_loop':'uwb_relative',

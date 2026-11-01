@@ -191,7 +191,8 @@
       "model_cruise_speed_mps": 0.8,
       "model_position_error_mps": 0.1,
       "steering_share": 0.8
-    }
+    },
+    "uwb_loss_action": "stop"
   },
   "logs_dir": "./logs",
   "enable_https": false,
@@ -551,5 +552,13 @@
     "occlusion_enabled": false,
     "stationary_time_constant_s": 0.4,
     "moving_time_constant_s": 0.01
+  },
+  "uwb_usb": {
+    "enabled": false,
+    "port": "/dev/ttyACM1",
+    "baud_rate": 115200,
+    "vessel_control_enabled": false,
+    "speed_gate_enabled": true,
+    "output_speed_gate_enabled": true
   }
 }

@@ -100,11 +100,13 @@
 
     TransportBase.prototype.setMotionLocked = function (locked) {
         this.motionLocked = Boolean(locked);
+        if (this.motionLocked && this.drive) this.drive({ x: 0, y: 0 });
         return this.motionLocked;
     };
 
     TransportBase.prototype.setDriveEnabled = function (enabled) {
         this.driveEnabled = Boolean(enabled);
+        if (!this.driveEnabled && this.drive) this.drive({ x: 0, y: 0 });
         return this.driveEnabled;
     };
 
@@ -186,7 +188,8 @@
         this.drive({ x: 0, y: 0 });
         this.log("CRITICAL", "SAFETY", "紧急停止已触发，推进输出归零", "command", "Emergency stop triggered; thrust output is zero");
         this.emit("emergency", { active: true });
-        return Promise.resolve({ success: true });
+        this.emit("armed", { armed: false });
+        return Promise.resolve({ success: true, confirmed: true });
     };
 
     MockTransport.prototype.startUwbFollow = function () {
@@ -264,7 +267,9 @@
         TransportBase.call(this);
         this.mode = "live";
         this.boardClock = null;
+        this.latestUwb = null;
         this.canControl = false;
+        this.authenticationRequired = false;
         this.controlRevision = -1;
         this.connectGeneration = 0;
         this.connectAbort = null;
@@ -283,6 +288,8 @@
         this.gimbalTrackingActive = false;
         this.gimbalTrackMode = null;
         this.gimbalModePromise = Promise.resolve();
+        this.gimbalModePending = 0;
+        this.gimbalControlEpoch = 0;
         this.driveLimits = { throttle: 100, steering: 45 };
     }
 
@@ -302,6 +309,7 @@
     };
 
     LiveTransport.prototype.applyControlSession = function (session) {
+        if (this.authenticationRequired) return;
         session = session || {};
         if (Number(session.revision) < this.controlRevision) return;
         this.controlRevision = Number(session.revision) || 0;
@@ -321,6 +329,22 @@
             this.applyControlSession(payload.controlSession);
             return payload;
         }.bind(this));
+    };
+
+    LiveTransport.prototype.requirePairing = function () {
+        if (this.authenticationRequired) return;
+        this.authenticationRequired = true;
+        // The old session is already invalid. Clear local authority before
+        // disconnecting so cleanup cannot send drive/release requests with it.
+        this.canControl = false;
+        this.controlSession = null;
+        this.controlRevision = -1;
+        this.pendingDrive = null;
+        this.driveVector = { x: 0, y: 0 };
+        this.latestUwb = null;
+        this.boardClock = null;
+        this.disconnect();
+        this.emit("authenticationRequired", { reason: "session_expired" });
     };
 
     LiveTransport.prototype.waitForSocket = function (signal) {
@@ -345,6 +369,7 @@
         var generation = ++this.connectGeneration, controller = new AbortController();
         // A restarted backend begins a fresh ownership revision sequence.
         this.controlRevision = -1; this.controlSession = null; this.canControl = false;
+        this.authenticationRequired = false;
         this.connectAbort = controller;
         var deadline = setTimeout(function () { controller.abort(); }, 6000);
         var current = function () { return generation === this.connectGeneration && !controller.signal.aborted; }.bind(this);
@@ -393,9 +418,10 @@
         if (!window.io) return;
         this.socket = window.io({ transports: ["websocket", "polling"], timeout: 5000, auth: { clientId: CONTROL_CLIENT_ID } });
         this.socket.on("control_session", function (session) { this.applyControlSession(session); }.bind(this));
-        this.socket.on("connect", function () { this.emit("connection", { connected: true, degraded: false }); }.bind(this));
+        this.socket.on("connect", function () { this.latestUwb = null; this.emit("connection", { connected: true, degraded: false }); }.bind(this));
         this.socket.on("telemetry_update", function (telemetry) { this.applyTelemetry(telemetry); }.bind(this));
-        this.socket.on("uwb_update", function (uwb) { this.emit("telemetry", { uwb: uwb || {} }); }.bind(this));
+        this.socket.on("uwb_path_update", function (path) { this.emit("uwbPath", path || {}); }.bind(this));
+        this.socket.on("uwb_update", function (uwb) { this.emit("telemetry", { uwb: this.selectUwb(uwb) }); }.bind(this));
         this.socket.on("system_state", function (state) { if (state) this.applyStatus({ data: state }); }.bind(this));
         this.socket.on("motor_output_update", function (motors) {
             motors = motors || {};
@@ -434,7 +460,11 @@
             this.pollAbort = controller;
             var deadline = setTimeout(function () { controller.abort(); }, 3500);
             apiFetch("/api/status", { cache: "no-store", signal: controller.signal }).then(function (response) {
-                if (!response.ok) throw new Error("HTTP " + response.status);
+                if (!response.ok) {
+                    var error = new Error("HTTP " + response.status);
+                    error.status = response.status;
+                    throw error;
+                }
                 return response.json();
             }).then(function (payload) {
                 if (!this.connected || generation !== this.connectGeneration) return;
@@ -445,6 +475,7 @@
                 return this.refreshGimbalState(controller.signal);
             }.bind(this)).catch(function (error) {
                 if (!this.connected || generation !== this.connectGeneration) return;
+                if (error.status === 401) { this.requirePairing(); return; }
                 this.pollFailures += 1;
                 this.log("WARNING", "LINK", "状态轮询失败：" + error.message, "hardware");
                 if (this.pollFailures >= 2) this.emit("connection", { connected: false, degraded: true });
@@ -548,6 +579,21 @@
         });
     };
 
+    LiveTransport.prototype.selectUwb = function (uwb) {
+        if (!uwb || typeof uwb !== "object") return this.latestUwb || {};
+        function clock(packet) {
+            var values = [packet.measurementUpdatedAt].concat((Array.isArray(packet.sensors) ? packet.sensors : []).map(function (sensor) { return sensor.receivedMeasurementAt; }));
+            return values.reduce(function (latest, value) { return typeof value === "number" && Number.isFinite(value) ? Math.max(latest, value) : latest; }, 0);
+        }
+        if (this.latestUwb && this.latestUwb.source === uwb.source && this.latestUwb.streamId === uwb.streamId) {
+            var previous = clock(this.latestUwb), next = clock(uwb);
+            if (next < previous) return this.latestUwb;
+            if (next === previous && Number(uwb.updatedAt || 0) < Number(this.latestUwb.updatedAt || 0)) return this.latestUwb;
+        }
+        this.latestUwb = uwb;
+        return uwb;
+    };
+
     LiveTransport.prototype.applyTelemetry = function (telemetry) {
         this.emit("telemetry", {
             latency: this.lastLatency,
@@ -557,7 +603,8 @@
             battery: telemetry.battery || {},
             imuCalibration: telemetry.imuCalibration || {},
             gps: telemetry.gps || {},
-            uwb: telemetry.uwb || {},
+            uwb: this.selectUwb(telemetry.uwb),
+            uwbPath: telemetry.uwbPath,
             ekf: telemetry.ekf || {},
             armed: Boolean(telemetry.armed),
             flightMode: telemetry.flightMode || "MANUAL"
@@ -576,15 +623,16 @@
 
     LiveTransport.prototype.drive = function (vector) {
         if (!this.connected || !this.canControl) return;
+        if ((!this.socket || !this.socket.connected) && (vector.x || vector.y)) return;
         var nextVector = { x: clamp(vector.x, -1, 1), y: clamp(vector.y, -1, 1) };
         var payload = {
-            throttle: Math.round(-nextVector.y * this.driveLimits.throttle * 10) / 10,
+            throttle: Math.round(-nextVector.y * this.driveLimits.throttle * 10) / 10 || 0,
             steering: Math.round(nextVector.x * this.driveLimits.steering * 10) / 10
         };
-        if ((!this.driveEnabled || this.motionLocked) && (payload.throttle !== 0 || payload.steering !== 0)) return;
+        if ((!this.driveEnabled || this.motionLocked || this.disarmingPromise) && (payload.throttle !== 0 || payload.steering !== 0)) return;
         this.driveVector = nextVector;
         var send = function () {
-            if (!this.connected || !this.canControl) return;
+            if (!this.connected || !this.canControl || ((!this.driveEnabled || this.motionLocked || this.disarmingPromise) && (payload.throttle || payload.steering))) return;
             this.lastDriveAt = Date.now();
             this.pendingDrive = null;
             if (this.socket && this.socket.connected) {
@@ -602,15 +650,48 @@
     };
 
     LiveTransport.prototype.emergencyStop = function () {
+        if (this.disarmingPromise) return this.disarmingPromise;
+        if (this.cancelArming) this.cancelArming();
+        clearTimeout(this.driveTimer);
+        this.driveVector = { x: 0, y: 0 };
         this.drive({ x: 0, y: 0 });
-        return postJson("/api/emergency/stop", {}).then(function (result) {
-            this.log("CRITICAL", "SAFETY", "紧急停止已执行", "command");
+        var controller = new AbortController(), generation = this.connectGeneration;
+        this.disarmAbort = controller;
+        var deadline = setTimeout(function () { controller.abort(); }, 8000);
+        this.disarmingPromise = postJson("/api/emergency/stop", {}, { signal: controller.signal }).then(function (result) {
+            if (!Number.isFinite(result.requestedAt) || result.requestedAt <= 0) throw new Error("停止已请求，但服务端未提供飞控确认信息");
+            this.log("CRITICAL", "SAFETY", "停止已请求，等待飞控确认解除武装", "command");
             this.emit("emergency", { active: true });
-            return result;
+            var check = function () {
+                if (controller.signal.aborted || generation !== this.connectGeneration) throw new Error("未确认飞控已解除武装，请检查飞控连接");
+                return apiFetch("/api/status", { cache: "no-store", signal: controller.signal }).then(function (response) {
+                    if (!response.ok) throw new Error("解除武装状态查询失败：HTTP " + response.status);
+                    return response.json();
+                }).then(function (payload) {
+                    if (controller.signal.aborted || generation !== this.connectGeneration) throw new Error("解除武装确认已取消");
+                    var data = payload.data || {}, hardware = data.hardware || {};
+                    var heartbeatAt = Number((hardware.pixhawk || {}).lastSeenAt) || 0;
+                    this.applyStatus(payload);
+                    if (data.isConnected === true && data.telemetry && data.telemetry.armed === false && heartbeatAt > result.requestedAt) {
+                        this.log("INFO", "SAFETY", "飞控已确认解除武装", "command");
+                        return Object.assign({}, result, { confirmed: true });
+                    }
+                    return new Promise(function (resolve) { setTimeout(resolve, 250); }).then(check);
+                }.bind(this));
+            }.bind(this);
+            return check();
+        }.bind(this)).catch(function (error) {
+            if (controller.signal.aborted) throw new Error("未在时限内确认解除武装，请检查飞控；停止请求已发出");
+            throw error;
+        }).finally(function () {
+            clearTimeout(deadline);
+            if (this.disarmAbort === controller) { this.disarmAbort = null; this.disarmingPromise = null; }
         }.bind(this));
+        return this.disarmingPromise;
     };
 
     LiveTransport.prototype.startUwbFollow = function () {
+        if (this.disarmingPromise) return Promise.reject(new Error("正在解除武装，请等待飞控确认"));
         return postJson("/api/uwb-follow/start", {}).then(function (result) {
             if (result && result.state) this.emit("uwbFollow", result.state);
             return result;
@@ -632,32 +713,79 @@
     };
 
     LiveTransport.prototype.arm = function () {
+        if (this.disarmingPromise) return Promise.reject(new Error("正在解除武装，请等待飞控确认"));
         if (!this.canControl) return Promise.reject(new Error("当前页面为只读，请先获取控制权"));
         if (!this.socket || !this.socket.connected) return Promise.reject(new Error("实时控制链路未连接，拒绝武装"));
-        return new Promise(function (resolve, reject) {
+        if (this.armingPromise) return this.armingPromise;
+        var socket = this.socket;
+        this.armingPromise = new Promise(function (resolve, reject) {
             var settled = false;
             var onArmed = function () { finish(null, { success: true, armed: true }); };
+            var onTelemetry = function (sample) { if (sample && sample.armed === true) onArmed(); };
+            var onError = function (result) { finish(new Error(result && result.message || "飞控拒绝武装")); };
+            var onDisconnect = function () { finish(new Error("控制链路断开，武装未确认")); };
+            var onSession = function (session) { if (!session.canControl) finish(new Error("控制权已失效，武装未确认")); };
+            var removeTelemetry, removeSession;
             var finish = function (error, result) {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timer);
-                this.socket.off("aircraft_armed", onArmed);
+                socket.off("aircraft_armed", onArmed);
+                socket.off("error_message", onError);
+                socket.off("disconnect", onDisconnect);
+                if (removeTelemetry) removeTelemetry();
+                if (removeSession) removeSession();
+                this.cancelArming = null;
                 if (error) reject(error); else resolve(result);
             }.bind(this);
-            var timer = setTimeout(function () { finish(new Error("飞控未在时限内确认武装")); }, 3000);
-            this.socket.once("aircraft_armed", onArmed);
-            this.socket.emit("arm");
-        }.bind(this));
+            var timer = setTimeout(function () { finish(new Error("飞控未在时限内确认武装")); }, 8000);
+            this.cancelArming = function () { finish(new Error("武装请求已取消")); };
+            removeTelemetry = this.on("telemetry", onTelemetry);
+            removeSession = this.on("controlSession", onSession);
+            socket.on("aircraft_armed", onArmed);
+            socket.on("error_message", onError);
+            socket.on("disconnect", onDisconnect);
+            socket.emit("arm");
+        }.bind(this)).finally(function () { this.armingPromise = null; }.bind(this));
+        return this.armingPromise;
     };
 
     LiveTransport.prototype.gimbal = function (action, payload) {
+        if (action === "stop") {
+            var stopEpoch = ++this.gimbalControlEpoch;
+            var sendStop = function () {
+                return postJson("/api/gimbal/stop", {}).then(function (result) {
+                    this.applyGimbalTrackingState(result && result.state);
+                    if (result && result.state) this.emit("gimbalState", result.state);
+                    return result;
+                }.bind(this));
+            }.bind(this);
+            var immediateStop = sendStop();
+            if (!this.gimbalModePending) return immediateStop;
+            // Stop immediately, then stop once more after an older in-flight
+            // mode request settles. It must never restart tracking after stop.
+            var previousMode = this.gimbalModePromise;
+            this.gimbalModePromise = Promise.allSettled([previousMode, immediateStop]).then(function (results) {
+                if (stopEpoch === this.gimbalControlEpoch) return sendStop();
+                if (results[1].status === "rejected") throw results[1].reason;
+                return results[1].value;
+            }.bind(this));
+            return this.gimbalModePromise;
+        }
         if (action === "face" || action === "swimmer" || action === "beacon" || action === "click") {
             var requestedMode = action;
+            var epoch = this.gimbalControlEpoch;
+            this.gimbalModePending += 1;
+            var requireCurrent = function () {
+                if (epoch !== this.gimbalControlEpoch) throw new Error("云台模式请求已取消");
+            }.bind(this);
             var switchMode = function () {
+                requireCurrent();
                 if (requestedMode === "click") {
-                    return postJson("/api/gimbal/track/stop", {}).then(function (result) {
+                    return postJson("/api/gimbal/home", { preserveTracking: false }).then(function (result) {
                         this.applyGimbalTrackingState(result && result.state);
                         if (result && result.state) this.emit("gimbalState", result.state);
+                        this.log("COMMAND", "GIMBAL", "云台正在回中", "command", "Gimbal is centering");
                         return result;
                     }.bind(this));
                 }
@@ -665,16 +793,20 @@
                     return Promise.resolve({ success: true, active: true, alreadyRunning: true, mode: requestedMode });
                 }
                 var startRequestedMode = function () {
+                    requireCurrent();
                     return postJson("/api/gimbal/track/start", { mode: requestedMode });
                 };
                 var request = this.gimbalTrackingActive ? postJson("/api/gimbal/track/stop", {}).then(startRequestedMode) : startRequestedMode();
                 return request.then(function (result) {
+                    requireCurrent();
                     this.applyGimbalTrackingState(result && result.state);
                     if (result && result.state) this.emit("gimbalState", result.state);
                     return result;
                 }.bind(this));
             }.bind(this);
-            this.gimbalModePromise = this.gimbalModePromise.catch(function () {}).then(switchMode);
+            this.gimbalModePromise = this.gimbalModePromise.catch(function () {}).then(switchMode).finally(function () {
+                this.gimbalModePending -= 1;
+            }.bind(this));
             return this.gimbalModePromise;
         }
         var endpoint = null;
@@ -706,8 +838,8 @@
         }.bind(this));
     };
 
-    LiveTransport.prototype.startBeaconCalibration = function () {
-        return postJson("/api/gimbal/beacon/calibration/start", {});
+    LiveTransport.prototype.startBeaconCalibration = function (options) {
+        return postJson("/api/gimbal/beacon/calibration/start", options || {profile:"precision25"});
     };
 
     LiveTransport.prototype.captureBeaconCalibration = function () {
@@ -740,6 +872,8 @@
     };
 
     LiveTransport.prototype.disconnect = function () {
+        if (this.disarmAbort) this.disarmAbort.abort();
+        if (this.cancelArming) this.cancelArming();
         ++this.connectGeneration;
         if (this.connectAbort) this.connectAbort.abort();
         if (this.pollAbort) this.pollAbort.abort();

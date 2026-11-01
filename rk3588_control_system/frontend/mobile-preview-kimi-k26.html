@@ -159,6 +159,7 @@ body[data-theme="light"] select{color-scheme:light}
 .relative-position-panel[data-state="offline"]{opacity:1}.relative-position-panel[data-state="raw-only"]{border-color:rgba(255,169,76,.45)}.relative-position-panel[data-state="online"]{border-color:rgba(45,212,191,.32);box-shadow:inset 0 0 18px rgba(45,212,191,.035)}
 .relative-position-head,.relative-position-foot{display:flex;align-items:center;justify-content:space-between;gap:7px;white-space:nowrap}
 .relative-position-head span{font-size:9px;font-weight:650;color:var(--t2);letter-spacing:.35px}.relative-position-head b{max-width:105px;overflow:hidden;text-overflow:ellipsis;font:600 7px/1 var(--fm);color:var(--t4);letter-spacing:.35px}
+.relative-range-select{max-width:62px;min-width:45px;padding:1px 2px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--t2);font:600 8px/1.2 var(--fm)}
 .relative-position-plot{flex:1;min-height:0;margin:3px 0 2px}.relative-position-plot svg{display:block;width:100%;height:100%;overflow:visible}
 .relative-grid circle,.relative-grid line{fill:none;stroke:rgba(126,200,227,.14);stroke-width:.75}.relative-grid .major{stroke:rgba(126,200,227,.28);stroke-width:1}.relative-grid text{fill:var(--t4);font:500 6px/1 var(--fm)}
 .relative-axis-label{fill:var(--t4);font:650 6px/1 var(--fm);letter-spacing:.35px}.relative-vector{stroke:rgba(45,212,191,.72);stroke-width:1.4;stroke-dasharray:3 2}.relative-target{fill:var(--green);stroke:#d9fff6;stroke-width:1.2;filter:drop-shadow(0 0 4px rgba(45,212,191,.8))}.relative-raw-vector{stroke:var(--orange);stroke-width:1;stroke-dasharray:2 3;opacity:.7}.relative-raw-target{fill:var(--bg);stroke:var(--orange);stroke-width:1.5}.relative-sample-row{display:flex;justify-content:space-between;gap:4px;white-space:nowrap;font:600 8px/1.5 var(--fm)}.relative-sample-row[data-kind="raw"]{color:var(--orange)}.relative-sample-row[data-kind="trusted"]{color:var(--green)}.relative-decision{font-size:7px;line-height:1.5;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -442,10 +443,69 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 .joystick-wrap{touch-action:none;user-select:none;-webkit-user-select:none;overscroll-behavior:contain}
 .joystick-wrap *{pointer-events:none;-webkit-user-drag:none}
 .joystick-wrap .joystick-stick{transition:box-shadow var(--fast)}
+/* Reserve each text row: status/number wrapping must never resize the radar. */
+.relative-position-panel{display:grid;grid-template-rows:26px minmax(28px,1fr) 18px 18px 12px 12px;row-gap:2px}
+.relative-position-head{display:grid;grid-template-columns:minmax(0,1fr) 18px;grid-template-rows:11px 13px;gap:2px 3px;overflow:hidden;min-width:0}
+.relative-position-head>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:8px;line-height:11px}
+.relative-head-controls{grid-column:1/-1;display:flex;align-items:center;gap:3px;min-width:0;height:13px}
+.relative-head-controls b{flex:1;min-width:0;max-width:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:7px;line-height:11px}
+.relative-radar-expand{width:18px;height:12px;padding:0;border:0;background:transparent;color:var(--ice);font-size:11px;line-height:12px;cursor:pointer}
+.relative-position-plot{width:100%;height:100%;min-height:28px;margin:0}
+.relative-sample-row{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:9px 9px;gap:0;font-size:7px;line-height:9px;overflow:hidden}
+.relative-sample-row>span,.relative-position-foot{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.relative-raw-toggle{display:flex;align-items:center;gap:2px;white-space:nowrap;overflow:hidden;cursor:pointer}
+.relative-raw-toggle input{width:9px;height:9px;margin:0;accent-color:var(--orange)}
+.relative-grid text{font-size:8px;fill:var(--t2);paint-order:stroke;stroke:var(--bg);stroke-width:2px;stroke-linejoin:round}
+.relative-axis-label{font-size:8px}
+.relative-point-label{fill:var(--green);font:650 9px/1 var(--fm);paint-order:stroke;stroke:var(--bg);stroke-width:2.4px;stroke-linejoin:round}
+.relative-point-label.raw{fill:var(--orange)}
+.relative-offscale{fill:var(--green);stroke:var(--bg);stroke-width:1px}.relative-offscale.raw{fill:var(--orange)}
+.relative-radar-modal{z-index:250}
+#relativeRadarDialog{width:min(94vw,760px);height:min(88dvh,820px);display:flex}
+#relativeRadarDialog>.relative-position-panel{width:100%;height:100%;flex:1;padding:14px;background:var(--bg);grid-template-rows:40px minmax(120px,1fr) 24px 24px 24px 36px;row-gap:6px}
+#relativeRadarDialog .relative-position-head{grid-template-columns:minmax(0,1fr) 30px;grid-template-rows:19px 19px;gap:2px 6px}
+#relativeRadarDialog .relative-position-head>span{font-size:14px;line-height:19px}
+#relativeRadarDialog .relative-head-controls{height:19px;gap:10px}
+#relativeRadarDialog .relative-head-controls b{font-size:11px;line-height:19px}
+#relativeRadarDialog .relative-range-select{font-size:12px;max-width:80px;min-width:60px;height:19px}
+#relativeRadarDialog .relative-radar-expand{width:30px;height:19px;font-size:18px;line-height:19px}
+#relativeRadarDialog .relative-sample-row{display:flex;align-items:center;justify-content:space-between;font-size:12px;line-height:24px}
+#relativeRadarDialog .relative-raw-toggle input{width:14px;height:14px;margin-right:4px}
+#relativeRadarDialog .relative-position-foot strong{font-size:12px;line-height:24px}
+#relativeRadarDialog .relative-decision{font-size:10px;line-height:17px;white-space:normal;overflow:hidden}#relativeRadarDialog .relative-grid text{font-size:11px}#relativeRadarDialog .relative-axis-label{font-size:10px}#relativeRadarDialog .relative-point-label{font-size:12px}
 /* Only a retained last-known point blinks; the instruments stay stable. */
 .is-last-position{animation:uwb-last-position 1.2s ease-in-out infinite}
 @keyframes uwb-last-position{0%,100%{opacity:1}50%{opacity:.28}}
 @media(prefers-reduced-motion:reduce){.is-last-position{animation:none;opacity:.6}}
+/* UWB instruments share one body frame with the route preview. */
+.relative-position-panel{grid-template-rows:26px minmax(28px,1fr) 18px 12px 12px 28px 12px}
+.uwb-quality-row{display:flex;justify-content:space-between;gap:5px;font:600 7px/12px var(--fm);color:var(--t3)}
+.uwb-path-card{min-width:0;border-top:1px solid var(--border);padding-top:3px;overflow:hidden}
+.uwb-path-card header{display:flex;align-items:center;justify-content:space-between;gap:3px;font-size:8px;line-height:12px;color:var(--t2)}
+.uwb-path-card header b{font-size:7px;font-weight:500;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.uwb-path-card[data-state="ready"] header b{color:#c4a6ff}.uwb-path-card[data-state="active"] header b{color:var(--green)}
+.uwb-path-card small{display:block;color:var(--t4);font-size:6px;line-height:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.uwb-path-metrics,.uwb-path-legend{display:none}
+.uwb-observed-path{fill:none;stroke:#90a8ba;stroke-width:1;stroke-dasharray:2 3;opacity:.65}
+.uwb-optimized-path{fill:none;stroke:#b293ff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.uwb-lookahead{fill:var(--bg);stroke:#e0d0ff;stroke-width:1.8}
+#relativeRadarDialog>.relative-position-panel{grid-template-rows:40px minmax(120px,1fr) 24px 24px 22px 98px 30px}
+#relativeRadarDialog .uwb-quality-row{font-size:11px;line-height:22px}
+#relativeRadarDialog .uwb-path-card{padding-top:9px}
+#relativeRadarDialog .uwb-path-card header{font-size:13px;line-height:20px}
+#relativeRadarDialog .uwb-path-card header b{font-size:11px}
+#relativeRadarDialog .uwb-path-card small{font-size:10px;line-height:16px}
+#relativeRadarDialog .uwb-path-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:5px}
+#relativeRadarDialog .uwb-path-metrics span{color:var(--t3);font-size:9px}
+#relativeRadarDialog .uwb-path-metrics strong{display:block;color:var(--t1);font:600 12px/20px var(--fm)}
+#relativeRadarDialog .uwb-path-legend{display:flex;gap:15px;color:var(--t3);font-size:9px;margin-top:3px}
+.uwb-path-legend .smooth-key{color:var(--green)}.uwb-path-legend .route-key{color:#b293ff}
+@media(max-height:450px) and (orientation:landscape){
+ .drive-body>.relative-position-panel{height:112px;min-height:112px;grid-template-rows:26px minmax(28px,1fr) 18px 12px 14px;row-gap:1px;padding:3px}
+ .drive-body .uwb-quality-row,.drive-body .relative-decision{display:none}
+ .drive-body .uwb-path-card{padding-top:0;border:0}
+ .drive-body .uwb-path-card small{display:none}
+}
 </style>
 </head>
 <body data-theme="dark" data-language="zh">
@@ -581,7 +641,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
                 <button class="gimbal-action-btn record-btn" id="recordButton" type="button" data-gimbal-action="record" title="录像"><i></i></button>
                 <button class="gimbal-action-btn osd-btn active" id="gimbalOsd" type="button" aria-pressed="true" title="OSD">OSD</button>
                 <button class="gimbal-action-btn refresh-stream-btn" type="button" id="refreshGimbalVideo" title="只刷新云台画面" aria-label="只刷新云台画面"><svg viewBox="0 0 24 24"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M18.5 9a7 7 0 0 0-11.8-2.4L4 9"/><path d="M5.5 15a7 7 0 0 0 11.8 2.4L20 15"/></svg><span>刷新</span></button>
-                <button class="gimbal-action-btn beacon-calibration-btn" type="button" id="gimbalBeaconCalibration" title="UWB与云台九点校准" hidden>九点校准</button>
+                <button class="gimbal-action-btn beacon-calibration-btn" type="button" id="gimbalBeaconCalibration" title="UWB与云台多点校准">多点校准</button>
               </div>
             </div>
           </div>
@@ -605,26 +665,37 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
               </button>
             </div>
             <div class="relative-position-panel" id="relativePositionPanel" data-state="offline">
-              <div class="relative-position-head"><span id="relativePositionTitle">目标相对位置</span><b id="relativeFusionMode">等待 UWB</b></div>
+              <div class="relative-position-head"><span id="relativePositionTitle">目标相对位置</span><button type="button" id="relativeRadarExpand" class="relative-radar-expand" aria-label="放大雷达图" aria-expanded="false" title="放大雷达图查看距离刻度">⛶</button><div class="relative-head-controls"><select class="relative-range-select" id="relativeRangeSelect" aria-label="雷达图量程" title="固定外圈量程，不随坐标自动缩放"><option value="1">1 m</option><option value="2" selected>2 m</option><option value="5">5 m</option><option value="10">10 m</option><option value="20">20 m</option><option value="50">50 m</option></select><b id="relativeFusionMode">等待 UWB</b></div></div>
               <div class="relative-position-plot">
-                <svg viewBox="0 0 180 112" role="img" aria-label="UWB目标相对船体坐标">
+                <svg viewBox="0 0 240 220" role="img" aria-label="UWB目标相对船体坐标，距离单位米">
                   <g class="relative-grid">
-                    <circle cx="90" cy="56" r="17"/><circle cx="90" cy="56" r="34"/><circle class="major" cx="90" cy="56" r="51"/>
-                    <line class="major" x1="90" y1="3" x2="90" y2="109"/><line class="major" x1="37" y1="56" x2="143" y2="56"/>
-                    <line x1="54" y1="20" x2="126" y2="92"/><line x1="126" y1="20" x2="54" y2="92"/>
-                    <text id="relativeRingLabel" x="94" y="9">5 m</text>
+                    <circle cx="120" cy="110" r="28"/><circle cx="120" cy="110" r="56"/><circle class="major" cx="120" cy="110" r="84"/>
+                    <line class="major" x1="120" y1="24" x2="120" y2="196"/><line class="major" x1="34" y1="110" x2="206" y2="110"/>
+                    <line x1="60.6" y1="50.6" x2="179.4" y2="169.4"/><line x1="179.4" y1="50.6" x2="60.6" y2="169.4"/>
+                    <text id="relativeRingInnerLabel" x="143" y="87">0.67 m</text><text id="relativeRingMiddleLabel" x="163" y="67">1.33 m</text><text id="relativeRingLabel" x="183" y="47">2 m</text>
                   </g>
-                  <text class="relative-axis-label" x="90" y="7" text-anchor="middle">前 +X</text><text class="relative-axis-label" x="34" y="59" text-anchor="end">左 +Y</text>
-                  <line class="relative-raw-vector" id="relativeRawVector" visibility="hidden" x1="90" y1="56" x2="90" y2="56"/>
-                  <circle class="relative-raw-target" id="relativeRawPoint" visibility="hidden" cx="90" cy="56" r="5.5"/>
-                  <line visibility="hidden" class="relative-vector" id="relativeTargetVector" x1="90" y1="56" x2="90" y2="56"/>
-                  <circle visibility="hidden" class="relative-target" id="relativeTargetPoint" cx="90" cy="56" r="4"/>
-                  <path class="relative-boat" d="M90 48 L95 61 L90 59 L85 61 Z"/>
+                  <text class="relative-axis-label" x="120" y="14" text-anchor="middle">前 +X</text><text class="relative-axis-label" x="10" y="113">左 +Y</text><text class="relative-axis-label" x="230" y="113" text-anchor="end">右 −Y</text><text class="relative-axis-label" x="120" y="216" text-anchor="middle">后 −X</text>
+                  <line class="relative-raw-vector" id="relativeRawVector" visibility="hidden" x1="120" y1="110" x2="120" y2="110"/>
+                  <circle class="relative-raw-target" id="relativeRawPoint" visibility="hidden" cx="120" cy="110" r="5"/>
+                  <path class="relative-offscale raw" id="relativeRawOffscale" visibility="hidden" d="M0 -6 L-4 4 L0 1 L4 4 Z"/>
+                  <text class="relative-point-label raw" id="relativeRawDistanceLabel" visibility="hidden"/>
+                  <defs><clipPath id="uwbRouteClip"><circle cx="120" cy="110" r="84"/></clipPath></defs>
+                  <g clip-path="url(#uwbRouteClip)"><polyline id="uwbObservedPath" class="uwb-observed-path" visibility="hidden"/><polyline id="uwbOptimizedPath" class="uwb-optimized-path" visibility="hidden"/><circle id="uwbPathLookaheadPoint" class="uwb-lookahead" r="3" visibility="hidden"/></g>
+                  <line visibility="hidden" class="relative-vector" id="relativeTargetVector" x1="120" y1="110" x2="120" y2="110"/>
+                  <circle visibility="hidden" class="relative-target" id="relativeTargetPoint" cx="120" cy="110" r="4"/>
+                  <path class="relative-offscale" id="relativeTargetOffscale" visibility="hidden" d="M0 -6 L-4 4 L0 1 L4 4 Z"/>
+                  <text class="relative-point-label" id="relativeTargetDistanceLabel" visibility="hidden"/>
+                  <path class="relative-boat" d="M120 101 L126 116 L120 113 L114 116 Z"/>
                 </svg>
               </div>
-              <div class="relative-sample-row" data-kind="raw"><strong id="relativeRawLabel">○ 原始</strong><span id="relativeRawValue">-- m / --°</span></div>
+              <div class="relative-sample-row" data-kind="raw" style="display:none"><label class="relative-raw-toggle" title="勾选后叠加原始点；绿色目标为平滑输出"><input type="checkbox" disabled id="relativeShowRaw" aria-label="显示原始对照点"><strong id="relativeRawLabel">○ 原始</strong></label><span id="relativeRawValue">-- m / --°</span></div>
               <div class="relative-sample-row" data-kind="trusted"><strong id="relativeJudgedLabel">● 可信</strong><span id="relativeRangeValue">-- m / --°</span></div>
               <div class="relative-position-foot"><strong id="relativePositionValue">前 -- · 左 --</strong></div>
+              <div class="uwb-quality-row"><span id="uwbQualityRate">-- Hz</span><span id="uwbQualityAge">等待定位</span><span>云台水平 0°</span></div>
+              <section class="uwb-path-card" id="uwbPathCard" data-state="waiting"><header><strong>路径优化</strong><b id="uwbPathStatus">等待定位</b></header><small id="uwbPathHint">平滑定位 → 路径优化</small>
+                <div class="uwb-path-metrics"><span>轨迹点<strong id="uwbPathPoints">--</strong></span><span>路径长度<strong id="uwbPathLength">--</strong></span><span>前视距离<strong id="uwbPathLookahead">--</strong></span><span>参考速度<strong id="uwbPathSpeed">--</strong></span></div>
+                <div class="uwb-path-legend"><span class="smooth-key">● 平滑目标</span><span>┄ 采样轨迹</span><span class="route-key">━ 优化路径</span><span>○ 前视点</span></div>
+              </section>
               <div class="relative-decision" id="relativeDecision">等待定位</div>
             </div>
             <div class="drive-side">
@@ -793,6 +864,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
     <button class="device-picker-rescan" id="rescanDevices" type="button">重新扫描</button>
   </div>
 </div>
+<div class="modal-backdrop relative-radar-modal" id="relativeRadarModal" hidden><div id="relativeRadarDialog" role="dialog" aria-modal="true" aria-label="目标相对位置雷达图"></div></div>
 <!-- Pairing Modal -->
 <div class="modal-backdrop" id="pairingModal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pairingTitle">
@@ -800,6 +872,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
     <span class="modal-kicker">SECURE PAIRING</span>
     <h2 id="pairingTitle">输入 Manta 显示的配对码</h2>
     <p id="pairingDeviceIdentity">MANTA ROBOTIC · MANTA 2407</p>
+    <p id="pairingSessionNotice" role="status" hidden>连接会话已失效，请重新输入配对码。</p>
     <div class="pin-inputs" id="pinInputs">
       <input class="pin-input" inputmode="numeric" maxlength="1" aria-label="第1位">
       <input class="pin-input" inputmode="numeric" maxlength="1" aria-label="第2位">
@@ -841,22 +914,23 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="beaconCalibrationTitle">
     <button class="modal-close" id="beaconCalibrationClose" type="button" aria-label="关闭">×</button>
     <span class="modal-kicker">UWB BEACON · 9-POINT</span>
-    <h2 id="beaconCalibrationTitle">UWB + 云台九点校准</h2>
-    <p id="beaconCalibrationLead">云台会以随机顺序移动到左/中/右 × 上/中/下九个点位。保持信标天线朝向不变，并在正常使用距离将它放到画面正中心；系统会同时记录距离和角度，拟合三维相对位置。</p>
+    <h2 id="beaconCalibrationTitle">UWB + 云台多点校准</h2>
+    <p id="beaconCalibrationLead">针对 360° 基站：25 点覆盖云台可达的水平与俯仰范围，其中 20 点拟合、5 点独立验证。请保持船体和基站不动、信标天线朝向不变；在实际使用距离将信标移到画面中心，每点保持静止至少 1 秒再记录。可在不同点使用不同距离，以检验近远距离效果。云台会转动，请留出空间。</p>
+    <label class="setting-row"><span><b>校准方案</b><small>精细方案通过验证后才保存</small></span><select id="beaconCalibrationProfile"><option value="precision25">25 点精细校准（推荐）</option><option value="quick9">9 点快速校准</option></select></label>
     <div class="cal-progress">
       <span id="beaconCalibrationProgressText">准备开始</span>
-      <strong id="beaconCalibrationCounter">0 / 9</strong>
+      <strong id="beaconCalibrationCounter">0 / 25</strong>
     </div>
     <div class="cal-progress-bar"><b id="beaconCalibrationBar"></b></div>
     <div class="beacon-calibration-preview" id="beaconCalibrationPreview">
       <canvas id="beaconCalibrationCanvas" aria-label="云台实时校准画面"></canvas>
       <i class="beacon-calibration-reticle" aria-hidden="true"></i>
     </div>
-    <strong class="cal-pose-title" id="beaconCalibrationPoseTitle">准备九个 3×3 点位</strong>
+    <strong class="cal-pose-title" id="beaconCalibrationPoseTitle">准备 25 个校准点</strong>
     <p class="cal-pose-instruction" id="beaconCalibrationInstruction">开始后，Beacon跟随会暂停；请逐点将信标放到画面中心再记录。</p>
     <div class="cal-actions">
       <button class="secondary" id="beaconCalibrationCancel" type="button">取消</button>
-      <button class="primary" id="beaconCalibrationNext" type="button">开始九点校准</button>
+      <button class="primary" id="beaconCalibrationNext" type="button">开始 25 点校准</button>
     </div>
   </div>
 </div>
@@ -900,9 +974,11 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 <script src="/socket.io/socket.io.js"></script>
 <script src="js/mediamtx-webrtc-reader.js?v=1.19.2"></script>
 <script src="js/offline-satellite-map.js?v=20260825v3"></script>
-<script src="js/manta-app-transport.js?v=20261027access1"></script>
-<script src="js/uwb-display-smoother.js?v=20261027access1"></script>
-<script src="js/uwb-raw-display.js?v=20261023dual1"></script>
+<script src="js/manta-app-transport.js?v=20261031path1"></script>
+<script src="js/uwb-display-smoother.js?v=20261031radar2"></script>
+<script src="js/uwb-raw-display.js?v=20261029coherent1"></script>
+<script src="js/uwb-radar-geometry.js?v=20261031distance1"></script>
+<script src="js/uwb-path-panel.js?v=20261031path1"></script>
 <script>
 document.addEventListener("click",function(event){
   if(!event.target||!event.target.closest||!event.target.closest("#imuCalibrate"))return;
@@ -956,8 +1032,9 @@ function ensureTransport(){
     if(payload.attitude)state.attitude=payload.attitude;
     if(payload.gps)state.gps=payload.gps;
     if(payload.uwb)state.uwb=payload.uwb;
+    if(payload.uwbPath)state.uwbPath=payload.uwbPath;
     if(payload.ekf)state.ekf=payload.ekf;
-    if(Object.prototype.hasOwnProperty.call(payload,"armed"))state.armed=Boolean(payload.armed);
+    if(Object.prototype.hasOwnProperty.call(payload,"armed")&&state.armed!==Boolean(payload.armed)){state.armed=Boolean(payload.armed);if(!state.armed&&window.resetMantaJoystick)window.resetMantaJoystick();renderConnection();}
     if(payload.flightMode)state.flightMode=String(payload.flightMode);
     scheduleTelemetryPaint(false,false);
   });
@@ -967,11 +1044,12 @@ function ensureTransport(){
     renderConnection();renderTelemetry();renderHardwareStatus();
   });
   transport.on("log",function(entry){addLog(entry||{})});
+  transport.on("authenticationRequired",handleAuthenticationRequired);
   transport.on("emergency",function(payload){
-    if(!payload||payload.active!==false){state.armed=false;state.emergency=true;state.connection="emergency";state.speed=0;if(window.resetMantaJoystick)window.resetMantaJoystick();renderConnection();renderTelemetry();}
+    if(!payload||payload.active!==false){state.emergency=true;state.connection="emergency";state.speed=0;if(window.resetMantaJoystick)window.resetMantaJoystick();renderConnection();renderTelemetry();}
   });
   transport.on("armed",function(payload){
-    state.armed=Boolean(payload&&payload.armed);if(!state.armed)state.speed=0;renderConnection();renderTelemetry();
+    state.armed=Boolean(payload&&payload.armed);if(!state.armed){state.speed=0;if(window.resetMantaJoystick)window.resetMantaJoystick();}renderConnection();renderTelemetry();
   });
   transport.on("hardwareStatus",function(payload){
     payload=payload||{};["boardOnline","pixhawkOnline","imuOnline","motorsOnline","gimbalOnline","gimbalOutputAvailable"].forEach(function(key){if(Object.prototype.hasOwnProperty.call(payload,key))state[key]=Boolean(payload[key])});
@@ -994,6 +1072,7 @@ function ensureTransport(){
     if(!payload||state.gimbalMode==="click")return;
     state.trackStatus=payload;if(payload.mode){state.runningTrackMode=payload.mode==="beacon"?"beacon":payload.mode==="swimmer"?"swimmer":"face";if(state.trackingActive){state.trackMode=state.runningTrackMode;state.gimbalMode=state.runningTrackMode}}if(!payload.locked)state.trackTarget=null;renderTrackingMode();
   });
+  transport.on("uwbPath",function(payload){state.uwbPath=payload;scheduleTelemetryPaint(false,false)});
   transport.on("uwbFollow",function(payload){state.uwbFollow=payload||state.uwbFollow;scheduleTelemetryPaint(false,true)});
   return transport;
 }
@@ -1284,7 +1363,7 @@ function renderTrackingMode(){
   $$("[data-gimbal-mode]").forEach(function(button){button.classList.toggle("active",button.dataset.gimbalMode===mode)});
   $("#trackingReticle").hidden=true;
   $(".video-feed").classList.toggle("click-target-mode",mode==="click");
-  $("#gimbalBeaconCalibration").hidden=mode!=="beacon";
+  $("#gimbalBeaconCalibration").hidden=false;
   drawGimbalOverlay();
   if(mode!=="click")$("#trackingLabel").textContent=mode==="beacon"?localize("UWB 信标","UWB BEACON"):mode==="face"?localize("人脸","FACE"):localize("泳者","SWIMMER");
 }
@@ -1308,24 +1387,35 @@ function renderDriveMode(){
   methodControl.hidden=!automatic;
   $("#driveModeLabel").textContent=automatic?"UWB AUTO FOLLOW":localize("双桨推进","DUAL THRUST");
   if(!automatic)$("#driveOutput").textContent="X "+Number(state.vector.x||0).toFixed(2)+" · Y "+Number(state.vector.y||0).toFixed(2);
-  joystick.setAttribute("aria-disabled",String(automatic||!state.connected||!state.controlLink||!state.armed||state.calibrating));
+  joystick.setAttribute("aria-disabled",String(automatic||state.driveModeSwitching||!state.connected||!state.controlLink||!state.armed||state.calibrating||state.emergency||state.disarmPending));
 }
 
+var driveModeGeneration=0;
 function setDriveMode(mode){
   var nextMode=mode==="auto"?"auto":"manual";
   if(state.driveMode===nextMode)return;
-  var activeTransport=ensureTransport();
-  if(nextMode==="auto"){
-    if(window.resetMantaJoystick)window.resetMantaJoystick();
-    if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(false);
-  }else{
-    var enableManual=function(){if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(true);renderDriveMode()};
+  var activeTransport=ensureTransport(),generation=++driveModeGeneration;
+  if(window.resetMantaJoystick)window.resetMantaJoystick();
+  if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(false);
+  state.driveMode=nextMode;state.driveModeSwitching=false;
+  function renderMode(){renderDriveMode();renderUwbFollow();renderArmControl();}
+  function enableManual(){
+    if(generation!==driveModeGeneration||state.driveMode!=="manual")return;
+    state.driveModeSwitching=false;
+    if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(true);
+    renderMode();
+  }
+  if(nextMode==="manual"){
     if(activeTransport&&uwbFollowIsRequested()){
-      activeTransport.stopUwbFollow().catch(function(error){showToast(error.message||"停止自动跟随失败")}).finally(enableManual);
+      state.driveModeSwitching=true;
+      activeTransport.stopUwbFollow().then(enableManual).catch(function(error){
+        if(generation!==driveModeGeneration)return;
+        state.driveMode="auto";state.driveModeSwitching=false;
+        showToast(error.message||"停止自动跟随失败");renderMode();
+      });
     }else enableManual();
   }
-  state.driveMode=nextMode;
-  renderDriveMode();renderUwbFollow();renderArmControl();
+  renderMode();
 }
 
 function renderUwbFollow(){
@@ -1342,16 +1432,18 @@ function renderUwbFollow(){
   $("#trackingMethodState").textContent=trackingMethod==="neural"?"SMARTUSV PPO":"TRADITIONAL";
   button.classList.toggle("active",requested);
   button.classList.toggle("busy",busy);
-  button.disabled=!pageCanControl()||state.driveMode!=="auto"||(!requested&&(!state.connected||!state.controlLink));
+  button.disabled=Boolean(state.disarmPending)||!pageCanControl()||state.driveMode!=="auto"||(!requested&&(!state.connected||!state.controlLink));
   label.textContent=follow.active?localize("停止跟随","Stop follow"):searching?localize("停止搜索","Stop search"):busy?localize("取消启动","Cancel start"):localize("启动跟随","Start follow");
   var labels={awaiting_signal:localize("搜索 UWB","Searching for UWB"),awaiting_trusted_uwb:localize("搜索 UWB","Searching for UWB"),auto_resume_ready:localize("UWB 已找到，准备跟随","UWB acquired; preparing to follow"),confirming_recovered_uwb:localize("确认连续有效 UWB","Confirming valid UWB samples"),auto_resume_recovering:localize("定位恢复中","Recovering target"),acro_velocity_unavailable:localize("等待有效航速数据","Waiting for valid velocity"),acro_parameters_not_ready:localize("等待ACRO控制参数","Waiting for ACRO parameters"),imu_stale:localize("航向数据过期，已退出","Stale heading; stopped"),prediction_clock_reset:localize("时钟变化，已退出","Clock changed; stopped"),predicting:localize("短时预测跟随","Predicted following"),waiting_target:localize("等待目标出水","Waiting for swimmer"),recovering:localize("定位恢复中","Recovering target"),prediction_tracking:localize("短时预测跟随","Predicted following"),prediction_recovering:localize("定位恢复中","Recovering target"),prediction_reacquiring:localize("校验出水测量","Checking new measurements"),prediction_pose_unavailable:localize("运动状态不足，等待出水","Motion estimate unavailable; waiting"),prediction_warming_up:localize("等待连续有效测量","Waiting for valid samples"),prediction_limit:localize("预测到限，等待出水","Prediction limit; waiting"),prediction_clearance:localize("间距不足，等待出水","Insufficient clearance; waiting"),prediction_speed_limit:localize("船速过高，暂停预测推进","Vessel too fast; waiting"),prediction_wait_timeout:localize("目标失联超时，已退出","Target timeout; stopped"),target_identity_changed:localize("目标身份变化，已退出","Target changed; stopped"),tracking:localize("跟随中","Tracking"),holding:localize("间距保护，保持停止","Separation protection; holding"),holding_distance:localize("间距保护，保持停止","Separation protection; holding"),method_selected:localize("等待启动","Ready to start"),disarming:localize("正在解除武装","Disarming"),switching_mode:localize("正在切换控制模式","Switching control mode"),arming:localize("正在自动武装","Auto arming"),gps_fix_invalid:localize("GPS无效","GPS invalid"),ekf_unhealthy:localize("EKF无效","EKF invalid"),imu_invalid:localize("IMU航向无效","IMU yaw invalid"),uwb_stale:localize("UWB失效","UWB stale"),guided_required:localize("需要GUIDED模式","GUIDED required"),manual_required:localize("需要MANUAL模式","MANUAL required"),pilot_steering_not_ready:localize("等待电机控制参数","Waiting for motor control parameters"),manual_mode_timeout:localize("MANUAL切换超时","MANUAL timeout"),acro_required:localize("需要ACRO模式","ACRO required"),guided_mode_timeout:localize("GUIDED切换超时","GUIDED timeout"),acro_mode_timeout:localize("ACRO切换超时","ACRO timeout"),arming_timeout:localize("武装超时","Arming timeout"),manual_stop:localize("已停止","Stopped"),not_started:localize("未启动","Not started")};
   var estimate=follow.targetEstimate||{};
   status.textContent=searching?localize("搜索 UWB · 等待有效信号","Searching for UWB · waiting for valid signal"):labels[follow.reason]||labels[follow.status]||String(follow.reason||follow.status||localize("未启动","Not started"));
+  if(follow.positionWaiting)status.textContent=localize("定位暂失 · 推进归零等待","Position unavailable · neutral waiting");
   if(follow.active&&follow.relativeImuControl&&!follow.pausePropulsion)status.textContent=(follow.planner==="nmpc"?(follow.gpsSpeedControlActive?localize("GPS 闭环预测 · ","GPS predictive control · "):localize("UWB 相对预测 · ","UWB relative predictive control · ")):(follow.gpsSpeedControlActive?localize("GPS 速度闭环 · ","GPS speed feedback · "):localize("UWB 角度跟随 · ","UWB bearing follow · ")))+status.textContent;
   if(follow.active&&follow.planner==="nmpc"&&follow.pausePropulsion)status.textContent=follow.reason==="nmpc_relative_motion_warming_up"?localize("建立相对运动估计","Estimating relative motion"):localize("预测约束未满足，推进暂停","Prediction constraints unmet; propulsion paused");
   if(searching&&follow.waitingReason&&follow.waitingReason!=="uwb_stale")status.textContent=localize("搜索 UWB · ","Searching for UWB · ")+(labels[follow.waitingReason]||follow.waitingReason);
   if(follow.active&&["innovation_outlier","occlusion_suspected","distance_out_of_range","azimuth_out_of_range","elevation_out_of_range","non_finite_measurement"].includes(state.uwb&&state.uwb.rejectionReason))status.textContent=localize("拒绝异常值 · ","Outlier rejected · ")+status.textContent;
-  if(follow.active&&estimate.source==="predicted"&&Number.isFinite(estimate.predictionAgeMs))status.textContent+=" · "+(estimate.predictionAgeMs/1000).toFixed(1)+"s · "+localize("误差界 ","Error bound ")+Number(estimate.uncertaintyM||0).toFixed(2)+"m";
+  if(follow.lastPointApproach&&follow.lastPointApproach.active)status.textContent=localize("估算接近最后位置","Estimated approach to last position");
+  if(follow.active&&estimate.source==="predicted"&&Number.isFinite(estimate.predictionAgeMs))status.textContent+=" · "+(estimate.predictionAgeMs/1000).toFixed(1)+"s · "+(estimate.modelBased?localize("位移为模型估算","Displacement is model-estimated"):localize("误差界 ","Error bound ")+Number(estimate.uncertaintyM||0).toFixed(2)+"m");
   renderRelativePosition();
   if(state.driveMode==="auto"){
     if(follow.active){
@@ -1362,37 +1454,44 @@ function renderUwbFollow(){
 }
 
 function renderBeaconCalibration(){
-  var cal=beaconCalibration,next=$("#beaconCalibrationNext"),cancel=$("#beaconCalibrationCancel");
-  if(!cal){
-    $("#beaconCalibrationProgressText").textContent=localize("准备开始","Ready");
-    $("#beaconCalibrationCounter").textContent="0 / 9";$("#beaconCalibrationBar").style.width="0%";
-    $("#beaconCalibrationPoseTitle").textContent=localize("准备九个 3×3 点位","Prepare nine 3x3 points");
-    $("#beaconCalibrationInstruction").textContent=localize("开始后，Beacon跟随会暂停；请逐点将信标放到画面中心再记录。","Beacon tracking pauses. Center the beacon at each point, then capture.");
-    next.textContent=localize("开始九点校准","Start 9-point calibration");next.disabled=beaconCalibrationBusy;cancel.hidden=false;return;
+  var cal=beaconCalibration,next=$("#beaconCalibrationNext"),cancel=$("#beaconCalibrationCancel"),profile=$("#beaconCalibrationProfile");
+  var active=Boolean(cal&&cal.active),complete=Boolean(cal&&cal.status==="complete");
+  profile.disabled=active||beaconCalibrationBusy;
+  if(active&&cal.profile)profile.value=cal.profile;
+  var selectedTotal=profile.value==="quick9"?9:25;
+  if(!active&&!complete){
+    $("#beaconCalibrationProgressText").textContent=cal&&cal.status==="failed"?localize("上次拟合未通过，原校准已保留","Previous fit rejected; old calibration retained"):localize("准备开始","Ready");
+    $("#beaconCalibrationCounter").textContent="0 / "+selectedTotal;$("#beaconCalibrationBar").style.width="0%";
+    $("#beaconCalibrationPoseTitle").textContent=localize("准备 "+selectedTotal+" 个校准点","Prepare "+selectedTotal+" calibration points");
+    $("#beaconCalibrationInstruction").textContent=cal&&cal.status==="failed"?cal.message:cal&&cal.unavailableReason?cal.unavailableReason:localize("逐点将信标放在画面中心并保持静止。25 点方案须通过独立验证才会保存。","Center and hold the beacon at each point. The 25-point profile must pass independent validation before saving.");
+    next.textContent=localize("开始 "+selectedTotal+" 点校准","Start "+selectedTotal+"-point calibration");
+    next.disabled=beaconCalibrationBusy||!cal||cal.available===false;cancel.hidden=false;return;
   }
-  var captured=Number(cal.index)||0,total=Number(cal.total)||9,complete=cal.status==="complete";
+  var captured=Number(cal.index)||0,total=Number(cal.total)||selectedTotal;
   $("#beaconCalibrationCounter").textContent=captured+" / "+total;
   $("#beaconCalibrationBar").style.width=Math.round(captured/total*100)+"%";
-  $("#beaconCalibrationProgressText").textContent=complete?localize("拟合完成，Beacon跟随已恢复","Calibration complete; tracking resumed"):localize("云台已到第 "+(captured+1)+" 个点","Gimbal at point "+(captured+1));
+  $("#beaconCalibrationProgressText").textContent=complete?localize("校准已保存","Calibration saved"):localize("第 "+(captured+1)+" 点 · "+(cal.point&&cal.point.role==="validation"?"独立验证":"拟合采样"),"Point "+(captured+1)+" · "+(cal.point&&cal.point.role==="validation"?"Validation":"Fitting"));
   if(complete){
-    var result=cal.result||{},metrics=result.metrics||{};
-    $("#beaconCalibrationPoseTitle").textContent=localize("九点校准完成","9-point calibration complete");
-    $("#beaconCalibrationInstruction").textContent=result.model==="rigid_3d"?"3D RMS "+Number(metrics.angularRmsErrorDeg||0).toFixed(2)+"° · MAX "+Number(metrics.angularMaxErrorDeg||0).toFixed(2)+"°":"Yaw R² "+Number(metrics.yawR2||0).toFixed(3)+" · Pitch R² "+Number(metrics.pitchR2||0).toFixed(3);
+    var metrics=(cal.result||{}).metrics||{};
+    $("#beaconCalibrationPoseTitle").textContent=localize(total+" 点校准完成",total+"-point calibration complete");
+    $("#beaconCalibrationInstruction").textContent="拟合 RMS "+Number(metrics.angularRmsErrorDeg||0).toFixed(2)+"°"+(metrics.validationPointCount?" · 独立验证 RMS "+Number(metrics.validationAngularRmsErrorDeg).toFixed(2)+"° / MAX "+Number(metrics.validationAngularMaxErrorDeg).toFixed(2)+"°":" · 未设置独立验证点");
     next.textContent=localize("完成","Done");next.disabled=false;cancel.hidden=true;return;
   }
-  if(cal.status==="failed"){
-    $("#beaconCalibrationProgressText").textContent=localize("拟合未通过","Fit rejected");
-    $("#beaconCalibrationPoseTitle").textContent=localize("请重新执行九点校准","Repeat the 9-point calibration");
-    $("#beaconCalibrationInstruction").textContent=cal.message||localize("点位跨度或居中精度不足。","Point span or centering accuracy was insufficient.");
-    next.textContent=localize("重新开始","Restart");next.disabled=false;cancel.hidden=false;return;
-  }
+  var point=cal.point||{};
   $("#beaconCalibrationPoseTitle").textContent=localize("将信标放到画面正中心","Place beacon at image center");
-  $("#beaconCalibrationInstruction").textContent=localize("确认画面中心与信标重合后，点击记录。云台随后自动移动到下一点。","When centered, capture. The gimbal then moves automatically.");
-  next.textContent=localize("已居中，记录第 "+(captured+1)+" 点","Centered — capture point "+(captured+1));
+  $("#beaconCalibrationInstruction").textContent=localize("目标偏航 "+Number(point.yawDeg||0).toFixed(1)+"° / 俯仰 "+Number(point.pitchDeg||0).toFixed(1)+"°；居中后保持静止。采样失败可直接重试本点。","Target yaw "+Number(point.yawDeg||0).toFixed(1)+"° / pitch "+Number(point.pitchDeg||0).toFixed(1)+"°. Hold still at center; a failed capture can be retried.")+(cal.captureError?" · "+cal.captureError:"");
+  next.textContent=beaconCalibrationBusy?localize("正在采集稳定数据…","Collecting stable samples…"):localize("已居中，记录第 "+(captured+1)+" 点","Centered — capture point "+(captured+1));
   next.disabled=beaconCalibrationBusy||cal.status!=="awaiting_center";cancel.hidden=false;
 }
 
-var beaconCalibrationPreviewFrame=0;
+var beaconCalibrationPreviewFrame=0,beaconCalibrationPollTimer=0;
+function currentGimbalImageSource(){
+  if(state.transportMode!=="live")return $("#gimbalVideo");
+  var video=$("#liveGimbalWebrtc"),image=$("#liveGimbalFeed");
+  if(video&&!video.hidden&&video.srcObject&&video.readyState>=2&&gimbalVideoTransport!=="MJPEG")return video;
+  if(image&&!image.hidden&&image.naturalWidth>0)return image;
+  return null;
+}
 function stopBeaconCalibrationPreview(){
   if(beaconCalibrationPreviewFrame)cancelAnimationFrame(beaconCalibrationPreviewFrame);
   beaconCalibrationPreviewFrame=0;
@@ -1403,7 +1502,7 @@ function startBeaconCalibrationPreview(){
   function draw(){
     var modal=$("#beaconCalibrationModal"),canvas=$("#beaconCalibrationCanvas");
     if(!modal||modal.hidden||!canvas){beaconCalibrationPreviewFrame=0;return}
-    var source=state.transportMode==="live"&&$("#liveGimbalWebrtc").srcObject?$("#liveGimbalWebrtc"):state.transportMode==="live"?$("#liveGimbalFeed"):$("#gimbalVideo");
+    var source=currentGimbalImageSource();
     var width=Math.max(1,canvas.clientWidth),height=Math.max(1,canvas.clientHeight),ratio=window.devicePixelRatio||1;
     if(canvas.width!==Math.round(width*ratio)||canvas.height!==Math.round(height*ratio)){canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio)}
     var sourceWidth=Number(source&&source.videoWidth||source&&source.naturalWidth||0),sourceHeight=Number(source&&source.videoHeight||source&&source.naturalHeight||0);
@@ -1414,34 +1513,54 @@ function startBeaconCalibrationPreview(){
   draw();
 }
 
+function stopBeaconCalibrationPolling(){
+  if(beaconCalibrationPollTimer)clearInterval(beaconCalibrationPollTimer);
+  beaconCalibrationPollTimer=0;
+}
 function openBeaconCalibration(){
-  if(state.gimbalMode!=="beacon"||!state.gimbalOutputAvailable){showToast("请先进入UWB信标模式并打开云台控制串口","Enter UWB Beacon mode and open the gimbal control port first.");return}
-  beaconCalibration=null;beaconCalibrationBusy=false;renderBeaconCalibration();setModal("beaconCalibrationModal",true);startBeaconCalibrationPreview();
+  if(!pageCanControl()){showToast("当前页面只读，请先在连接栏获取控制权","This page is read-only; acquire control first");return}
+  var activeTransport=ensureTransport();
+  if(!activeTransport||!activeTransport.getBeaconCalibration){showToast("请先连接板端后再进行实机校准","Connect to the device before calibration");return}
+  beaconCalibration=null;beaconCalibrationBusy=true;renderBeaconCalibration();setModal("beaconCalibrationModal",true);startBeaconCalibrationPreview();
+  stopBeaconCalibrationPolling();
+  function refreshCalibration(){
+    return activeTransport.getBeaconCalibration().then(function(payload){
+      if($("#beaconCalibrationModal").hidden)return;
+      var incoming=payload.calibration||null;
+      if(!beaconCalibration&&incoming&&incoming.status==="complete")incoming=Object.assign({},incoming,{status:"idle",index:0});
+      beaconCalibration=incoming;
+    }).catch(function(error){showToast(error.message||"读取校准状态失败","Cannot read calibration state")}).finally(function(){beaconCalibrationBusy=false;renderBeaconCalibration()});
+  }
+  refreshCalibration();
+  beaconCalibrationPollTimer=setInterval(function(){if(!beaconCalibrationBusy&&!(beaconCalibration&&beaconCalibration.status==="complete")&&!$("#beaconCalibrationModal").hidden)refreshCalibration()},1000);
 }
 
 function advanceBeaconCalibration(){
-  if(beaconCalibration&&beaconCalibration.status==="complete"){stopBeaconCalibrationPreview();setModal("beaconCalibrationModal",false);return}
+  if(beaconCalibration&&beaconCalibration.status==="complete"){stopBeaconCalibrationPolling();stopBeaconCalibrationPreview();setModal("beaconCalibrationModal",false);return}
   var activeTransport=ensureTransport();
-  if(!activeTransport){showToast("通信模块未加载","Transport unavailable");return}
-  if(beaconCalibration&&beaconCalibration.status==="failed")beaconCalibration=null;
+  if(!activeTransport||beaconCalibrationBusy)return;
   beaconCalibrationBusy=true;renderBeaconCalibration();
-  var request=beaconCalibration?activeTransport.captureBeaconCalibration():activeTransport.startBeaconCalibration();
-  request.then(function(payload){beaconCalibration=payload.calibration||null;renderBeaconCalibration()}).catch(function(error){if(error.payload&&error.payload.calibration)beaconCalibration=error.payload.calibration;showToast(error.message||"校准操作失败","Calibration failed")}).finally(function(){beaconCalibrationBusy=false;renderBeaconCalibration()});
+  var request=beaconCalibration&&beaconCalibration.active?activeTransport.captureBeaconCalibration():activeTransport.startBeaconCalibration({profile:$("#beaconCalibrationProfile").value});
+  request.then(function(payload){beaconCalibration=payload.calibration||null}).catch(function(error){if(error.payload&&error.payload.calibration)beaconCalibration=error.payload.calibration;showToast(error.message||"校准操作失败","Calibration failed")}).finally(function(){beaconCalibrationBusy=false;renderBeaconCalibration()});
 }
 
 function cancelBeaconCalibration(){
+  if(beaconCalibrationBusy)return;
   var activeTransport=ensureTransport();
-  if(beaconCalibration&&beaconCalibration.active&&activeTransport&&activeTransport.cancelBeaconCalibration){activeTransport.cancelBeaconCalibration().catch(function(){})}
-  stopBeaconCalibrationPreview();
-  beaconCalibration=null;beaconCalibrationBusy=false;setModal("beaconCalibrationModal",false);
+  var request=beaconCalibration&&beaconCalibration.active&&activeTransport&&activeTransport.cancelBeaconCalibration?activeTransport.cancelBeaconCalibration():Promise.resolve();
+  beaconCalibrationBusy=true;renderBeaconCalibration();
+  request.then(function(){stopBeaconCalibrationPolling();stopBeaconCalibrationPreview();beaconCalibration=null;setModal("beaconCalibrationModal",false)}).catch(function(error){showToast(error.message||"取消失败，请重试","Cancel failed; retry")}).finally(function(){beaconCalibrationBusy=false;renderBeaconCalibration()});
 }
 
 function gimbalControlAvailable(){
-  return Boolean(state.connected&&state.boardOnline&&state.gimbalOutputAvailable&&state.gimbalLinkStatus!=="offline"&&state.gimbalLinkStatus!=="command_timeout"&&!state.gimbalFault);
+  return Boolean(state.connected&&state.boardOnline&&pageCanControl()&&state.gimbalOutputAvailable&&state.gimbalLinkStatus!=="offline"&&state.gimbalLinkStatus!=="command_timeout"&&!state.gimbalFault);
 }
 
 function applyGimbalState(payload){
   var previousLinkStatus=state.gimbalLinkStatus;
+  var geometry=payload.controlGeometry||{};
+  if(Number.isFinite(geometry.width)&&geometry.width>0)state.gimbalControlWidth=geometry.width;
+  if(Number.isFinite(geometry.height)&&geometry.height>0)state.gimbalControlHeight=geometry.height;
   state.gimbalOsdSupported=!payload.capabilities||payload.capabilities.osd!==false;
   state.gimbalOnline=Boolean(payload.connected);state.gimbalOutputAvailable=Boolean(payload.portOpen||payload.connected);state.gimbalLinkStatus=String(payload.linkStatus||(!state.gimbalOutputAvailable?"offline":"ready"));state.trackingActive=Boolean(payload.trackingActive);
   if(state.gimbalLinkStatus==="command_timeout"&&previousLinkStatus!=="command_timeout")showToast(payload.lastError||"云台命令无响应，请检查云台供电和串口接线","The gimbal did not respond to the command. Check power and serial wiring.");
@@ -1453,8 +1572,8 @@ function applyGimbalState(payload){
 }
 
 function gimbalVideoMapping(sourceWidthOverride,sourceHeightOverride){
-  var view=$(".video-feed"),webrtcVideo=$("#liveGimbalWebrtc"),source=state.transportMode==="live"&&webrtcVideo.srcObject?webrtcVideo:state.transportMode==="live"?$("#liveGimbalFeed"):$("#gimbalVideo"),width=view.clientWidth,height=view.clientHeight;
-  var sourceWidth=Number(sourceWidthOverride)||Number(source.naturalWidth||source.videoWidth)||1920,sourceHeight=Number(sourceHeightOverride)||Number(source.naturalHeight||source.videoHeight)||1080,scale=Math.min(width/sourceWidth,height/sourceHeight);
+  var view=$(".video-feed"),source=currentGimbalImageSource(),width=view.clientWidth,height=view.clientHeight;
+  var sourceWidth=Number(sourceWidthOverride)||Number(source&&(source.naturalWidth||source.videoWidth))||1920,sourceHeight=Number(sourceHeightOverride)||Number(source&&(source.naturalHeight||source.videoHeight))||1080,scale=Math.min(width/sourceWidth,height/sourceHeight);
   return {width:width,height:height,sourceWidth:sourceWidth,sourceHeight:sourceHeight,scale:scale,offsetX:(width-sourceWidth*scale)/2,offsetY:(height-sourceHeight*scale)/2};
 }
 
@@ -1467,7 +1586,7 @@ function drawGimbalOverlay(){
   if(state.gimbalMode==="beacon")return;
   if(!state.trackingActive||state.gimbalMode==="click")return;var target=state.trackTarget,status=state.trackStatus||{};
   if(target&&status.locked!==false){var fw=Number(target.frame_w||target.frameW)||1920,fh=Number(target.frame_h||target.frameH)||1080,targetMap=gimbalVideoMapping(fw,fh);
-    var sourceX=Number(target.x||0),displayX=fw-sourceX,tx=targetMap.offsetX+(displayX/Math.max(fw,1))*(fw*targetMap.scale),ty=targetMap.offsetY+(Number(target.y||0)/Math.max(fh,1))*(fh*targetMap.scale),bw=Math.max(48,(Number(target.w||120)/Math.max(fw,1))*(fw*targetMap.scale)),bh=Math.max(48,(Number(target.h||120)/Math.max(fh,1))*(fh*targetMap.scale)),sx=Math.max(4,Math.min(targetMap.width-bw-4,tx-bw/2)),sy=Math.max(4,Math.min(targetMap.height-bh-4,ty-bh/2));
+    var sourceX=Number(target.x||0),displayX=sourceX,tx=targetMap.offsetX+(displayX/Math.max(fw,1))*(fw*targetMap.scale),ty=targetMap.offsetY+(Number(target.y||0)/Math.max(fh,1))*(fh*targetMap.scale),bw=Math.max(48,(Number(target.w||120)/Math.max(fw,1))*(fw*targetMap.scale)),bh=Math.max(48,(Number(target.h||120)/Math.max(fh,1))*(fh*targetMap.scale)),sx=Math.max(4,Math.min(targetMap.width-bw-4,tx-bw/2)),sy=Math.max(4,Math.min(targetMap.height-bh-4,ty-bh/2));
     var c=Math.max(14,Math.min(34,bw*.28,bh*.28));ctx.strokeStyle="#55e6a5";ctx.lineWidth=2;ctx.beginPath();[[sx,sy,1,1],[sx+bw,sy,-1,1],[sx,sy+bh,1,-1],[sx+bw,sy+bh,-1,-1]].forEach(function(p){ctx.moveTo(p[0]+p[2]*c,p[1]);ctx.lineTo(p[0],p[1]);ctx.lineTo(p[0],p[1]+p[3]*c)});ctx.stroke();return;
   }
   ctx.font="600 10px system-ui";var label=String(status.message||(state.trackMode==="swimmer"?"can not find swimmer":"CAN NOT FIND FACE")).toUpperCase(),tw=ctx.measureText(label).width+20;ctx.fillStyle="rgba(6,16,23,.72)";ctx.fillRect((map.width-tw)/2,14,tw,26);ctx.fillStyle="#ffbd66";ctx.fillText(label,(map.width-tw)/2+10,31);
@@ -1488,7 +1607,7 @@ function handleGimbalVideoClick(event){
   if(state.gimbalMode!=="click"||!gimbalControlAvailable())return;
   var map=gimbalVideoMapping(),rect=$(".video-feed").getBoundingClientRect(),px=event.clientX-rect.left,py=event.clientY-rect.top,videoX=(px-map.offsetX)/map.scale,videoY=(py-map.offsetY)/map.scale;
   if(videoX<0||videoX>map.sourceWidth||videoY<0||videoY>map.sourceHeight)return;state.clickMarker={x:videoX/map.sourceWidth,y:videoY/map.sourceHeight};drawGimbalOverlay();
-  var dx=Math.round((videoX/map.sourceWidth-0.5)*1920),dy=Math.round((videoY/map.sourceHeight-0.5)*1080),activeTransport=ensureTransport();
+  var dx=Math.round((videoX/map.sourceWidth-0.5)*(state.gimbalControlWidth||1920)),dy=Math.round((videoY/map.sourceHeight-0.5)*(state.gimbalControlHeight||1080)),activeTransport=ensureTransport();
   if(activeTransport&&activeTransport.gimbalClick)activeTransport.gimbalClick(dx,dy).then(function(){showToast("云台正在转向所选目标","Gimbal is moving to the selected target")}).catch(function(error){showToast(error.message||"点击跟随指令失败","Click-to-follow command failed")});
 }
 
@@ -1548,6 +1667,7 @@ function renderConnection(){
   shell.dataset.connection=state.connection;
   var labels={idle:localize("未连接","Offline"),discovering:localize("正在发现","Discovering"),selecting:localize("选择设备","Choose device"),pairing:localize("正在配对","Pairing"),connecting:localize("正在连接","Connecting"),connected:localize("已连接","Connected"),degraded:localize("链路降级","Degraded"),offline:localize("设备离线","Device Offline"),emergency:localize("已解除武装","Disarmed")};
   $("#connectionMetric").textContent=labels[state.connection]||state.connection;
+  if(state.connection==="emergency")$("#connectionMetric").textContent=state.disarmPending?localize("正在解除武装","Disarming"):state.armed?localize("武装尚未解除","Still armed"):labels.emergency;
   var dot=$("#connDot");dot.className="status-dot "+(state.connection==="connected"?"connected":state.connection==="offline"||state.connection==="emergency"?"offline":state.connection==="degraded"?"degraded":state.connection==="pairing"?"pairing":"");
   $("#landingScreen").hidden=state.connected;
   $("#controlScreen").hidden=!state.connected;
@@ -1600,14 +1720,15 @@ function renderTelemetry(){
 
 function uwbDisplayIdentity(uwb){return JSON.stringify((uwb.sensors||[]).map(function(sensor){return [sensor.receiverId,sensor.tagId]}));}
 function uwbDisplayNow(){return transport&&transport.boardNow?transport.boardNow():Date.now();}
+function uwbDisplayConnected(uwb){return state.connected||Boolean(uwb&&uwb.source==="USB_SERIAL"&&uwb.transport&&uwb.transport.connected);}
 
 function renderUwbStatus(){
   var uwb=state.uwb||{},panel=$("#uwbPanel"),dot=$("#uwbDot");
   if(!panel||!dot)return;
-  var display=uwbDisplaySmoother.view(state.connected?uwb:{},uwbDisplayNow());
-  var distance=display.distanceM,azimuth=display.azimuthDeg,elevation=Number(uwb.elevationDeg);
-  var valid=Boolean(state.connected&&display.valid&&Number.isFinite(elevation));
-  var held=uwbStatusHold.view({valid:valid,distanceM:distance,azimuthDeg:azimuth,elevationDeg:elevation},state.connected,uwbDisplayIdentity(uwb));
+  var display=uwbDisplaySmoother.view(uwbDisplayConnected(uwb)?uwb:{},uwbDisplayNow());
+  var distance=display.distanceM,azimuth=display.azimuthDeg,elevation=Number.isFinite(uwb.elevationDeg)?uwb.elevationDeg:null;
+  var valid=Boolean(uwbDisplayConnected(uwb)&&display.valid);
+  var held=uwbStatusHold.view({valid:valid,distanceM:distance,azimuthDeg:azimuth,elevationDeg:elevation},uwbDisplayConnected(uwb),uwbDisplayIdentity(uwb));
   dot.classList.toggle("is-last-position",Boolean(held.stale));
   panel.dataset.stale=String(Boolean(held.stale));
   $("#uwbDistanceLabel").textContent=held.stale?localize("上次距离","Last distance"):localize("距离","Distance");
@@ -1615,7 +1736,7 @@ function renderUwbStatus(){
   if(held.valid){valid=true;distance=held.distanceM;azimuth=held.azimuthDeg;elevation=held.elevationDeg;}
   panel.dataset.state=valid?"online":"offline";
   $("#uwbDistance").textContent=valid?distance.toFixed(2)+" m":"-- m";
-  $("#uwbAngles").textContent=valid?azimuth.toFixed(1)+"° / "+elevation.toFixed(1)+"°":"--° / --°";
+  $("#uwbAngles").textContent=valid?azimuth.toFixed(1)+"° / "+(Number.isFinite(elevation)?elevation.toFixed(1)+"°":localize("仰角未验证","EL unverified")):"--° / --°";
   if(!valid){dot.style.setProperty("--uwb-x","0px");dot.style.setProperty("--uwb-y","0px");renderRelativePosition();return;}
   var displayRange=Math.max(2,Math.min(20,distance)),radius=Math.min(19,19*distance/displayRange),angle=azimuth*Math.PI/180;
   dot.style.setProperty("--uwb-x",(-Math.sin(angle)*radius).toFixed(2)+"px");
@@ -1627,12 +1748,13 @@ var uwbDisplaySmoother=new window.MantaUwbDisplaySmoother(120),relativeDisplaySm
 function renderRelativePosition(){
   var panel=$("#relativePositionPanel"),point=$("#relativeTargetPoint"),vector=$("#relativeTargetVector");
   if(!panel||!point||!vector)return;
-  var now=uwbDisplayNow(),uwb=state.uwb||{},display=uwbDisplaySmoother.view(state.connected?uwb:{},now),distance=display.distanceM,azimuth=display.azimuthDeg;
-  var raw=rawUwbDisplay.view(uwb,now,state.connected),rawPoint=$("#relativeRawPoint"),rawVector=$("#relativeRawVector");
+  var now=uwbDisplayNow(),uwb=state.uwb||{},display=uwbDisplaySmoother.view(uwbDisplayConnected(uwb)?uwb:{},now),distance=display.distanceM,azimuth=display.azimuthDeg;
+  var raw={valid:false},rawPoint=$("#relativeRawPoint"),rawVector=$("#relativeRawVector");
+  var showRaw=$("#relativeShowRaw").checked===true,radar=window.MantaUwbRadar;
   var follow=state.uwbFollow||{},estimate=follow.targetEstimate||{};
   var predicted=Boolean(follow.active&&estimate.usable&&estimate.source==="predicted");
   if(predicted){distance=Math.hypot(estimate.relativeBodyM.x,estimate.relativeBodyM.y);azimuth=Math.atan2(-estimate.relativeBodyM.y,estimate.relativeBodyM.x)*180/Math.PI}
-  var valid=Boolean(state.connected&&(predicted||display.valid)&&Number.isFinite(distance)&&Number.isFinite(azimuth));
+  var valid=Boolean(uwbDisplayConnected(uwb)&&(predicted||display.valid)&&Number.isFinite(distance)&&Number.isFinite(azimuth));
   point.setAttribute("visibility",valid?"visible":"hidden");vector.setAttribute("visibility",valid?"visible":"hidden");
   rawPoint.setAttribute("visibility",raw.valid?"visible":"hidden");rawVector.setAttribute("visibility",raw.valid?"visible":"hidden");
   point.style.opacity=predicted?"0.55":"1";vector.setAttribute("stroke-dasharray",predicted?"3 2":"none");
@@ -1641,10 +1763,10 @@ function renderRelativePosition(){
   $("#relativeRawLabel").textContent=localize("○ 原始","○ Raw")+(raw.valid?localize("·基站","·RX ")+raw.receiverId:"");
   $("#relativeRawValue").textContent=raw.valid?raw.distanceM.toFixed(2)+" m / "+raw.azimuthDeg.toFixed(1)+"°":"-- m / --°";
   $("#relativeRawValue").title=raw.valid?localize("模块原始值，未筛选，不用于控制。标签 ","Unscreened module values; not used for control. Tag ")+raw.tagId:localize("未收到新鲜完整定位帧","No fresh complete measurement");
-  $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):localize("● 可信","● Trusted");
+  $("#relativeJudgedLabel").textContent=predicted?localize("◌ 预测","◌ Predicted"):uwb.source==="USB_SERIAL"?localize("● 平滑","● Smoothed"):localize("● 可信","● Trusted");
   // Trusted points always describe admitted UWB, not the raw control target.
   var relative=predicted?estimate.relativeBodyM:null;
-  if(valid&&!predicted&&Number.isFinite(uwb.relativeXM)&&Number.isFinite(uwb.relativeYM))relative={x:uwb.relativeXM,y:-uwb.relativeYM};
+  if(valid&&!predicted&&Number.isFinite(uwb.relativeXM)&&Number.isFinite(uwb.relativeYM))relative=window.MantaUwbPathPanel?window.MantaUwbPathPanel.bodyMeasurement(uwb):{x:uwb.relativeXM,y:-uwb.relativeYM};
   if(valid&&relative&&!predicted){
     var relativeView=relativeDisplaySmoother.view(Object.assign({},uwb,{distanceM:Math.hypot(relative.x,relative.y),azimuthDeg:Math.atan2(-relative.y,relative.x)*180/Math.PI}),now);
     if(relativeView.valid)relative={x:relativeView.distanceM*Math.cos(relativeView.azimuthDeg*Math.PI/180),y:-relativeView.distanceM*Math.sin(relativeView.azimuthDeg*Math.PI/180)};
@@ -1653,41 +1775,81 @@ function renderRelativePosition(){
   // UWB +Y is left; the controller's +Y is right.
   var forward=valid?(relative&&Number.isFinite(relative.x)?relative.x:distance*Math.cos(angle)):0;
   var left=valid?(relative&&Number.isFinite(relative.y)?-relative.y:distance*Math.sin(angle)):0;
-  var retained=relativePositionHold.view({valid:valid&&!predicted,forward:forward,left:left,distanceM:distance,azimuthDeg:azimuth},state.connected,uwbDisplayIdentity(uwb));
+  // Labels and markers share one boat-relative coordinate; never mix a module
+  // range with a translated/rotated body point.
+  if(valid){distance=Math.hypot(forward,left);azimuth=Math.atan2(left,forward)*180/Math.PI;}
+  var retained=relativePositionHold.view({valid:valid&&!predicted,forward:forward,left:left,distanceM:distance,azimuthDeg:azimuth},uwbDisplayConnected(uwb),uwbDisplayIdentity(uwb));
   if(predicted)retained={valid:true,stale:false,forward:forward,left:left,distanceM:distance,azimuthDeg:azimuth};
   if(retained.stale){forward=retained.forward;left=retained.left;distance=retained.distanceM;azimuth=retained.azimuthDeg;}
   point.classList.toggle("is-last-position",Boolean(retained.stale));
   panel.dataset.stale=String(Boolean(retained.stale));
   point.setAttribute("visibility",retained.valid?"visible":"hidden");
   vector.setAttribute("visibility",retained.valid?"visible":"hidden");
-  if(!state.connected)relativePlotScale.reset();
   var magnitude=retained.valid?Math.hypot(forward,left):raw.valid?Math.hypot(raw.forward,raw.left):NaN,scale=relativePlotScale.view(magnitude,now);
-  function plot(dot,line,x,y){var clip=Math.max(1,Math.hypot(x,y)/scale),px=90-y/scale/clip*51,py=56-x/scale/clip*51;dot.setAttribute("cx",px.toFixed(2));dot.setAttribute("cy",py.toFixed(2));line.setAttribute("x2",px.toFixed(2));line.setAttribute("y2",py.toFixed(2));}
-  if(retained.valid)plot(point,vector,forward,left);
-  if(raw.valid)plot(rawPoint,rawVector,raw.forward,raw.left);
+  $("#relativeRangeSelect").value=String(scale);
+  function plot(dot,line,arrow,label,x,y,visible,prefix,isRaw){
+    var p=radar.project(x,y,scale);
+    if(!p||!visible){dot.setAttribute("visibility","hidden");line.setAttribute("visibility","hidden");arrow.setAttribute("visibility","hidden");label.setAttribute("visibility","hidden");return;}
+    dot.setAttribute("cx",p.x.toFixed(2));dot.setAttribute("cy",p.y.toFixed(2));
+    dot.setAttribute("data-distance-m",p.distanceM.toFixed(6));dot.setAttribute("data-forward-m",String(x));dot.setAttribute("data-left-m",String(y));
+    dot.setAttribute("visibility",p.outside?"hidden":"visible");line.setAttribute("visibility","visible");
+    line.setAttribute("x2",p.x.toFixed(2));line.setAttribute("y2",p.y.toFixed(2));
+    arrow.setAttribute("visibility",p.outside?"visible":"hidden");arrow.setAttribute("transform","translate("+p.x.toFixed(2)+" "+p.y.toFixed(2)+") rotate("+p.rotationDeg.toFixed(2)+")");
+    var at=radar.labelPosition(p,isRaw);label.setAttribute("x",at.x.toFixed(2));label.setAttribute("y",at.y.toFixed(2));label.setAttribute("text-anchor",at.anchor);label.setAttribute("visibility","visible");
+    label.textContent=(p.outside?localize("超量程 ","OFF SCALE "):prefix)+p.distanceM.toFixed(2)+" m";
+  }
+  var targetArrow=$("#relativeTargetOffscale");targetArrow.classList.toggle("is-last-position",Boolean(retained.stale));
+  plot(point,vector,targetArrow,$("#relativeTargetDistanceLabel"),forward,left,retained.valid,retained.stale?localize("上次 ","LAST "):predicted?localize("预测 ","PRED "):localize("平滑 ","SMOOTH "),false);
+  plot(rawPoint,rawVector,$("#relativeRawOffscale"),$("#relativeRawDistanceLabel"),raw.forward,raw.left,raw.valid&&showRaw,localize("原始 ","RAW "),true);
   var rawOutside=raw.valid&&Math.hypot(raw.forward,raw.left)>scale;
+  var judgedOutside=retained.valid&&Math.hypot(forward,left)>scale;
+  point.setAttribute("data-outside-range",String(judgedOutside));
+  if(judgedOutside)point.style.opacity="0.55";
   rawPoint.setAttribute("data-outside-range",String(rawOutside));rawPoint.style.opacity=rawOutside?"0.55":"1";
   if(rawOutside)$("#relativeRawValue").title+=localize("；原始点超出当前图示范围，请以数值为准","; raw point outside chart range; see numeric values");
-  $("#relativeRingLabel").textContent=scale+" m";
+  if(window.MantaUwbPathPanel)window.MantaUwbPathPanel.render({uwb:uwb,path:state.uwbPath,follow:follow,now:now,range:scale});
+  var ticks=radar.ticks(scale);$("#relativeRingInnerLabel").textContent=radar.meters(ticks[0]);$("#relativeRingMiddleLabel").textContent=radar.meters(ticks[1]);$("#relativeRingLabel").textContent=radar.meters(ticks[2]);
   $("#relativePositionValue").textContent=valid?localize("前 ","FWD ")+forward.toFixed(2)+" · "+localize("左 ","LEFT ")+left.toFixed(2):localize("可信位置：暂无","Trusted position unavailable");
-  $("#relativeRangeValue").textContent=valid?distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°":state.connected&&(raw.valid||(uwb.sensors||[]).some(function(s){return s.measurementStatus==="suspect"}))?localize("拒收 / 等待恢复","Rejected / waiting"):"-- m / --°";
+  $("#relativeRangeValue").textContent=valid?distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°":uwbDisplayConnected(uwb)&&(raw.valid||(uwb.sensors||[]).some(function(s){return s.measurementStatus==="suspect"}))?localize("拒收 / 等待恢复","Rejected / waiting"):"-- m / --°";
   var activeIds=Array.isArray(uwb.activeReceiverIds)?uwb.activeReceiverIds:[],mode=String(uwb.fusionMode||"");
   var sensors=uwb.sensors||[],sensor=sensors.find(function(s){return s.receiverId===raw.receiverId})||sensors[0]||{};
   var quarantine=sensors.some(function(s){return s.occlusionDiagnostics&&["suspect","quarantined","recovering"].includes(s.occlusionDiagnostics.state)});
   $("#relativeFusionMode").textContent=predicted?localize("预测，非实测","PREDICTED"):valid?(mode==="overlap_weighted_fusion"?localize("双基站融合","DUAL FUSION"):activeIds.length?localize("基站 ","RX ")+activeIds.join("+"):localize("单基站","SINGLE RX")):quarantine?localize("定位异常，等待恢复","POSITION SUSPECT"):localize("等待 UWB","WAITING UWB");
   var reason=uwb.rejectionReason||sensor.fusionExclusionReason||sensor.filterReason||sensor.invalidReason||"";
   var reasons={occlusion_suspected:localize("突跳隔离","Jump quarantine"),innovation_outlier:localize("创新偏差过大","Innovation outlier"),outside_receiver_fov:localize("超出视野","Outside FOV"),distance_out_of_range:localize("距离超限","Range rejected"),radio_invalid:localize("无线定位无效","Radio invalid"),heading_unavailable:localize("航向不可用","Heading unavailable"),stale_measurement:localize("可信数据过期","Trusted data stale")};
-  var decision=!state.connected?localize("连接已断开","Disconnected"):predicted?localize("预测，非可信实测","Prediction, not a trusted observation"):valid?localize("已接纳；原始值仅供对照","Accepted; raw values for comparison"):!raw.valid?localize("无新鲜定位帧","No fresh measurement"):localize("未接纳：","Rejected: ")+(quarantine?localize("突跳隔离","Jump quarantine"):reasons[reason]||localize("等待可信位置","Waiting for trusted position"));
+  var decision=!uwbDisplayConnected(uwb)?localize("连接已断开","Disconnected"):predicted?localize("预测，非可信实测","Prediction, not a trusted observation"):valid?uwb.source==="USB_SERIAL"?localize("Jetson 平滑输出；仰角未验证","Jetson smoothed; elevation unverified"):localize("已接纳平滑坐标","Admitted smoothed coordinates"):!raw.valid?localize("无新鲜定位帧","No fresh measurement"):localize("未接纳：","Rejected: ")+(quarantine?localize("突跳隔离","Jump quarantine"):reasons[reason]||localize("等待可信位置","Waiting for trusted position"));
+  if(uwb.source==="USB_SERIAL"){
+    $("#relativeFusionMode").textContent=valid?"USB · "+localize("平滑","SMOOTHED"):reason==="no_radio_position"?localize("USB · 仅心跳","USB · HEARTBEAT ONLY"):localize("USB · 等待定位","USB · WAITING");
+    if(reason==="no_radio_position")decision=localize("USB 在线，仅收到心跳；等待信标定位帧","USB online; heartbeat only; waiting for tag position frames");
+    if(uwb.transport&&Number.isFinite(uwb.transport.targetSampleRateHz)){
+      decision+=" · "+uwb.transport.targetSampleRateHz.toFixed(0)+localize(" Hz 采样"," Hz sampling");
+      if(Number.isFinite(uwb.transport.positionRateHz))decision+=localize(" / 串口 "," / UART ")+uwb.transport.positionRateHz.toFixed(1)+" Hz";
+    }else if(valid&&uwb.transport&&Number.isFinite(uwb.transport.positionRateHz))decision+=" · "+uwb.transport.positionRateHz.toFixed(1)+" Hz";
+    if(uwb.speedGate){decision+=uwb.speedGate.enabled===false?localize(" · 速度逐点拒收已关闭"," · per-point speed rejection disabled"):" · "+uwb.speedGate.thresholdMps+localize(" m/s 门限；已拒绝 "," m/s gate; rejected ")+uwb.speedGate.rejectedCount;}
+    $("#relativeRawValue").title=localize("基站原始值（速度异常点不更新）；标签 ","Receiver measurement (speed outliers excluded); tag ")+raw.tagId;
+  }
   $("#relativeDecision").textContent=decision;$("#relativeDecision").title=decision+(reason?" ("+reason+")":"");
   if(retained.stale){
     panel.dataset.state="held";vector.setAttribute("stroke-dasharray","3 2");
     $("#relativeJudgedLabel").textContent=localize("● 上次位置","● Last position");
     $("#relativePositionValue").textContent=localize("上次：前 ","Last: FWD ")+forward.toFixed(2)+" · "+localize("左 ","LEFT ")+left.toFixed(2);
     $("#relativeRangeValue").textContent=distance.toFixed(2)+" m / "+azimuth.toFixed(1)+"°";
-    $("#relativeFusionMode").textContent=localize("等待 UWB · 上次位置","WAITING UWB · LAST POSITION");
-    $("#relativeDecision").textContent=localize("上次有效位置，不代表当前定位","Last valid position; not a current measurement");
+    $("#relativeFusionMode").textContent=reason==="no_radio_position"?localize("仅心跳 · 上次位置","HEARTBEAT ONLY · LAST POSITION"):localize("等待 UWB · 上次位置","WAITING UWB · LAST POSITION");
+    $("#relativeDecision").textContent=localize("上次有效位置，不代表当前定位","Last valid position; not a current measurement")+(reason==="no_radio_position"?localize("；USB 在线，仅收到心跳","; USB online, heartbeat only"):"");
     $("#relativeDecision").title=$("#relativeDecision").textContent;
   }
+  if(judgedOutside)$("#relativeDecision").textContent=localize("目标超出当前量程，请调大量程；","Target outside radar range; increase range; ")+$("#relativeDecision").textContent;
+  $("#relativeDecision").title=$("#relativeDecision").textContent;
+  $("#relativePositionValue").title=$("#relativePositionValue").textContent;
+}
+
+var relativeRadarHome=null;
+function setRadarExpanded(open){
+  var panel=$("#relativePositionPanel"),dialog=$("#relativeRadarDialog"),button=$("#relativeRadarExpand");
+  if(open&&!relativeRadarHome){relativeRadarHome=document.createComment("radar-home");panel.parentNode.insertBefore(relativeRadarHome,panel);dialog.appendChild(panel);}
+  if(!open&&relativeRadarHome){relativeRadarHome.parentNode.insertBefore(panel,relativeRadarHome);relativeRadarHome.remove();relativeRadarHome=null;}
+  button.setAttribute("aria-expanded",String(Boolean(open)));button.setAttribute("aria-label",open?"收起雷达图":"放大雷达图");button.title=open?"收起雷达图":"放大雷达图查看距离刻度";
+  setModal("relativeRadarModal",Boolean(open));renderRelativePosition();
 }
 
 function currentMapLocation(){
@@ -1770,8 +1932,7 @@ function syncVideoSource(){
 }
 
 function gimbalWebrtcUrl(){
-  var protocol=location.protocol==="https:"?"https:":"http:";
-  return protocol+"//"+location.hostname+":8889/gimbal/whep";
+  return location.origin+"/api/gimbal/webrtc/whep";
 }
 
 function setVideoTransportBadge(value){
@@ -1799,6 +1960,7 @@ function setGimbalVideoState(status,transport){
 }
 
 function startMjpegFallback(reason){
+  if(reason)console.warn("[Manta video] WebRTC fallback:",String(reason));
   if(!state.connected||state.view!=="device"||state.transportMode!=="live")return;
   var img=$("#liveGimbalFeed"),webrtcVideo=$("#liveGimbalWebrtc");
   webrtcVideo.hidden=true;img.hidden=false;
@@ -1881,10 +2043,12 @@ function selectDiscoveredDevice(index){
   state.selectedDevice=device;state.connection="pairing";renderConnection();
   var identity=(device.name||"MANTA")+" · "+(device.model||"MANTA")+" "+(device.serial||"----");
   $("#pairingDeviceIdentity").textContent=identity;
+  $("#pairingSessionNotice").hidden=true;
   $("#controlDeviceName").textContent=device.name||"MANTA";
   $("#controlDeviceSerial").textContent=(device.model||"MANTA")+" · "+(device.serial||"----");
   setModal("devicePickerModal",false);setModal("pairingModal",true);
   $$("#pinInputs input").forEach(function(input){input.value=""});validatePin();
+  $("#pairButton").textContent=localize("验证并连接","Verify and Connect");
   setTimeout(function(){var first=$("#pinInputs input");if(first)first.focus()},80);
 }
 
@@ -1915,7 +2079,7 @@ function completePairing(){
   var activeTransport=ensureTransport();
   var pairing=activeTransport?activeTransport.pair(pin).then(function(){state.connection="connecting";renderConnection();return activeTransport.connect()}):Promise.reject(new Error("通信模块未加载"));
   pairing.then(function(){
-    state.connected=true;state.boardOnline=true;state.controlLink=state.pixhawkOnline&&pageCanControl();state.connection=state.pixhawkOnline?"connected":"offline";state.emergency=false;state.armed=false;
+    state.connected=true;state.boardOnline=true;state.controlLink=state.pixhawkOnline&&pageCanControl();state.connection=state.pixhawkOnline?"connected":"offline";state.emergency=false;
     setModal("pairingModal",false);$$("#pinInputs input").forEach(function(i){i.value=""});
     renderConnection();showView("device");
     showToast(state.pixhawkOnline?localize("Manta 已连接，互联网保持在线","Manta connected. Internet remains online."):localize("已连接 Manta 主机，等待 Pixhawk、IMU 与电机上线","Manta host connected; waiting for Pixhawk, IMU, and motors"));
@@ -1924,6 +2088,8 @@ function completePairing(){
 }
 
 function disconnect(){
+  state.disarmPending=false;
+  armRequestGeneration++;armRequestPending=false;driveModeGeneration++;state.driveModeSwitching=false;
   var activeTransport=transport;
   if(activeTransport&&uwbFollowIsRequested()&&activeTransport.stopUwbFollow)activeTransport.stopUwbFollow().catch(function(){});
   if(activeTransport)activeTransport.disconnect().catch(function(){});
@@ -1935,6 +2101,19 @@ function disconnect(){
   showToast("已断开 Manta","Manta disconnected");
   setDiscoveryStatus(localize("等待扫描","Waiting to scan"),false);$("span",$("#connectButton")).textContent=localize("搜索 Manta","Find Manta");
   clearInterval(telemetryTimer);
+}
+
+function handleAuthenticationRequired(){
+  var device=state.selectedDevice;
+  // This session cannot issue commands. Clear the old follow intent before
+  // resetting the UI; reconnecting must never replay start/arm requests.
+  state.uwbFollow={active:false,followRequested:false,autoResumePending:false,status:"stopped",reason:"session_expired"};
+  disconnect();
+  setRadarExpanded(false);
+  $$(".modal-backdrop").forEach(function(modal){setModal(modal.id,false)});
+  if(device){state.discoveredDevices=[device];selectDiscoveredDevice(0)}
+  var notice=$("#pairingSessionNotice");if(notice)notice.hidden=false;
+  showToast(localize("连接会话已失效，请重新输入配对码","Connection session expired. Enter the pairing code again."));
 }
 
 function validatePin(){
@@ -1960,7 +2139,7 @@ function startMockTelemetry(){
 function installJoystick(){
   var root=$("#joystick"),stick=$("#joyStick");
   var activePointer=null,origin=null;
-  function enabled(){return state.connected&&state.controlLink&&state.armed&&!state.calibrating&&state.driveMode!=="auto";}
+  function enabled(){return state.connected&&state.controlLink&&state.armed&&!state.calibrating&&!state.driveModeSwitching&&!state.emergency&&!state.disarmPending&&state.driveMode!=="auto";}
   function preventGesture(e){if(e.cancelable)e.preventDefault();}
   function update(cx,cy){
     if(!enabled()){reset();return;}
@@ -2060,36 +2239,42 @@ function renderArmControl(){
   var slider=$("#armSlider"),button=$("#disarmButton");
   if(!slider||!button)return;
   slider.hidden=state.armed||state.driveMode==="auto";
-  slider.setAttribute("aria-disabled",String(!state.connected||!state.controlLink||state.calibrating));
+  slider.setAttribute("aria-disabled",String(!state.connected||!state.controlLink||state.calibrating||state.driveModeSwitching||armRequestPending||state.disarmPending));
   if(!slider.classList.contains("dragging"))setArmSliderProgress(slider,0,true);
   button.hidden=!state.armed;
-  $("#armStateLabel").textContent=state.armed?localize("已武装","Armed"):localize("已解除武装","Disarmed");
+  $("#armStateLabel").textContent=state.disarmPending?localize("正在解除武装","Disarming"):state.armed?localize("已武装","Armed"):localize("已解除武装","Disarmed");
   $("#armSwitchText").textContent=localize("滑动武装","Slide to arm");
 }
 
+var armRequestGeneration=0,armRequestPending=false;
 function armPropulsion(){
+  if(state.disarmPending)return;
+  if(armRequestPending)return;
   if(!state.connected||!state.controlLink||state.calibrating){showToast("请先连接 Manta","Connect to Manta first");renderArmControl();return;}
   var activeTransport=ensureTransport();if(!activeTransport||typeof activeTransport.arm!=="function"){showToast("通信模块不支持武装确认","Transport cannot confirm arming");renderArmControl();return;}
+  var request=++armRequestGeneration;armRequestPending=true;renderArmControl();
   activeTransport.drive({x:0,y:0});
   activeTransport.arm().then(function(){
+    if(request!==armRequestGeneration||!state.connected||!state.controlLink)return;
     state.armed=true;state.emergency=false;state.connection="connected";state.speed=0;
     renderConnection();renderTelemetry();showToast("推进已武装","Propulsion armed");
     addLog({level:"INFO",source:"APP",message:"推进已武装",messageEn:"Propulsion armed",category:"command"});
-  }).catch(function(error){state.armed=false;renderArmControl();showToast(error.message||"飞控未确认武装","FCU did not confirm arming")});
+  }).catch(function(error){if(request!==armRequestGeneration)return;renderArmControl();showToast(error.message||"飞控未确认武装","FCU did not confirm arming")}).finally(function(){if(request===armRequestGeneration){armRequestPending=false;renderArmControl()}});
 }
 
 function installArmControl(){
   var slider=$("#armSlider"),activePointer=null,startX=0,progress=0;
   function enabled(){return slider.getAttribute("aria-disabled")!=="true"&&!state.armed}
-  function finish(pointerId){
+  function finish(pointerId,commit){
     if(activePointer===null||pointerId!==activePointer)return;
-    if(slider.hasPointerCapture&&slider.hasPointerCapture(activePointer))slider.releasePointerCapture(activePointer);
-    activePointer=null;slider.classList.remove("dragging");
-    if(progress>=92)armPropulsion();else setArmSliderProgress(slider,0,true);
+    var pointer=activePointer;activePointer=null;
+    if(slider.hasPointerCapture&&slider.hasPointerCapture(pointer))slider.releasePointerCapture(pointer);
+    slider.classList.remove("dragging");
+    if(commit&&enabled()&&progress>=92)armPropulsion();else setArmSliderProgress(slider,0,true);
     progress=0;
   }
   slider.addEventListener("pointerdown",function(e){
-    if(!enabled()||(e.pointerType==="mouse"&&e.button!==0))return;
+    if(!enabled()||activePointer!==null||(e.pointerType==="mouse"&&e.button!==0))return;
     activePointer=e.pointerId;startX=e.clientX;progress=0;slider.setPointerCapture(activePointer);slider.classList.add("dragging");setArmSliderProgress(slider,0,false);e.preventDefault();
   });
   slider.addEventListener("pointermove",function(e){
@@ -2097,21 +2282,41 @@ function installArmControl(){
     var thumb=$(".arm-slider-thumb",slider),distance=Math.max(1,slider.clientWidth-(thumb?thumb.offsetWidth:26)-6);
     progress=clamp((e.clientX-startX)/distance*100,0,100);setArmSliderProgress(slider,progress,false);
   });
-  slider.addEventListener("pointerup",function(e){finish(e.pointerId)});
-  slider.addEventListener("pointercancel",function(e){finish(e.pointerId)});
+  slider.addEventListener("pointerup",function(e){finish(e.pointerId,true)});
+  slider.addEventListener("pointercancel",function(e){finish(e.pointerId,false)});
+  slider.addEventListener("lostpointercapture",function(e){finish(e.pointerId,false)});
+  window.addEventListener("blur",function(){finish(activePointer,false)});
+  document.addEventListener("visibilitychange",function(){if(document.hidden)finish(activePointer,false)});
   slider.addEventListener("keydown",function(e){if(!enabled())return;if(e.key==="End"){e.preventDefault();setArmSliderProgress(slider,100,true);armPropulsion()}else if(e.key==="Home"){e.preventDefault();setArmSliderProgress(slider,0,true)}});
   $("#disarmButton").addEventListener("click",function(){setEmergency(true)});
 }
 
 function setEmergency(active){
-  if(active){var activeTransport=ensureTransport();if(activeTransport)activeTransport.emergencyStop().catch(function(error){showToast(error.message||"紧急停止指令失败","Emergency-stop command failed")})}
-  state.armed=false;
+  if(active){armRequestGeneration++;armRequestPending=false;}
+  var request=armRequestGeneration;
   state.emergency=active;
+  state.disarmPending=Boolean(active);
   state.connection=active?"emergency":(state.connected?"connected":"idle");
   state.speed=0;
   if(window.resetMantaJoystick)window.resetMantaJoystick();
   renderConnection();renderTelemetry();
-  if(active){showToast("推进已解除武装，电机输出已归零","Propulsion disarmed. Motor output is zero.");addLog({level:"WARNING",source:"APP",message:"推进已解除武装，电机输出已归零",messageEn:"Propulsion disarmed. Motor output is zero.",category:"command"});}
+  if(active){
+    showToast("停止已请求，等待飞控确认解除武装","Stop requested. Waiting for FCU disarm confirmation.");
+    var activeTransport=ensureTransport();
+    var stopping=activeTransport?activeTransport.emergencyStop():Promise.reject(new Error("通信模块未加载"));
+    stopping.then(function(result){
+      if(request!==armRequestGeneration)return;
+      if(!result||result.confirmed!==true)throw new Error("停止已请求，但尚未确认解除武装");
+      state.disarmPending=false;renderConnection();renderTelemetry();
+      showToast("飞控已确认解除武装","FCU confirmed disarmed");
+      addLog({level:"WARNING",source:"APP",message:"飞控已确认解除武装",messageEn:"FCU confirmed disarmed",category:"command"});
+    }).catch(function(error){
+      if(request!==armRequestGeneration)return;
+      state.disarmPending=false;renderConnection();renderTelemetry();
+      showToast(error.message||"未确认飞控已解除武装","FCU disarm has not been confirmed");
+      addLog({level:"ERROR",source:"APP",message:error.message||"未确认飞控已解除武装",category:"command"});
+    });
+  }
 }
 
 function renderGimbalOsd(){
@@ -2558,6 +2763,10 @@ function installEvents(){
   })});
   $$("[data-nav]").forEach(function(b){b.addEventListener("click",function(){showView(b.dataset.nav)})});
   $("#brandBtn").addEventListener("click",function(){showView("device")});
+  $("#relativeRangeSelect").addEventListener("change",function(event){relativePlotScale.setRange(Number(event.target.value));renderRelativePosition()});
+  $("#relativeShowRaw").addEventListener("change",renderRelativePosition);
+  $("#relativeRadarExpand").addEventListener("click",function(){setRadarExpanded(!relativeRadarHome)});
+  $("#relativeRadarModal").addEventListener("click",function(event){if(event.target===$("#relativeRadarModal"))setRadarExpanded(false)});
   $("#toolToggle").addEventListener("click",function(){toggleDrawer($("#toolDrawer"),!$("#toolDrawer").classList.contains("open"));toggleDrawer($("#demoConsole"),false)});
   $("#toolClose").addEventListener("click",function(){toggleDrawer($("#toolDrawer"),false)});
   $("#demoToggle").addEventListener("click",function(){toggleDrawer($("#demoConsole"),!$("#demoConsole").classList.contains("open"));toggleDrawer($("#toolDrawer"),false)});
@@ -2648,6 +2857,7 @@ if(!gimbalControlAvailable()){showToast("云台当前不可控制","Gimbal contr
     }).catch(function(error){showToast(error.message||localize("控制方法切换失败","Controller switch failed"));renderUwbFollow()});
   })});
   $("#beaconCalibrationNext").addEventListener("click",advanceBeaconCalibration);
+  $("#beaconCalibrationProfile").addEventListener("change",renderBeaconCalibration);
   $("#beaconCalibrationCancel").addEventListener("click",cancelBeaconCalibration);
   $("#beaconCalibrationClose").addEventListener("click",cancelBeaconCalibration);
   window.addEventListener("resize",drawGimbalOverlay);
@@ -2697,7 +2907,7 @@ setEmergency(true);setModal("imuCalibrationModal",false);
   $("#mediaPlayPause").addEventListener("click",toggleMediaPlayback);
   $("#mediaPlaybackRate").addEventListener("change",function(e){ var video=$(".featured video"); if(video)video.playbackRate=Number(e.target.value)||1; renderMediaPlayer(); showToast("已切换至 "+e.target.value+" 倍播放","Playback speed set to "+e.target.value+"×") });
   ["loadedmetadata","durationchange","timeupdate","ratechange","play","pause","seeking","seeked","ended"].forEach(function(evt){ var v=$(".media-grid video");if(v)v.addEventListener(evt,renderMediaPlayer) });
-  document.addEventListener("keydown",function(e){if(e.key==="Escape"){toggleDrawer($("#toolDrawer"),false);toggleDrawer($("#demoConsole"),false)}});
+  document.addEventListener("keydown",function(e){if(e.key==="Escape"){if(relativeRadarHome)setRadarExpanded(false);toggleDrawer($("#toolDrawer"),false);toggleDrawer($("#demoConsole"),false)}});
 }
 function seedLogs(){ [ {source:"APP",message:"Manta App Preview 已启动",messageEn:"Manta App Preview started",category:"system"}, {source:"BLE",message:"近距离发现模块待机",messageEn:"Nearby discovery is standing by",category:"hardware"}, {source:"PIXHAWK",message:"等待设备连接",messageEn:"Waiting for device connection",category:"hardware"}, {source:"GIMBAL",message:"测试视频已载入",messageEn:"Test video loaded",category:"hardware"} ].forEach(addLog) }
 installEvents();installJoystick();installArmControl();seedLogs();renderTransportMode();renderConnection();renderTelemetry();renderGpsStatus();renderGimbalOsd();renderCalibrationWizard();renderMediaPlayer();renderMediaFilter();showView("device");window.MantaPreview={state:state,showView:showView,applyDemoState:applyDemoState,applyLanguage:applyLanguage,openImuCalibrationWizard:openImuCalibrationWizard};

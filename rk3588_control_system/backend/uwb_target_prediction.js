@@ -420,17 +420,20 @@ export class IntermittentUwbFollow {
       this.reset();
       this.estimator.calibration = calibration;
     }
-    if (telemetry.uwb?.controlSource === 'raw') {
+    if (telemetry.uwb?.controlSource === 'raw' || telemetry.uwb?.directControl === true) {
       const u = telemetry.uwb, id = identity(u);
-      const near=(u.sensors||[]).some(s=>fresh(s.rawDistanceUpdatedAt,now,controller.config.uwbTimeoutMs)
-        && number(s.rawDistanceM)!==null && s.rawDistanceM>=0 && s.rawDistanceM<=controller.config.safetyDistanceM);
-      if(near)return {...this.neutral('safety_distance',null,true),rawControl:true};
+      const near=u.coordinateSource === 'smoothed'
+        ? u.fresh === true && fresh(u.measurementUpdatedAt,now,controller.config.uwbTimeoutMs)
+          && number(u.distanceM)!==null && u.distanceM>=0 && u.distanceM<=controller.config.safetyDistanceM
+        : (u.sensors||[]).some(s=>fresh(s.rawDistanceUpdatedAt,now,controller.config.uwbTimeoutMs)
+          && number(s.rawDistanceM)!==null && s.rawDistanceM>=0 && s.rawDistanceM<=controller.config.safetyDistanceM);
+      if(near)return {...this.neutral('safety_distance',null,true),rawControl:u.controlSource==='raw',directControl:true};
       if (id !== null && this.targetId !== null && id !== this.targetId)
         return this.neutral('target_identity_changed', null, false);
       if (id !== null) this.targetId = id;
-      // Raw coordinates drive guidance directly. Prediction convergence and
-      // jump rejection are diagnostic paths; actuator ramps absorb changes.
-      return { ...controller.update({ now, telemetry, connected, controlMode }), rawControl:true };
+      // Preserve direct guidance when migrating its coordinate input to smoothing.
+      return { ...controller.update({ now, telemetry, connected, controlMode }),
+        rawControl:u.controlSource==='raw', directControl:true };
     }
     const wasLost = this.estimator.lossAt !== null;
     const estimate = this.estimator.update(now, telemetry);

@@ -1,3 +1,4 @@
+import {LastUwbPointApproach} from '../backend/uwb_loss_policy.js';
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,7 +37,7 @@ test('when automatic resume is disabled the server expires a loss wait without r
     maintainUwbHoldingMode: () => true, maintainUwbResumeTransition: () => {}, resetUwbHoldTransition: () => {},
     sendUwbRelativeDrive: (result) => ({ safe: true, ...session.governDrive({ throttle: result.throttlePercent, steering: result.steeringDegrees }, result) }),
     finishUwbTestLog: () => {}, recordUwbTestSample: (result) => samples.push(result.status), addLog: () => {} };
-  const context = vm.createContext(sandbox);
+  const context = vm.createContext(Object.assign(sandbox, {lastUwbPointApproach:new LastUwbPointApproach(),UWB_HOLD_ON_POSITION_LOSS:false}));
   vm.runInContext(update, context);
   const step = (now, valid) => { sandbox.now = now; sandbox.systemState.telemetry = t(now, valid); vm.runInContext('updateUwbFollow()', context); };
   [1000, 1100, 1200].forEach((now) => step(now, true));

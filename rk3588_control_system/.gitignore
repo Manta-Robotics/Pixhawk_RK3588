@@ -58,3 +58,10 @@ tmp/
 backups/
 recordings/
 config/windows.config.json
+
+# Device-only environments, runtime state and recovery snapshots
+.venv/
+work/
+backups/
+recordings/
+config/windows.config.json

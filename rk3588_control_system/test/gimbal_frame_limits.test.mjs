@@ -50,17 +50,17 @@ test('downward rate stops at zero and slows near the lower limit', () => {
   const stopped = limitOutgoingGimbalFrame(frame({ pitchRate: -20 }), {
     ...limits,
     now,
-    feedback: { pitchDeg: 2.5, updatedAt: now, checksumValid: true }
+    feedback: { yawDeg: 0, pitchDeg: 2.5, updatedAt: now, checksumValid: true }
   });
   const slowed = limitOutgoingGimbalFrame(frame({ pitchRate: -20 }), {
     ...limits,
     now,
-    feedback: { pitchDeg: 4.5, updatedAt: now, checksumValid: true }
+    feedback: { yawDeg: 0, pitchDeg: 4.5, updatedAt: now, checksumValid: true }
   });
   const allowed = limitOutgoingGimbalFrame(frame({ pitchRate: -20 }), {
     ...limits,
     now,
-    feedback: { pitchDeg: 10, updatedAt: now, checksumValid: true }
+    feedback: { yawDeg: 0, pitchDeg: 10, updatedAt: now, checksumValid: true }
   });
   assert.equal(stopped.frame.readInt16LE(40), 0);
   assert.ok(slowed.frame.readInt16LE(40) < 0 && slowed.frame.readInt16LE(40) > -20);

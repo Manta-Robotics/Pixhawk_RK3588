@@ -32,19 +32,20 @@ test("live mobile frontend exposes and transports beacon mode", () => {
     assert.match(transportScript, /action === "beacon"/);
 });
 
-test("beacon toolbar exposes the nine-point calibration workflow", () => {
+test("beacon toolbar exposes configurable multipoint calibration", () => {
     assert.match(mobileHtml, /id="gimbalBeaconCalibration"/);
     assert.match(mobileHtml, /id="beaconCalibrationModal"/);
     assert.match(transportScript, /\/api\/gimbal\/beacon\/calibration\/capture/);
-    assert.match(serverScript, /generateBeaconCalibrationPoints\(\)/);
+    assert.match(serverScript, /generateBeaconCalibrationPoints\(Math\.random,/);
     assert.match(serverScript, /fitBeaconCalibration\(session\.samples\)/);
-    assert.match(serverScript, /let gimbalBeaconCalibrationState = \{[\s\S]*?total: 9/);
+    assert.match(serverScript, /points\.length/);
     assert.match(mobileHtml, /id="beaconCalibrationCanvas"/);
-    assert.match(mobileHtml, /九点校准/);
+    assert.match(mobileHtml, /25 点精细校准/);
     assert.doesNotMatch(mobileHtml, /八点校准/);
     assert.match(mobileHtml, /if\(state\.gimbalMode==="beacon"\)return/);
     assert.match(serverScript, /collectBeaconCalibrationReading\(\)/);
-    assert.match(serverScript, /rawDistanceM/);
+    assert.doesNotMatch(serverScript, /uwb_raw_distance_m|rawUwbControl/);
+    assert.match(serverScript, /smoothedUwbOutput\.view/);
     assert.match(serverScript, /result\.model !== 'rigid_3d'/);
     assert.match(serverScript, /stabilizeBeaconUwb\(now,/);
 });
@@ -79,6 +80,6 @@ test("3D gimbal calibration does not overwrite the boat-follow bearing calibrati
     assert.match(serverScript, /bearing_scale: GIMBAL_BEACON_CONFIG\.yaw_source_scale/);
     assert.match(serverScript, /bearing_offset_deg: GIMBAL_BEACON_CONFIG\.yaw_offset_deg/);
     const start = serverScript.indexOf('function persistBeaconCalibration(result)');
-    const end = serverScript.indexOf('function startBeaconCalibrationSession()', start);
+    const end = serverScript.indexOf('function startBeaconCalibrationSession(', start);
     assert.doesNotMatch(serverScript.slice(start, end), /setBearingCalibration/);
 });

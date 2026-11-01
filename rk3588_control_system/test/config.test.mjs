@@ -165,3 +165,30 @@ test('SIYI protocol rejects out-of-range limits and incompatible click modes', (
     c => { c.gimbal.siyi.max_rate_command = 101; }
   ]) { const candidate = structuredClone(config); mutate(candidate); assert.ok(validateSystemConfig(candidate).length > 0); }
 });
+
+test('USB positioning requires an explicit tag and typed switches', () => {
+  const valid = structuredClone(config);
+  valid.uwb_usb = {enabled: true, port: '/dev/ttyACM1', target_tag_id: 123, baud_rate: 115200};
+  assert.deepEqual(validateSystemConfig(valid), []);
+  for (const [key, value] of [['enabled', 'true'], ['vessel_control_enabled', 1],
+    ['speed_gate_enabled', null], ['output_speed_gate_enabled', 'false'],
+    ['target_tag_id', -1], ['target_tag_id', '123'], ['port', ''], ['baud_rate', 0]]) {
+    const c = structuredClone(valid); c.uwb_usb[key] = value;
+    assert.ok(validateSystemConfig(c).some(error => error.includes('uwb_usb')), key);
+  }
+});
+
+test('last-point model uses relative IMU execution without automatic rearming', () => {
+  const c = structuredClone(config);
+  c.uwb_follow.uwb_loss_action = 'last_point_model';
+  c.uwb_follow.auto_resume_after_uwb_timeout = false;
+  c.uwb_follow.execution_mode = 'relative_imu';
+  assert.deepEqual(validateSystemConfig(c), []);
+  c.uwb_follow.auto_resume_after_uwb_timeout = true;
+  assert.ok(validateSystemConfig(c).some(error => error.includes('last_point_model')));
+  c.uwb_follow.auto_resume_after_uwb_timeout = false;
+  c.uwb_follow.execution_mode = 'manual';
+  assert.ok(validateSystemConfig(c).some(error => error.includes('last_point_model')));
+  c.uwb_follow.uwb_loss_action = 'unknown';
+  assert.ok(validateSystemConfig(c).some(error => error.includes('uwb_loss_action')));
+});

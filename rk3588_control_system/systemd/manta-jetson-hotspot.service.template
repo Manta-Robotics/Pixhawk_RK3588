@@ -1,0 +1,18 @@
+[Unit]
+Description=Manta Always-on Jetson Control Hotspot
+After=NetworkManager.service
+Wants=NetworkManager.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=-/etc/manta/manta.env
+ExecStart=/bin/bash __PROJECT_DIR__/scripts/ensure_hotspot.sh watch
+ExecStop=/bin/bash __PROJECT_DIR__/scripts/ensure_hotspot.sh stop
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

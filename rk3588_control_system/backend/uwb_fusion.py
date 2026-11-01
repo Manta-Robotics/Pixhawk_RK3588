@@ -54,6 +54,10 @@ class UwbReceiver:
     updated_at: Optional[int] = None
     measurement_updated_at: Optional[int] = None
     received_measurement_at: Optional[int] = None
+    raw_observation: Optional[dict] = None
+    source_time_boot_ms: Optional[int] = None
+    source_age_ms: Optional[float] = None
+    source_age_uncertainty_ms: Optional[float] = None
     raw_rejected_at: Optional[int] = None
     require_gate: bool = False
     measurement_status: str = 'legacy'
@@ -70,8 +74,16 @@ class UwbReceiver:
     occlusion_diagnostics: Optional[dict] = None
     pending_distance: bool = False
     pending_azimuth: bool = False
+    pending_elevation: bool = False
+    pending_filtered_elevation_deg: Optional[float] = None
     distance_sample_at: Optional[int] = None
     azimuth_sample_at: Optional[int] = None
+    elevation_sample_at: Optional[int] = None
+    distance_source_time_boot_ms: Optional[int] = None
+    azimuth_source_time_boot_ms: Optional[int] = None
+    elevation_source_time_boot_ms: Optional[int] = None
+    pair_rejected_count: int = 0
+    pair_source_skew_ms: Optional[int] = None
     rejected_count: int = 0
     invalid_reason: Optional[str] = None
 
@@ -110,6 +122,7 @@ class UwbReceiver:
             "rawDistanceUpdatedAt": self.distance_sample_at,
             "rawAzimuthDeg": self.raw_azimuth_deg,
             "rawElevationDeg": self.raw_elevation_deg,
+            "rawElevationUpdatedAt": self.elevation_sample_at,
             "distanceM": self.distance_m,
             "azimuthDeg": self.azimuth_deg,
             "bodyAzimuthDeg": self.body_azimuth_deg(),
@@ -129,6 +142,12 @@ class UwbReceiver:
             "updatedAt": self.updated_at,
             "measurementUpdatedAt": self.measurement_updated_at,
             "receivedMeasurementAt": self.received_measurement_at,
+            "rawObservation": dict(self.raw_observation) if self.raw_observation is not None else None,
+            "pairRejectedCount": self.pair_rejected_count,
+            "pairSourceSkewMs": self.pair_source_skew_ms,
+            "sourceTimeBootMs": self.source_time_boot_ms,
+            "sourceAgeAtReceiptMs": self.source_age_ms,
+            "sourceAgeUncertaintyMs": self.source_age_uncertainty_ms,
             "rawRejectedAt": self.raw_rejected_at,
             "measurementStatus": self.measurement_status,
             "filterReason": self.filter_reason,
@@ -173,6 +192,7 @@ class DualUwbFusion:
         switch_blend_ms: int = 180,
         enabled_receiver_ids: Iterable[int] = (1, 2),
         require_gated_measurements: bool = False,
+        ordered_observations: bool = False,
     ) -> None:
         mounts = [float(value) for value in mount_yaw_deg]
         positions_x = [float(value) for value in receiver_position_x_m]
@@ -192,6 +212,7 @@ class DualUwbFusion:
         if not enabled or not enabled.issubset({1, 2}):
             raise ValueError("enabled_receiver_ids must contain receiver 1 and/or 2")
         self.enabled_receiver_ids = enabled
+        self.ordered_observations = ordered_observations
         self.freshness_ms = max(100, int(freshness_ms))
         self.receiver_fov_half_deg = max(10.0, min(89.0, float(receiver_fov_half_deg)))
         self.overlap_disagreement_deg = max(5.0, min(90.0, float(overlap_disagreement_deg)))
@@ -220,6 +241,7 @@ class DualUwbFusion:
             1: deque(maxlen=20),
             2: deque(maxlen=20),
         }
+        self._stability_cache: Dict[int, float] = {}
 
     @staticmethod
     def _median(values: Iterable[float]) -> float:
@@ -231,6 +253,9 @@ class DualUwbFusion:
 
     def _stability_weight(self, receiver: UwbReceiver) -> float:
         """Return a robust recent-sample quality score in the range [0.01, 1]."""
+        cached = self._stability_cache.get(receiver.receiver_id)
+        if cached is not None:
+            return cached
         distances = self._distance_history[receiver.receiver_id]
         azimuths = self._azimuth_history[receiver.receiver_id]
         if len(distances) < 6 or len(azimuths) < 6:
@@ -248,7 +273,9 @@ class DualUwbFusion:
             abs(wrap_angle_deg(value - mean_azimuth)) for value in azimuths
         )
         azimuth_score = 1.0 / (1.0 + (azimuth_mad / 12.0) ** 2)
-        return max(0.01, min(1.0, distance_score * azimuth_score))
+        score = max(0.01, min(1.0, distance_score * azimuth_score))
+        self._stability_cache[receiver.receiver_id] = score
+        return score
 
     def _coverage_weight(self, receiver: UwbReceiver) -> float:
         # Antenna coverage describes the observation angle, not a predicted
@@ -332,6 +359,7 @@ class DualUwbFusion:
         *,
         source: Optional[Tuple[int, int]] = None,
         now_ms: Optional[int] = None,
+        sample_time_boot_ms: Optional[int] = None,
     ) -> Optional[Tuple[int, str]]:
         parsed = self.parse_name(name)
         if parsed is None or not math.isfinite(value):
@@ -407,22 +435,78 @@ class DualUwbFusion:
             receiver.invalid_reason = None
             receiver.raw_distance_m = float(value)
             receiver.pending_distance = True
-            if not receiver.require_gate: self._distance_history[receiver_id].append(float(value))
+            if self.ordered_observations:
+                receiver.pending_azimuth = False
+                receiver.pending_elevation = False
+                receiver.pending_filtered_elevation_deg = None
+            if not receiver.require_gate:
+                self._distance_history[receiver_id].append(float(value))
+                self._stability_cache.pop(receiver_id, None)
         elif field_name == "AZ":
             receiver.raw_azimuth_deg = wrap_angle_deg(value)
-            receiver.pending_azimuth = True
-            if not receiver.require_gate: self._azimuth_history[receiver_id].append(wrap_angle_deg(value))
+            # The flight-controller sender emits DIST, EL, AZ in order. An
+            # orphan AZ after a dropped DIST must not pair with the NEXT DIST
+            # and shift the bearing stream permanently by one observation.
+            receiver.pending_azimuth = not self.ordered_observations or receiver.pending_distance
+            if not receiver.require_gate:
+                self._azimuth_history[receiver_id].append(wrap_angle_deg(value))
+                self._stability_cache.pop(receiver_id, None)
         elif field_name == "EL":
             receiver.raw_elevation_deg = float(value)
+            receiver.pending_elevation = not self.ordered_observations or receiver.pending_distance
         receiver.updated_at = int(time.time() * 1000) if now_ms is None else int(now_ms)
         if field_name == 'DIST':
             receiver.distance_sample_at = receiver.updated_at
+            receiver.distance_source_time_boot_ms = (sample_time_boot_ms if type(sample_time_boot_ms) is int
+                and 0 <= sample_time_boot_ms < 2 ** 32 else None)
         elif field_name == 'AZ':
             receiver.azimuth_sample_at = receiver.updated_at
+            receiver.azimuth_source_time_boot_ms = (sample_time_boot_ms if type(sample_time_boot_ms) is int
+                and 0 <= sample_time_boot_ms < 2 ** 32 else None)
+        elif field_name == 'EL':
+            receiver.elevation_sample_at = receiver.updated_at
+            receiver.elevation_source_time_boot_ms = (sample_time_boot_ms if type(sample_time_boot_ms) is int
+                and 0 <= sample_time_boot_ms < 2 ** 32 else None)
         if receiver.pending_distance and receiver.pending_azimuth:
-            if abs(receiver.distance_sample_at - receiver.azimuth_sample_at) <= 100:
+            source_skew = None
+            if receiver.distance_source_time_boot_ms is not None and receiver.azimuth_source_time_boot_ms is not None:
+                source_skew = abs((receiver.azimuth_source_time_boot_ms - receiver.distance_source_time_boot_ms
+                    + 2 ** 31) % 2 ** 32 - 2 ** 31)
+            receiver.pair_source_skew_ms = source_skew
+            if self.ordered_observations and source_skew is not None and source_skew > 5:
+                # The three named floats come from one synchronous Lua call.
+                # Allow clock quantization, never a different 25ms radio frame.
+                # Receipt times alone cannot detect compressed UART backlogs.
+                receiver.pair_rejected_count += 1
+                receiver.pending_distance = receiver.pending_azimuth = False
+            elif abs(receiver.distance_sample_at - receiver.azimuth_sample_at) <= 100:
                 receiver.received_measurement_at = max(receiver.distance_sample_at, receiver.azimuth_sample_at)
-                if not receiver.require_gate: receiver.measurement_updated_at = receiver.received_measurement_at
+                # Live UART fields may already belong to the next frame when
+                # a client first reads telemetry. Freeze one coherent sample.
+                elevation = receiver.raw_elevation_deg
+                if self.ordered_observations:
+                    elevation_matches = (receiver.pending_elevation
+                        and receiver.elevation_sample_at is not None
+                        and receiver.distance_sample_at <= receiver.elevation_sample_at <= receiver.azimuth_sample_at)
+                    if elevation_matches and receiver.elevation_source_time_boot_ms is not None:
+                        for other_clock in [receiver.distance_source_time_boot_ms, receiver.azimuth_source_time_boot_ms]:
+                            if other_clock is not None and abs((other_clock - receiver.elevation_source_time_boot_ms
+                                    + 2 ** 31) % 2 ** 32 - 2 ** 31) > 5:
+                                elevation_matches = False
+                    if not elevation_matches:
+                        elevation = None
+                receiver.raw_observation = dict(at=receiver.received_measurement_at,
+                    distanceM=receiver.raw_distance_m, azimuthDeg=receiver.raw_azimuth_deg,
+                    elevationDeg=elevation, tagId=receiver.tag_id)
+                if source_skew is not None:
+                    # Source clocks expose pair skew independently of UART
+                    # queuing and board wall time, including uint32 rollover.
+                    receiver.raw_observation['sourceSkewMs'] = source_skew
+                if not receiver.require_gate:
+                    receiver.measurement_updated_at = receiver.received_measurement_at
+                    if self.ordered_observations:
+                        receiver.elevation_deg = (receiver.pending_filtered_elevation_deg
+                            if elevation is not None and receiver.pending_filtered_elevation_deg is not None else elevation)
                 receiver.pending_distance = receiver.pending_azimuth = False
             elif receiver.distance_sample_at < receiver.azimuth_sample_at:
                 receiver.pending_distance = False
@@ -450,9 +534,15 @@ class DualUwbFusion:
             self.set_filtered(receiver_id, 'DIST', result['distance_m'])
             self.set_filtered(receiver_id, 'AZ', result['azimuth_deg'])
             receiver.measurement_updated_at = result['accepted_at']
+            if self.ordered_observations:
+                observation = receiver.raw_observation or {}
+                coherent = observation.get('elevationDeg') if observation.get('at') == result['accepted_at'] else None
+                receiver.elevation_deg = (receiver.pending_filtered_elevation_deg
+                    if coherent is not None and receiver.pending_filtered_elevation_deg is not None else coherent)
             receiver.invalid_reason = None
             self._distance_history[receiver_id].append(receiver.raw_distance_m)
             self._azimuth_history[receiver_id].append(receiver.raw_azimuth_deg)
+            self._stability_cache.pop(receiver_id, None)
         else:
             receiver.invalid_reason = result['reason']
 
@@ -463,7 +553,10 @@ class DualUwbFusion:
         elif field_name == "AZ":
             receiver.azimuth_deg = wrap_angle_deg(value)
         elif field_name == "EL":
-            receiver.elevation_deg = float(value)
+            if not self.ordered_observations:
+                receiver.elevation_deg = float(value)
+            elif receiver.pending_elevation:
+                receiver.pending_filtered_elevation_deg = float(value)
 
     def fused(self, now_ms: Optional[int] = None) -> dict:
         now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)

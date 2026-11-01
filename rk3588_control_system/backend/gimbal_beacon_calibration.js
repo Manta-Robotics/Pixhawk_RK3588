@@ -7,6 +7,7 @@ import {
 } from './gimbal_beacon_geometry.js';
 
 function finite(value) {
+  if ((typeof value !== 'number' && typeof value !== 'string') || (typeof value === 'string' && value.trim() === '')) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -19,7 +20,20 @@ function shuffle(values, random) {
   return values;
 }
 
-export function generateBeaconCalibrationPoints(random = Math.random) {
+export function generateBeaconCalibrationPoints(random = Math.random, { profile = 'quick9', limits = null } = {}) {
+  if (!['quick9', 'precision25'].includes(profile)) throw new Error('Unsupported calibration profile');
+  if (profile === 'precision25') {
+    const yawExtent = Math.min(110, limits ? Math.min(-limits.yawMinDeg, limits.yawMaxDeg) - 5 : 110);
+    const pitchMin = Math.max(-30, limits ? limits.pitchMinDeg + 5 : -30);
+    const pitchMax = Math.min(20, limits ? limits.pitchMaxDeg - 5 : 20);
+    if (yawExtent < 30 || pitchMax - pitchMin < 20) throw new Error('Gimbal limits do not allow a sufficiently wide calibration grid');
+    const yaws = [-1, -.5, 0, .5, 1].map(v => Math.round(v * yawExtent * 100) / 100);
+    const pitches = Array.from({length: 5}, (_, i) => Math.round((pitchMin + (pitchMax-pitchMin)*i/4)*100)/100);
+    const validation = new Set(['0,4', '1,1', '2,2', '3,3', '4,0']);
+    return shuffle(yaws.flatMap((yawDeg, i) => pitches.map((pitchDeg, j) => ({
+      yawDeg, pitchDeg, role: validation.has(`${i},${j}`) ? 'validation' : 'fit'
+    }))), random);
+  }
   const anchors = [
     [-32, 0], [0, 0], [32, 0],
     [-32, 10], [0, 10], [32, 10],
@@ -29,6 +43,18 @@ export function generateBeaconCalibrationPoints(random = Math.random) {
     yawDeg: yaw,
     pitchDeg: pitch
   })), random);
+}
+
+export function assertBeaconCalibrationGrid(points, limits) {
+  if (!Array.isArray(points) || ![9, 25].includes(points.length)) throw new Error('9 or 25 calibration points are required');
+  if (new Set(points.map(p => `${p.yawDeg},${p.pitchDeg}`)).size !== points.length) throw new Error('Calibration points must be distinct');
+  for (const point of points) {
+    if (!Number.isFinite(point.yawDeg) || !Number.isFinite(point.pitchDeg)
+      || point.yawDeg < limits.yawMinDeg || point.yawDeg > limits.yawMaxDeg
+      || point.pitchDeg < limits.pitchMinDeg || point.pitchDeg > limits.pitchMaxDeg) {
+      throw new Error('Calibration grid exceeds configured gimbal limits; existing calibration retained');
+    }
+  }
 }
 
 function multiplyMatrices3(left, right) {
@@ -152,8 +178,12 @@ function refineCandidate(candidate, prepared, medianDistance, maxTranslationM) {
 }
 
 export function fitBeaconCalibration(samples) {
-  if (!Array.isArray(samples) || samples.length !== 9) throw new Error('Exactly 9 calibration samples are required');
-  const prepared = samples.map((sample) => {
+  if (!Array.isArray(samples) || ![9, 25].includes(samples.length)) throw new Error('9 or 25 calibration samples are required');
+  const precision = samples.length === 25;
+  if (precision && (samples.filter(s => s.role === 'fit').length !== 20 || samples.filter(s => s.role === 'validation').length !== 5)) {
+    throw new Error('Precision calibration requires 20 fitting points and 5 independent validation points');
+  }
+  const allPrepared = samples.map((sample) => {
     const distanceM = finite(sample.distanceM);
     const uwbAzimuthDeg = finite(sample.uwbAzimuthDeg);
     const uwbElevationDeg = finite(sample.uwbElevationDeg);
@@ -161,9 +191,11 @@ export function fitBeaconCalibration(samples) {
     const gimbalPitchDeg = finite(sample.gimbalPitchDeg);
     const vector = uwbVectorFromSpherical(distanceM, uwbAzimuthDeg, uwbElevationDeg);
     const ray = gimbalRayFromAngles(gimbalYawDeg, gimbalPitchDeg);
-    if (!vector || !ray || distanceM < 0.05 || distanceM > 100) throw new Error('UWB distance is required for 3D calibration; restart the nine-point calibration');
-    return { distanceM, uwbAzimuthDeg, uwbElevationDeg, gimbalYawDeg, gimbalPitchDeg, vector, ray };
+    if (!vector || !ray || distanceM < 0.05 || distanceM > 100) throw new Error('Valid UWB distance and angles are required for 3D calibration');
+    return { distanceM, uwbAzimuthDeg, uwbElevationDeg, gimbalYawDeg, gimbalPitchDeg, vector, ray, role: sample.role };
   });
+  const prepared = precision ? allPrepared.filter(s => s.role === 'fit') : allPrepared;
+  const validationPrepared = precision ? allPrepared.filter(s => s.role === 'validation') : [];
   const yawSpan = Math.max(...prepared.map((sample) => sample.gimbalYawDeg)) - Math.min(...prepared.map((sample) => sample.gimbalYawDeg));
   const pitchSpan = Math.max(...prepared.map((sample) => sample.gimbalPitchDeg)) - Math.min(...prepared.map((sample) => sample.gimbalPitchDeg));
   if (yawSpan < 40 || pitchSpan < 20) throw new Error('The 3D calibration grid does not span enough yaw and pitch');
@@ -191,7 +223,7 @@ export function fitBeaconCalibration(samples) {
   const refined = candidates.slice(0, 10).map((candidate) => refineCandidate(candidate, prepared, medianDistance, maxTranslationM)).filter(Boolean);
   refined.sort((left, right) => left.metrics.score - right.metrics.score);
   const best = refined[0];
-  if (!best || best.metrics.angularRmsErrorDeg > 7 || best.metrics.angularMaxErrorDeg > 16) {
+  if (!best || best.metrics.angularRmsErrorDeg > (precision ? 3 : 7) || best.metrics.angularMaxErrorDeg > (precision ? 7 : 16)) {
     const detail = best ? ` (RMS ${best.metrics.angularRmsErrorDeg.toFixed(1)}°, max ${best.metrics.angularMaxErrorDeg.toFixed(1)}°)` : '';
     throw new Error(`3D fit rejected${detail}; keep the beacon centered and keep its antenna orientation fixed`);
   }
@@ -208,10 +240,22 @@ export function fitBeaconCalibration(samples) {
     elevationDeg: sample.uwbElevationDeg
   }, extrinsic3d));
   if (verification.some((prediction) => !prediction)) throw new Error('3D calibration produced an invalid transform');
+  const validationMetrics = precision ? evaluate(extrinsic3d.matrix, extrinsic3d.translation_m, validationPrepared, maxTranslationM) : null;
+  if (precision && (!validationMetrics || validationMetrics.angularRmsErrorDeg > 3 || validationMetrics.angularMaxErrorDeg > 6)) {
+    const detail = validationMetrics ? ` (RMS ${validationMetrics.angularRmsErrorDeg.toFixed(2)}°, max ${validationMetrics.angularMaxErrorDeg.toFixed(2)}°)` : '';
+    throw new Error(`Independent validation rejected${detail}; previous calibration retained. Re-center the beacon and repeat calibration`);
+  }
   return {
     model: 'rigid_3d',
     extrinsic_3d: extrinsic3d,
     metrics: {
+      sampleCount: samples.length,
+      fitPointCount: prepared.length,
+      validationPointCount: validationPrepared.length,
+      ...(validationMetrics ? {
+        validationAngularRmsErrorDeg: round(validationMetrics.angularRmsErrorDeg, 3),
+        validationAngularMaxErrorDeg: round(validationMetrics.angularMaxErrorDeg, 3)
+      } : {}),
       angularRmsErrorDeg: round(best.metrics.angularRmsErrorDeg, 3),
       angularMaxErrorDeg: round(best.metrics.angularMaxErrorDeg, 3),
       yawRmsErrorDeg: round(best.metrics.yawRmsErrorDeg, 3),

@@ -18,19 +18,23 @@ export class UwbRawControl {
       if (!this.enabled.includes(sensor.receiverId)) continue;
       const key = JSON.stringify([sensor.receiverId, sensor.tagId]);
       const clock = sensor.receivedMeasurementAt, previous = this.samples.get(key);
+      const observation = sensor.rawObservation;
+      if (observation && (observation.at !== clock || observation.tagId !== sensor.tagId)) continue;
       if (sensor.valid === false || !finite(clock) || clock > now || now - clock > this.timeout
         || (finite(sensor.rawRejectedAt) && sensor.rawRejectedAt >= clock)) continue;
       let sample = previous;
-      if ((!previous || clock > previous.at) && finite(sensor.rawDistanceUpdatedAt)
-        && sensor.rawDistanceUpdatedAt <= clock) {
-        const d = sensor.rawDistanceM, a = sensor.rawAzimuthDeg;
+      if ((!previous || clock > previous.at) && (observation || (finite(sensor.rawDistanceUpdatedAt)
+        && sensor.rawDistanceUpdatedAt <= clock))) {
+        const d = observation ? observation.distanceM : sensor.rawDistanceM;
+        const a = observation ? observation.azimuthDeg : sensor.rawAzimuthDeg;
         if (!finite(d) || d < this.minimum || d > this.maximum || !finite(a) || Math.abs(a) > 180) continue;
         const angle = (a + (sensor.mountYawDeg || 0)) * Math.PI / 180;
         const x = (sensor.positionXM || 0) + d * Math.cos(angle);
         const y = (sensor.positionYM || 0) + d * Math.sin(angle);
         if (!finite(x) || !finite(y)) continue;
         sample = { at: clock, distanceM: Math.hypot(x, y), azimuthDeg: Math.atan2(y, x) * 180 / Math.PI,
-          elevationDeg: sensor.rawElevationDeg, receiverId: sensor.receiverId, tagId: sensor.tagId };
+          elevationDeg: observation ? observation.elevationDeg : sensor.rawElevationDeg,
+          receiverId: sensor.receiverId, tagId: sensor.tagId };
       }
       if (sample && sample.at <= now && now - sample.at <= this.timeout) next.set(key, sample);
     }

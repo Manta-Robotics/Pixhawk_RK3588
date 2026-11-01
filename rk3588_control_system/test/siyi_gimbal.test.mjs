@@ -10,7 +10,8 @@ function envelope(command = 0, a = 0, b = 0, joystick = 0) {
   return f;
 }
 function packetFromHex(hex) { return decodeSiyiPackets(Buffer.from(hex, 'hex')).packets[0]; }
-const fresh = { checksumValid: true, updatedAt: 1000, yawDeg: 0, pitchDeg: 0 };
+function readyGimbal(options={}) { const g=new SiyiGimbal(options);g.mounting=1;return g; }
+const fresh = { attitudeValid:true, mounting:1, checksumValid: true, updatedAt: 1000, yawDeg: 0, pitchDeg: 0 };
 const dataOf = (b) => decodeSiyiPackets(b).packets[0];
 
 test('CRC matches the published SDK hardware-ID request', () => {
@@ -35,8 +36,8 @@ test('only acknowledged attitude updates feedback; upside-down center normalizes
   assert.equal(g.feedback(p), null, 'wait for mounting configuration');
   assert.equal(g.feedback(packetFromHex('556602070001000a00000002010200542c')), null);
   const f = g.feedback(p, {}, 1234);
-  assert.ok(Math.abs(f.pitchDeg - 0.1) < 0.001);
-  assert.ok(Math.abs(f.yawDeg - 0.3) < 0.001); assert.equal(f.gyroPitchDps, -0.5);
+  assert.ok(Math.abs(f.pitchDeg + 0.1) < 0.001);
+  assert.ok(Math.abs(f.yawDeg - 0.3) < 0.001); assert.equal(f.gyroPitchDps, 0.5);
   assert.equal(f.tfCardInserted, false); assert.equal(f.updatedAt, 1234);
   assert.equal(g.feedback({ ...p, control: 1 }), null);
   const normal = new SiyiGimbal(); normal.mounting = 1;
@@ -45,7 +46,7 @@ test('only acknowledged attitude updates feedback; upside-down center normalizes
 });
 
 test('absolute angle conversion enforces the ship horizon and stops on stale feedback', () => {
-  const g = new SiyiGimbal();
+  const g = readyGimbal();
   const p = dataOf(g.translate(envelope(0x72, 16000, 15000), fresh, 1001)[0]);
   assert.equal(p.command, 0x0e);
   assert.equal(p.payload.readInt16LE(0), 1350);
@@ -56,7 +57,7 @@ test('absolute angle conversion enforces the ship horizon and stops on stale fee
 });
 
 test('rate conversion enforces direction, command cap, limit guard and release stop', () => {
-  const g = new SiyiGimbal({ rate_units_per_dps: 1, max_rate_command: 40 });
+  const g = readyGimbal({ rate_units_per_dps: 1, max_rate_command: 40 });
   const f = envelope(0, 100, 100, 0x70);
   assert.deepEqual([...dataOf(g.translate(f, fresh, 1001)[0]).payload], [40, 216]);
   const limited = dataOf(g.translate(f, { ...fresh, yawDeg: 135, pitchDeg: 90 }, 1001)[0]);
@@ -65,7 +66,7 @@ test('rate conversion enforces direction, command cap, limit guard and release s
 });
 
 test('repeated legacy home bursts send one SIYI home and unsupported commands never pass through', () => {
-  const g = new SiyiGimbal();
+  const g = readyGimbal();
   const home = envelope(0x71);
   assert.equal(dataOf(g.translate(home, fresh, 1001)[0]).command, 8);
   assert.equal(g.translate(home, fresh, 1001).length, 0);
@@ -77,7 +78,7 @@ test('repeated legacy home bursts send one SIYI home and unsupported commands ne
 
 
 test('ship camera never accepts an upward target at the SIYI wire boundary', () => {
-  const g = new SiyiGimbal();
+  const g = readyGimbal();
   for (const requested of [-2500, -1, 0, 1, 4500, 9000, 12000]) {
     const p = dataOf(g.translate(envelope(0x72, 0, requested), fresh, 1001)[0]);
     const nativePitch = p.payload.readInt16LE(2);
@@ -87,7 +88,7 @@ test('ship camera never accepts an upward target at the SIYI wire boundary', () 
 });
 
 test('ship camera upward rate stops at the horizon; downward recovery remains allowed', () => {
-  const g = new SiyiGimbal();
+  const g = readyGimbal();
   for (const pitchDeg of [-10, 0]) {
     const feedback = { ...fresh, pitchDeg };
     const upward = dataOf(g.translate(envelope(0, 10, -20, 0x70), feedback, 1001)[0]);
@@ -100,4 +101,23 @@ test('ship camera upward rate stops at the horizon; downward recovery remains al
   assert.equal(towardHorizon.payload.readInt8(1), 20, 'can look up from below the horizon');
   const stale = dataOf(g.translate(envelope(0, 0, -20, 0x70), fresh, 1400)[0]);
   assert.equal(stale.payload.readInt8(1), 0);
+});
+
+test('motion requires valid attitude and matching confirmed mounting', () => {
+  const g = readyGimbal();
+  for (const feedback of [{...fresh,attitudeValid:false},{...fresh,mounting:2},{...fresh,attitudeValid:undefined}]) {
+    for (const command of [0,0x71,0x72]) {
+      const packet=dataOf(g.translate(envelope(command,10,10),feedback,1001)[0]);
+      assert.equal(packet.command,7);assert.deepEqual([...packet.payload],[0,0]);
+    }
+  }
+});
+
+test('inverted mounting enforces its physical pitch interval on absolute targets', () => {
+  const g=new SiyiGimbal({pitch_min_deg:-90,pitch_max_deg:25});g.mounting=2;
+  const feedback={...fresh,mounting:2};
+  for (const [requested,expected] of [[-12000,-900],[0,0],[6000,250]]) {
+    const packet=dataOf(g.translate(envelope(0x72,0,requested),feedback,1001)[0]);
+    assert.equal(packet.command,14);assert.equal(packet.payload.readInt16LE(2),expected);
+  }
 });

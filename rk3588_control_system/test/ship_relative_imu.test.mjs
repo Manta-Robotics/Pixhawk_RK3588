@@ -1,3 +1,4 @@
+import {LastUwbPointApproach} from '../backend/uwb_loss_policy.js';
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import {UwbAutoResume} from '../backend/uwb_auto_resume.js';
@@ -120,7 +121,7 @@ test('production server resumes GPS-free throttle control without velocity-unit 
   sendUwbRelativeDrive:r=>({safe:true,throttle:r.throttlePercent,steering:r.steeringDegrees}),
   sendUwbFollowStop:()=>{},maintainUwbHoldingMode:()=>true,resetUwbHoldTransition:()=>{},addLog:(_tag,s)=>logs.push(s),
   disarmAndReturnManual:()=>{throw Error('Unexpected disarm');}};
- const context=vm.createContext(box);vm.runInContext(loop,context);
+ const context=vm.createContext(Object.assign(box, {lastUwbPointApproach:new LastUwbPointApproach(),UWB_HOLD_ON_POSITION_LOSS:false}));vm.runInContext(loop,context);
  for(let t=1000;t<=5000;t+=100){box.now=t;box.systemState.telemetry=packet(t,2);
   if(t>=3100&&t<=3300){box.systemState.telemetry.uwb.online=false;box.systemState.telemetry.uwb.fresh=false;}
   vm.runInContext('updateUwbFollow()',context);assert.equal(box.uwbFollowState.active,true);

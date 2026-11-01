@@ -1,3 +1,4 @@
+import {LastUwbPointApproach} from '../backend/uwb_loss_policy.js';
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,7 +38,7 @@ function setup() {
     maintainUwbResumeTransition:()=>{throw Error('Must not override an operator mode change');},
     resetUwbHoldTransition:()=>{},sendUwbRelativeDrive:r=>({safe:true,throttle:r.throttlePercent,steering:r.steeringDegrees,sameDirectionSteeringLimit:18}),
     finishUwbTestLog:()=>{},recordUwbTestSample:()=>{},addLog:()=>{}};
-  const context=vm.createContext(sandbox);vm.runInContext(holding+'\n'+loop,context);
+  const context=vm.createContext(Object.assign(sandbox, {lastUwbPointApproach:new LastUwbPointApproach(),UWB_HOLD_ON_POSITION_LOSS:false}));vm.runInContext(holding+'\n'+loop,context);
   const step=(now,valid=true,mode='ACRO')=>{sandbox.now=now;sandbox.systemState.telemetry=packet(now,valid,mode);vm.runInContext('updateUwbFollow()',context);return sandbox.uwbFollowState;};
   for(const t of [1000,1100,1200])assert.equal(step(t).active,true);
   return {commands,sandbox,step};

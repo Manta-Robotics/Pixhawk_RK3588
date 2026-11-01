@@ -16,8 +16,10 @@ function renderer(){
     return nodes.get(id);
   };
   const context=vm.createContext({window:{},Math,Number,JSON,Array,NaN,
-    Date:{now:()=>now},uwbDisplayNow:()=>now,uwbDisplayIdentity:u=>JSON.stringify((u.sensors||[]).map(s=>[s.receiverId,s.tagId])),$:element,clamp:(n,min,max)=>Math.max(min,Math.min(max,n)),localize:zh=>zh});
-  for(const file of ['uwb-display-smoother.js','uwb-raw-display.js'])vm.runInContext(read('frontend/js/'+file),context);
+    Date:{now:()=>now},uwbDisplayNow:()=>now,uwbDisplayIdentity:u=>JSON.stringify((u.sensors||[]).map(s=>[s.receiverId,s.tagId])),
+    uwbDisplayConnected:u=>context.state.connected||Boolean(u?.source==='USB_SERIAL'&&u.transport?.connected),
+    $:element,clamp:(n,min,max)=>Math.max(min,Math.min(max,n)),localize:zh=>zh});
+  for(const file of ['uwb-display-smoother.js','uwb-raw-display.js','uwb-radar-geometry.js'])vm.runInContext(read('frontend/js/'+file),context);
   vm.runInContext(`var uwbDisplaySmoother=new window.MantaUwbDisplaySmoother(120),
     relativeDisplaySmoother=new window.MantaUwbDisplaySmoother(120),
     rawUwbDisplay=new window.MantaUwbRawDisplay(),relativePlotScale=new window.MantaUwbPlotScale(),relativePositionHold=new window.MantaUwbDisplayHold();
@@ -42,8 +44,22 @@ test('raw jitter and rejected raw spikes cannot zoom or relocate a fixed trusted
     const next=r.frame({rawM});
     assert.deepEqual(next.point,first.point);
     assert.equal(next.scale,first.scale);
-    assert.equal(next.rawOutside,String(rawM>1));
+    assert.equal(next.rawOutside,'false');
+    assert.equal(r.element('#relativeRawPoint').attributes.visibility,'hidden');
   }
+});
+
+test('USB panel shows the active speed threshold and rejected coordinate count',()=>{
+  const r=renderer();
+  r.frame({extra:{source:'USB_SERIAL',transport:{connected:true,positionRateHz:40},
+    speedGate:{thresholdMps:1.0,rejectedCount:7}}});
+  assert.match(r.element('#relativeDecision').textContent,/1 m\/s 门限；已拒绝 7/);
+});
+
+test('USB panel distinguishes 35 Hz sampling from the original 40 Hz UART stream',()=>{
+  const r=renderer();
+  r.frame({extra:{source:'USB_SERIAL',transport:{connected:true,positionRateHz:40,targetSampleRateHz:35}}});
+  assert.match(r.element('#relativeDecision').textContent,/35 Hz 采样 \/ 串口 40\.0 Hz/);
 });
 
 test('raw control targets never replace the green trusted measurement',()=>{
@@ -74,18 +90,66 @@ test('suspect measurements retain a labelled last position without making it fre
   assert.equal(r.element('#relativePositionPanel').dataset.stale,'true');
 });
 
-test('chart zoom shrinks only after a sustained smaller range',()=>{
+test('radar range stays fixed through movement, elapsed time and clock changes',()=>{
   const {context}=renderer(), scale=new context.window.MantaUwbPlotScale();
-  assert.equal(scale.view(4,1000),5);
-  assert.equal(scale.view(.4,1100),5);
-  assert.equal(scale.view(.4,3099),5);
-  assert.equal(scale.view(.4,3100),1);
-  assert.equal(scale.view(.91,3125),1);
-  assert.equal(scale.view(1.1,3150),2);
-  const wide=new context.window.MantaUwbPlotScale();
-  assert.equal(wide.view(20,1000),50);
-  assert.equal(wide.view(.8,1100),50);
-  assert.equal(wide.view(.8,3100),2);
+  for(const magnitude of [.4,.99,1.01,2.1,20,.1])assert.equal(scale.view(magnitude,1000),2);
+  assert.equal(scale.view(.1,100000),2);
+  assert.equal(scale.view(.1,1),2);
+  assert.equal(scale.setRange(5),5);
+  assert.equal(scale.view(100,1000000),5);
+  assert.equal(scale.setRange(-1),5);
+});
+
+test('crossing one metre moves the point slightly forward without a zoom jump',()=>{
+  const r=renderer();
+  const a=r.frame({extra:{distanceM:.99,azimuthDeg:0}});
+  const b=r.frame({extra:{distanceM:1.01,azimuthDeg:0}});
+  assert.equal(a.scale,'2 m');assert.equal(b.scale,'2 m');
+  assert.ok(Number(b.point.cy)<Number(a.point.cy));
+  assert.ok(Math.abs(Number(b.point.cy)-Number(a.point.cy))<1);
+});
+
+test('operator range changes never modify coordinates and persist through disconnect',()=>{
+  const r=renderer();const a=r.frame();
+  r.context.relativePlotScale.setRange(5);const b=r.frame();
+  assert.equal(a.coordinates,b.coordinates);assert.equal(b.scale,'5 m');
+  r.context.state.connected=false;r.frame({status:'unavailable'});
+  assert.equal(r.context.relativePlotScale.view(),5);
+});
+
+test('out-of-range targets are marked instead of silently changing the scale',()=>{
+  const r=renderer();const shown=r.frame({extra:{distanceM:3}});
+  assert.equal(shown.scale,'2 m');
+  assert.equal(shown.point['data-outside-range'],'true');
+  assert.equal(shown.point.visibility,'hidden');
+  assert.equal(r.element('#relativeTargetOffscale').attributes.visibility,'visible');
+  assert.match(r.element('#relativeTargetDistanceLabel').textContent,/超量程 3\.00 m/);
+  assert.match(r.element('#relativeDecision').textContent,/目标超出当前量程/);
+});
+
+test('distance rings and plotted distance use the selected radius in metres',()=>{
+  const r=renderer();r.frame();
+  assert.equal(r.element('#relativeRingInnerLabel').textContent,'0.67 m');
+  assert.equal(r.element('#relativeRingMiddleLabel').textContent,'1.33 m');
+  assert.equal(r.element('#relativeRingLabel').textContent,'2 m');
+  assert.equal(r.element('#relativeTargetDistanceLabel').textContent,'平滑 0.80 m');
+  const dot=r.element('#relativeTargetPoint').attributes;
+  assert.equal(dot.cx,'120.00');assert.equal(dot.cy,'76.40');
+});
+
+test('body XY point and its polar annotation cannot use different coordinate origins',()=>{
+  const r=renderer();r.frame({extra:{relativeXM:.6,relativeYM:.8}});
+  assert.equal(r.element('#relativeTargetDistanceLabel').textContent,'平滑 1.00 m');
+  assert.equal(r.element('#relativeRangeValue').textContent,'1.00 m / 53.1°');
+});
+
+test('raw overlay remains unavailable even if a client checks the retired toggle',()=>{
+  const r=renderer();r.frame({rawM:1.2});
+  assert.equal(r.element('#relativeRawPoint').attributes.visibility,'hidden');
+  assert.equal(r.element('#relativeTargetDistanceLabel').textContent,'平滑 0.80 m');
+  r.element('#relativeShowRaw').checked=true;r.frame({rawM:1.2});
+  assert.equal(r.element('#relativeRawPoint').attributes.visibility,'hidden');
+  assert.equal(r.element('#relativeTargetDistanceLabel').textContent,'平滑 0.80 m');
 });
 
 test('a prediction is never retained later as a last trusted measurement',()=>{
@@ -94,4 +158,15 @@ test('a prediction is never retained later as a last trusted measurement',()=>{
   const held=r.frame({status:'suspect'});
   assert.equal(held.coordinates,'上次：前 0.80 · 左 0.00');
   assert.equal(held.label,'● 上次位置');
+});
+
+test('USB raw and smoothed points display independently of Pixhawk connection',()=>{
+  const r=renderer();r.context.state.connected=false;
+  const shown=r.frame({extra:{source:'USB_SERIAL',transport:{connected:true,positionRateHz:40},
+    smoothing:{ready:true},relativeXM:.8,relativeYM:0}});
+  assert.equal(shown.point.visibility,'visible');
+  assert.equal(shown.label,'● 平滑');
+  assert.match(r.element('#relativeDecision').textContent,/Jetson 平滑输出/);
+  r.frame({status:'unavailable',extra:{source:'USB_SERIAL',transport:{connected:false}}});
+  assert.equal(r.element('#relativeTargetPoint').attributes.visibility,'hidden');
 });

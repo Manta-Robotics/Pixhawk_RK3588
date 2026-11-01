@@ -8,11 +8,12 @@ const COLUMNS = [
   'control_mode', 'flight_mode', 'armed', 'gps_lat', 'gps_lon', 'gps_alt_m',
   'yaw_deg', 'yaw_rate_deg_s', 'velocity_north_mps', 'velocity_east_mps',
   'estimated_north_m', 'estimated_east_m',
-  'uwb_raw_distance_m', 'uwb_distance_m', 'uwb_raw_azimuth_deg', 'uwb_azimuth_deg', 'uwb_elevation_deg',
+  'uwb_distance_m', 'uwb_azimuth_deg', 'uwb_elevation_deg',
   'target_relative_x_m', 'target_relative_y_m', 'bearing_deg', 'control_bearing_deg', 'guidance_bearing_deg',
   'cross_track_error_m', 'ilos_integral_ms', 'ilos_correction_deg', 'lookahead_m', 'curvature_m_inv',
   'tracking_phase', 'close_approach_active', 'distance_hold_error_m', 'distance_hold_active',
   'distance_recovery_active', 'desired_forward_mps', 'commanded_forward_mps',
+  'path_active','path_reason','path_points','path_length_m','path_remaining_m','path_cross_track_m','path_reference_speed_mps',
   'throttle_percent', 'steering_deg',
   'command_left_pwm', 'command_right_pwm', 'actual_left_pwm', 'actual_right_pwm', 'output_neutral_verified'
 ];

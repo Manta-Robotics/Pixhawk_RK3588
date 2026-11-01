@@ -294,3 +294,7 @@ Lua 回归测试使用可选 `lupa` 的 Lua 5.3 解释器执行实际脚本并�
 python3 -m unittest discover -s test -p 'test_*.py'
 node --test --test-concurrency=1
 ```
+
+## Jetson USB UWB
+
+USB 接收、心跳诊断、短时最后位置估算及设备配置见 [JETSON_USB_UWB.md](docs/JETSON_USB_UWB.md)。设备凭据与运行时配置保存在仓库外。
