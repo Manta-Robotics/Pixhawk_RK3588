@@ -2,3 +2,5 @@
 pymavlink>=2.4.36,<3
 # Execute the deployed Pixhawk script under Lua 5.3 instead of skipping its tests.
 lupa>=2,<3
+# Exercise the real USB reader against a virtual UART in Linux CI.
+pyserial>=3.5,<4
