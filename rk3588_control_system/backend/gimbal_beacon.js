@@ -1,6 +1,7 @@
-import { predictGimbalAnglesFromExtrinsic } from './gimbal_beacon_geometry.js';
+import { predictGimbalAnglesFromExtrinsic, predictGimbalYawFromPlanarExtrinsic } from './gimbal_beacon_geometry.js';
 
 function finiteNumber(value, fallback = null) {
+  if ((typeof value !== 'number' && typeof value !== 'string') || (typeof value === 'string' && value.trim() === '')) return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -20,23 +21,30 @@ function trimDeadband(errorDeg, deadbandDeg) {
   return Math.sign(errorDeg) * (magnitude - deadbandDeg);
 }
 
-export function computeBeaconControl({ now = Date.now(), uwb = {}, feedback = {}, config = {} } = {}) {
+export function computeBeaconControl({ now = Date.now(), uwb = {}, feedback = {}, config = {}, limits = null } = {}) {
   const timeoutMs = Math.max(100, finiteNumber(config.timeout_ms, 700));
   const feedbackTimeoutMs = Math.max(100, finiteNumber(config.feedback_timeout_ms, 350));
-  const uwbUpdatedAt = finiteNumber(uwb.updatedAt);
+  const uwbUpdatedAt = finiteNumber(uwb.measurementUpdatedAt === undefined ? uwb.updatedAt : uwb.measurementUpdatedAt);
   const feedbackUpdatedAt = finiteNumber(feedback.updatedAt);
-  const uwbAgeMs = uwbUpdatedAt === null ? Infinity : Math.max(0, now - uwbUpdatedAt);
-  const feedbackAgeMs = feedbackUpdatedAt === null ? Infinity : Math.max(0, now - feedbackUpdatedAt);
+  const uwbAgeMs = uwbUpdatedAt === null || uwbUpdatedAt <= 0 || uwbUpdatedAt > now ? Infinity : now - uwbUpdatedAt;
+  const feedbackAgeMs = feedbackUpdatedAt === null || feedbackUpdatedAt <= 0 || feedbackUpdatedAt > now ? Infinity : now - feedbackUpdatedAt;
   const azimuthDeg = finiteNumber(uwb.azimuthDeg);
   const elevationDeg = finiteNumber(uwb.elevationDeg);
-  const usePitch = config.use_pitch !== false;
+  const pitchHeld = uwb.elevationValid === false || config.use_pitch === false;
+  const usePitch = config.use_pitch !== false && !pitchHeld;
   const controlMode = String(config.control_mode || 'feedback_rate').trim().toLowerCase();
   const absoluteAngleMode = controlMode === 'absolute_angle';
 
-  if (uwb.online !== true || uwb.fresh !== true || azimuthDeg === null || (usePitch && elevationDeg === null) || uwbAgeMs > timeoutMs) {
+  const admitted = uwb.measurementStatus === undefined || ['trusted', 'legacy'].includes(uwb.measurementStatus);
+  if (!admitted || uwb.online !== true || uwb.fresh !== true || azimuthDeg === null || Math.abs(azimuthDeg) > 180
+    || (usePitch && (elevationDeg === null || Math.abs(elevationDeg) > 90)) || uwbAgeMs > timeoutMs) {
     return { valid: false, reason: 'uwb_stale', uwbAgeMs, feedbackAgeMs, rateX: 0, rateY: 0 };
   }
-  if (!absoluteAngleMode && (feedback.checksumValid === false || finiteNumber(feedback.yawDeg) === null || (usePitch && finiteNumber(feedback.pitchDeg) === null) || feedbackAgeMs > feedbackTimeoutMs)) {
+  if (!usePitch && (feedback.checksumValid !== true || feedback.attitudeValid === false
+    || finiteNumber(feedback.pitchDeg) === null || feedbackAgeMs > feedbackTimeoutMs)) {
+    return {valid:false, reason:'gimbal_feedback_stale', uwbAgeMs, feedbackAgeMs, rateX:0, rateY:0};
+  }
+  if (!absoluteAngleMode && (feedback.checksumValid !== true || finiteNumber(feedback.yawDeg) === null || (usePitch && finiteNumber(feedback.pitchDeg) === null) || feedbackAgeMs > feedbackTimeoutMs)) {
     return { valid: false, reason: 'gimbal_feedback_stale', uwbAgeMs, feedbackAgeMs, rateX: 0, rateY: 0 };
   }
 
@@ -57,27 +65,37 @@ export function computeBeaconControl({ now = Date.now(), uwb = {}, feedback = {}
 
   const extrinsic = config.extrinsic_3d;
   const useExtrinsic = Boolean(extrinsic && extrinsic.enabled === true);
-  const extrinsicPrediction = useExtrinsic ? predictGimbalAnglesFromExtrinsic({
+  const planarYaw = useExtrinsic && !usePitch
+    ? predictGimbalYawFromPlanarExtrinsic(azimuthDeg, extrinsic) : null;
+  const extrinsicPrediction = useExtrinsic && usePitch ? predictGimbalAnglesFromExtrinsic({
     distanceM: uwb.distanceM,
     azimuthDeg,
     elevationDeg
   }, extrinsic) : null;
-  if (useExtrinsic && !extrinsicPrediction) {
+  if (useExtrinsic && !extrinsicPrediction && planarYaw === null) {
     return { valid: false, reason: 'uwb_distance_unavailable', uwbAgeMs, feedbackAgeMs, rateX: 0, rateY: 0 };
   }
-  const targetYawDeg = extrinsicPrediction
+  const sourceTargetYawDeg = extrinsicPrediction
     ? normalizeAngleDeg(extrinsicPrediction.yawDeg)
-    : normalizeAngleDeg(azimuthDeg * yawSourceSign * yawSourceScale + yawOffsetDeg);
-  const targetPitchDeg = usePitch
+    : planarYaw !== null ? planarYaw : normalizeAngleDeg(azimuthDeg * yawSourceSign * yawSourceScale + yawOffsetDeg);
+  const sourceTargetPitchDeg = usePitch
     ? (extrinsicPrediction ? extrinsicPrediction.pitchDeg : elevationDeg * pitchSourceSign * pitchSourceScale + pitchOffsetDeg)
-    : finiteNumber(feedback.pitchDeg, 0);
-  const calibrationModel = extrinsicPrediction ? 'rigid_3d' : 'legacy_angular';
+    : finiteNumber(config.hold_pitch_deg, finiteNumber(feedback.pitchDeg, 0));
+  const calibrationModel = extrinsicPrediction ? 'rigid_3d' : planarYaw !== null ? 'planar_yaw' : 'legacy_angular';
+  const boundedYaw = limits && Number.isFinite(limits.yawMinDeg) && Number.isFinite(limits.yawMaxDeg)
+    && limits.yawMinDeg <= limits.yawMaxDeg && limits.yawMaxDeg - limits.yawMinDeg < 360;
+  const boundedPitch = limits && Number.isFinite(limits.pitchMinDeg) && Number.isFinite(limits.pitchMaxDeg)
+    && limits.pitchMinDeg <= limits.pitchMaxDeg;
+  const targetYawDeg = boundedYaw ? clamp(sourceTargetYawDeg, limits.yawMinDeg, limits.yawMaxDeg) : sourceTargetYawDeg;
+  const targetPitchDeg = boundedPitch ? clamp(sourceTargetPitchDeg, limits.pitchMinDeg, limits.pitchMaxDeg) : sourceTargetPitchDeg;
+  const limited = targetYawDeg !== sourceTargetYawDeg || targetPitchDeg !== sourceTargetPitchDeg;
   if (absoluteAngleMode) {
     return {
       valid: true,
       reason: 'tracking',
       controlMode: 'absolute_angle',
-      feedbackRequired: false,
+      feedbackRequired: !usePitch,
+      pitchHeld,
       uwbAgeMs,
       feedbackAgeMs,
       azimuthDeg,
@@ -86,6 +104,7 @@ export function computeBeaconControl({ now = Date.now(), uwb = {}, feedback = {}
       calibrationModel,
       targetYawDeg,
       targetPitchDeg,
+      limited,
       yawDeadbandDeg,
       pitchDeadbandDeg,
       maxYawRateDps,
@@ -94,8 +113,9 @@ export function computeBeaconControl({ now = Date.now(), uwb = {}, feedback = {}
       rateY: 0
     };
   }
-  const yawErrorDeg = normalizeAngleDeg(targetYawDeg - finiteNumber(feedback.yawDeg, 0));
-  const pitchErrorDeg = usePitch ? targetPitchDeg - finiteNumber(feedback.pitchDeg, 0) : 0;
+  const yawDifference = targetYawDeg - finiteNumber(feedback.yawDeg, 0);
+  const yawErrorDeg = boundedYaw ? yawDifference : normalizeAngleDeg(yawDifference);
+  const pitchErrorDeg = usePitch || finiteNumber(config.hold_pitch_deg) !== null ? targetPitchDeg - finiteNumber(feedback.pitchDeg, 0) : 0;
   const activeYawErrorDeg = trimDeadband(yawErrorDeg, yawDeadbandDeg);
   const activePitchErrorDeg = trimDeadband(pitchErrorDeg, pitchDeadbandDeg);
   const rateX = clamp(activeYawErrorDeg * yawGain * yawCommandSign, -maxYawRateDps, maxYawRateDps);
@@ -104,6 +124,7 @@ export function computeBeaconControl({ now = Date.now(), uwb = {}, feedback = {}
   return {
     valid: true,
     reason: 'tracking',
+    pitchHeld,
     uwbAgeMs,
     feedbackAgeMs,
     azimuthDeg,
@@ -112,6 +133,7 @@ export function computeBeaconControl({ now = Date.now(), uwb = {}, feedback = {}
     calibrationModel,
     targetYawDeg,
     targetPitchDeg,
+    limited,
     yawErrorDeg,
     pitchErrorDeg,
     activeYawErrorDeg,

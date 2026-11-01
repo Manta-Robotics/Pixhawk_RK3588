@@ -1,3 +1,4 @@
+import {LastUwbPointApproach} from '../backend/uwb_loss_policy.js';
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -204,7 +205,7 @@ test('production start establishes a neutral ACRO command before exposing an act
   publishUwbFollowState:(_r,active)=>{if(active)events.push('active');},sendMavlinkCommand:()=>{},
   waitForFollowTelemetry:async()=>{},startUwbTestLog:()=>{},addLog:()=>{},
   sendUwbRelativeDrive:r=>{assert.equal(r.forwardSpeedMps,0);assert.equal(r.yawRateDegS,0);events.push('neutral');}};
- vm.runInContext(route,vm.createContext(box));let response;
+ vm.runInContext(route,vm.createContext(Object.assign(box, {lastUwbPointApproach:new LastUwbPointApproach(),UWB_HOLD_ON_POSITION_LOSS:false})));let response;
  await handler({body:{}},{json:r=>response=r,status:()=>{throw Error('Unexpected startup failure');}});
  assert.equal(response.success,true);assert.deepEqual(events,['neutral','active']);
 });

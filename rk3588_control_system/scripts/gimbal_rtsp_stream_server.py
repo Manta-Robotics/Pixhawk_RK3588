@@ -16,7 +16,9 @@ import cv2
 import numpy as np
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-CONFIG = json.loads((PROJECT_DIR / 'config' / 'system.config.json').read_text(encoding='utf-8'))
+CONFIG_PATH = Path(os.environ.get('MANTA_CONFIG_FILE') or os.environ.get('MANTA_CONFIG_PATH')
+                   or PROJECT_DIR / 'config' / 'system.config.json')
+CONFIG = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
 GIMBAL = CONFIG.get('gimbal', {}) if isinstance(CONFIG.get('gimbal', {}), dict) else {}
 VIDEO = GIMBAL.get('video', {}) if isinstance(GIMBAL.get('video', {}), dict) else {}
 
@@ -27,6 +29,9 @@ ENV_INPUT = str(os.environ.get('GIMBAL_VIDEO_INPUT', '')).strip()
 INPUT_URL = ENV_INPUT or RTSP_INPUT
 FRAME_FPS = int(VIDEO.get('fps', 25))
 LOW_LATENCY = bool(VIDEO.get('low_latency', True))
+VIDEO_ROTATION_DEG = int(VIDEO.get('rotation_deg', 0))
+if VIDEO_ROTATION_DEG not in (0, 90, 180, 270):
+    raise SystemExit('gimbal.video.rotation_deg must be 0, 90, 180, or 270')
 FRAME_STALL_SECONDS = max(1.0, float(VIDEO.get('stall_reconnect_seconds', 2.0)))
 MOBILE_WIDTH = max(160, int(VIDEO.get('mobile_width', 960)))
 MOBILE_HEIGHT = max(90, int(VIDEO.get('mobile_height', 540)))
@@ -76,8 +81,11 @@ def build_capture_command() -> list[str]:
         '-analyzeduration', '0',
         '-probesize', '32768',
     ])
+    command.extend(['-i', INPUT_URL])
+    rotation_filter = {90: 'transpose=clock', 180: 'hflip,vflip', 270: 'transpose=cclock'}.get(VIDEO_ROTATION_DEG)
+    if rotation_filter:
+        command.extend(['-vf', rotation_filter])
     command.extend([
-        '-i', INPUT_URL,
         '-r', str(FRAME_FPS),
         '-an',
         '-c:v', 'mjpeg',

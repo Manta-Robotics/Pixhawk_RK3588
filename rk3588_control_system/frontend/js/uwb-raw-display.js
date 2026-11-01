@@ -10,19 +10,22 @@
     (packet.sensors || []).forEach(function (sensor) {
       var key = JSON.stringify([sensor.receiverId, sensor.tagId]);
       var clock = sensor.receivedMeasurementAt, previous = this.samples.get(key);
+      var observation = sensor.rawObservation;
+      if (observation && (observation.at !== clock || observation.tagId !== sensor.tagId)) return;
       if (sensor.valid === false || !finite(clock) || clock > now || now - clock > 700) return;
       var sample = previous;
       // DIST precedes AZ on the forwarding link. Never combine the next DIST
       // with an earlier complete frame's AZ, or retarget on metadata/repaints.
-      var complete = finite(sensor.rawDistanceUpdatedAt) && sensor.rawDistanceUpdatedAt <= clock;
+      var complete = observation || (finite(sensor.rawDistanceUpdatedAt) && sensor.rawDistanceUpdatedAt <= clock);
       if ((!previous || previous.at !== clock) && complete) {
-        if (!finite(sensor.rawDistanceM) || sensor.rawDistanceM <= 0
-          || !finite(sensor.rawAzimuthDeg) || Math.abs(sensor.rawAzimuthDeg) > 180) return;
-        var angle = (sensor.rawAzimuthDeg + (finite(sensor.mountYawDeg) ? sensor.mountYawDeg : 0)) * Math.PI / 180;
+        var distance = observation ? observation.distanceM : sensor.rawDistanceM;
+        var azimuth = observation ? observation.azimuthDeg : sensor.rawAzimuthDeg;
+        if (!finite(distance) || distance <= 0 || !finite(azimuth) || Math.abs(azimuth) > 180) return;
+        var angle = (azimuth + (finite(sensor.mountYawDeg) ? sensor.mountYawDeg : 0)) * Math.PI / 180;
         sample = { valid: true, at: clock, receiverId: sensor.receiverId, tagId: sensor.tagId,
-          distanceM: sensor.rawDistanceM, azimuthDeg: sensor.rawAzimuthDeg,
-          forward: (finite(sensor.positionXM) ? sensor.positionXM : 0) + sensor.rawDistanceM * Math.cos(angle),
-          left: (finite(sensor.positionYM) ? sensor.positionYM : 0) + sensor.rawDistanceM * Math.sin(angle) };
+          distanceM: distance, azimuthDeg: azimuth,
+          forward: (finite(sensor.positionXM) ? sensor.positionXM : 0) + distance * Math.cos(angle),
+          left: (finite(sensor.positionYM) ? sensor.positionYM : 0) + distance * Math.sin(angle) };
       }
       if (!sample || sample.at > now || now - sample.at > 700) return;
       next.set(key, sample);
@@ -30,6 +33,13 @@
       if (!result || sample.at > result.at) result = sample;
     }, this);
     this.samples = next;
+    if (result && packet.coordinateCalibration) {
+      // Keep cached module geometry and numeric diagnostics unchanged. Only
+      // the plotted point uses the same body calibration as measured/predicted.
+      var body = root.MantaUwbCoordinates.bodyPosition(Math.hypot(result.forward, result.left),
+        Math.atan2(result.left, result.forward) * 180 / Math.PI, packet.coordinateCalibration);
+      return body ? Object.assign({}, result, { forward: body.x, left: -body.y }) : { valid: false };
+    }
     return result || { valid: false };
   };
   root.MantaUwbRawDisplay = RawDisplay;

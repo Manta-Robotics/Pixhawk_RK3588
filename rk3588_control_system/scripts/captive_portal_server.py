@@ -2,18 +2,21 @@
 
 import http.server
 import json
+import os
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from urllib.parse import urlsplit
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-CONFIG = json.loads((PROJECT_DIR / 'config' / 'system.config.json').read_text(encoding='utf-8'))
+CONFIG_FILE = Path(os.environ.get('MANTA_CONFIG_FILE') or PROJECT_DIR / 'config' / 'system.config.json')
+CONFIG = json.loads(CONFIG_FILE.read_text(encoding='utf-8'))
 HOTSPOT = CONFIG.get('hotspot', {})
 PORTAL_IP = str(HOTSPOT.get('portal_ip', '10.42.0.1'))
 PORTAL_PORT = int(HOTSPOT.get('portal_port', 80))
 DASHBOARD_PORT = int(CONFIG.get('web_port', 3000))
 TARGET_URL = f'http://{PORTAL_IP}:{DASHBOARD_PORT}'
 LISTEN_HOST = '0.0.0.0'
+AUTO_OPEN = os.environ.get('MANTA_CAPTIVE_AUTO_OPEN', '0').strip().lower() in ('1', 'true', 'yes', 'on')
 
 CONNECTIVITY_RESPONSES = {
     '/hotspot-detect.html': ('text/html; charset=utf-8', '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>'),
@@ -27,7 +30,7 @@ CONNECTIVITY_RESPONSES = {
 NO_CONTENT_PATHS = {'/generate_204', '/gen_204'}
 
 PORTAL_HTML = f'''<!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -44,8 +47,8 @@ PORTAL_HTML = f'''<!DOCTYPE html>
 <body>
   <main class="card">
     <h1>Manta Control</h1>
-    <p>Your phone is connected to the LubanCat hotspot. Tap the button below to open the control dashboard.</p>
-    <a href="{TARGET_URL}">Open Dashboard</a>
+    <p>已连接 Manta 热点，正在进入控制页面。如未自动跳转，请点击下方按钮。</p>
+    <a href="{TARGET_URL}">进入控制页面</a>
   </main>
 </body>
 </html>
@@ -80,18 +83,25 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(302)
         self.send_header('Location', location)
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', '0')
         self.end_headers()
 
     def do_GET(self):
         path = urlsplit(self.path).path
 
         if path == '/healthz':
-            payload = json.dumps({'ok': True, 'targetUrl': TARGET_URL}).encode('utf-8')
+            payload = json.dumps({'ok': True, 'targetUrl': TARGET_URL, 'autoOpen': AUTO_OPEN}).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+            return
+
+        # A redirect makes the operating system offer its captive-network page.
+        # Keep the existing connectivity responses unless this mode is enabled.
+        if AUTO_OPEN:
+            self._redirect(TARGET_URL)
             return
 
         if path in NO_CONTENT_PATHS:
@@ -116,6 +126,10 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.end_headers()
+            return
+
+        if AUTO_OPEN:
+            self._redirect(TARGET_URL)
             return
 
         if path in NO_CONTENT_PATHS:
@@ -150,5 +164,5 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     server = ThreadingHTTPServer((LISTEN_HOST, PORTAL_PORT), PortalHandler)
-    print(f'[portal] Listening on http://{LISTEN_HOST}:{PORTAL_PORT} -> {TARGET_URL}')
+    print(f'[portal] Listening on http://{LISTEN_HOST}:{PORTAL_PORT} -> {TARGET_URL}; autoOpen={AUTO_OPEN}', flush=True)
     server.serve_forever()

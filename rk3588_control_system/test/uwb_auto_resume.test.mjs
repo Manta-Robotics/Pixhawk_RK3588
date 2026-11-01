@@ -1,3 +1,4 @@
+import {LastUwbPointApproach} from '../backend/uwb_loss_policy.js';
 import {UwbGpsDriftHold} from '../backend/uwb_gps_drift_hold.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -83,7 +84,7 @@ function server(){
   sendUwbRelativeDrive:r=>{commands.push(['DRIVE',r.forwardSpeedMps,r.yawRateDegS]);return {safe:true,throttle:r.throttlePercent,steering:r.steeringDegrees};},
   maintainUwbHoldingMode:()=>true,maintainUwbResumeTransition:()=>{},resetUwbHoldTransition:()=>{},
   startUwbTestLog:()=>{},finishUwbTestLog:()=>{},recordUwbTestSample:()=>{},addLog:()=>{}};
- const context=vm.createContext(box);
+ const context=vm.createContext(Object.assign(box, {lastUwbPointApproach:new LastUwbPointApproach(),UWB_HOLD_ON_POSITION_LOSS:false}));
  const stop=source.slice(source.indexOf('function stopUwbFollow('),source.indexOf('function selectUwbTrackingMethod('));
  const loop=source.slice(source.indexOf('function maintainUwbAutoResume('),source.indexOf('function updateTelemetry('));
  const route=source.slice(source.indexOf("app.post('/api/uwb-follow/start'"),source.indexOf("app.post('/api/uwb-follow/stop'"));

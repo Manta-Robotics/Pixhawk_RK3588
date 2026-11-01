@@ -1,3 +1,4 @@
+import { PATH_FOLLOW_DEFAULTS } from './uwb_path_follow.js';
 import { TraditionalFastGuidance } from './traditional_fast_guidance.js';
 import { usableControlEstimate } from './uwb_target_prediction.js';
 import { RelativeImuControl } from './uwb_relative_imu.js';
@@ -51,6 +52,7 @@ export class UwbFollowController {
   constructor(config = {}) {
     this.config = {
       prediction: config.prediction || {},
+      pathFollow: {...PATH_FOLLOW_DEFAULTS,...config.path_follow,enabled:config.path_follow?.enabled===true},
       manualPropulsion: config.manual_propulsion === 'single_side',
       executionMode: ['acro','relative_imu'].includes(config.execution_mode) ? config.execution_mode : null,
       relativeNmpc: {

@@ -34,20 +34,31 @@ export function limitOutgoingGimbalFrame(frame, options = {}) {
 
   const pitchMinDeg = Number(options.pitchMinDeg ?? -150);
   const pitchMaxDeg = Number(options.pitchMaxDeg ?? 150);
+  const yawMinDeg = Number(options.yawMinDeg ?? -135);
+  const yawMaxDeg = Number(options.yawMaxDeg ?? 135);
   const ratePitchMinDeg = Number(options.ratePitchMinDeg ?? pitchMinDeg);
   const brakeDeg = Math.max(0.5, Number(options.softLimitBrakeDeg || 5));
   const now = Number(options.now ?? Date.now());
   const feedbackMaxAgeMs = Math.max(50, Number(options.feedbackMaxAgeMs || 300));
   const feedback = options.feedback || {};
-  const feedbackFresh = feedback.checksumValid !== false
-    && Number.isFinite(Number(feedback.pitchDeg))
-    && Number(feedback.updatedAt) > 0
-    && now - Number(feedback.updatedAt) <= feedbackMaxAgeMs;
+  const age = now - feedback.updatedAt;
+  const feedbackFresh = feedback.checksumValid === true
+    && Number.isFinite(feedback.pitchDeg)
+    && Number.isFinite(feedback.yawDeg)
+    && Number.isFinite(feedback.updatedAt) && feedback.updatedAt > 0
+    && age >= 0 && age <= feedbackMaxAgeMs;
   const output = Buffer.from(frame);
   let limited = false;
   let reason = '';
 
   if (output[2] === 0x72 || output[2] === 0x80) {
+    const yaw = output.readInt16LE(3) / 100;
+    const safeYaw = clamp(yaw, yawMinDeg, yawMaxDeg);
+    if (safeYaw !== yaw) {
+      output.writeInt16LE(Math.round(safeYaw * 100), 3);
+      limited = true;
+      reason = 'absolute_yaw_limit';
+    }
     const requested = output.readInt16LE(5) / 100;
     const safe = clamp(requested, pitchMinDeg, pitchMaxDeg);
     if (safe !== requested) {
@@ -58,14 +69,17 @@ export function limitOutgoingGimbalFrame(frame, options = {}) {
   }
 
   if (output[37] === 0x70) {
-    const requested = output.readInt16LE(40);
-    const safe = feedbackFresh
-      ? limitRateAtAngle(requested, Number(feedback.pitchDeg), ratePitchMinDeg, pitchMaxDeg, brakeDeg)
-      : (requested < 0 ? 0 : requested);
-    if (safe !== requested) {
-      output.writeInt16LE(safe, 40);
-      limited = true;
-      reason = feedbackFresh ? 'rate_pitch_limit' : 'rate_pitch_feedback_guard';
+    for (const [offset, angle, min, max, axis] of [
+      [38, feedback.yawDeg, yawMinDeg, yawMaxDeg, 'yaw'],
+      [40, feedback.pitchDeg, ratePitchMinDeg, pitchMaxDeg, 'pitch']
+    ]) {
+      const requested = output.readInt16LE(offset);
+      const safe = feedbackFresh ? limitRateAtAngle(requested, angle, min, max, brakeDeg) : 0;
+      if (safe !== requested) {
+        output.writeInt16LE(safe, offset);
+        limited = true;
+        reason = feedbackFresh ? `rate_${axis}_limit` : `rate_${axis}_feedback_guard`;
+      }
     }
   }
 

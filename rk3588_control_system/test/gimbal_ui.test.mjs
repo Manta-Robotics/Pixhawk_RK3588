@@ -78,14 +78,9 @@ test('home command writes immediately when UART is already open without feedback
   assert.match(body, /sendGimbalHome\('web'/);
 });
 
-test('Beacon calibration and tracking use commanded absolute angles without feedback', () => {
-  const start = server.indexOf('function startBeaconCalibrationSession()');
-  const collect = server.indexOf('async function collectBeaconCalibrationReading()', start);
-  const capture = server.indexOf('async function captureBeaconCalibrationPoint()', collect);
-  const end = server.indexOf('function planGimbalClickMove(', capture);
-  assert.doesNotMatch(server.slice(start, end), /Gimbal feedback|gimbalState\.feedback|feedback\.checksumValid/);
-  assert.match(server.slice(collect, capture), /gimbalYawDeg: Number\(point\.yawDeg\)/);
-  assert.match(server, /rawDesired\.absoluteAngle[\s\S]*command: 0x72/);
-  assert.match(mobileHtml, /state\.gimbalMode!=="beacon"\|\|!state\.gimbalOutputAvailable/);
-  assert.doesNotMatch(mobileHtml, /九点校准需要云台姿态反馈|feedback wire/);
+test('calibration requires measured SIYI pose while the legacy serial fallback remains available', async () => {
+  const { calibrationGimbalPose } = await import('../backend/beacon_calibration_input.js');
+  assert.throws(() => calibrationGimbalPose(null, {yawDeg: 0, pitchDeg: 0}, 1000, true), /feedback/);
+  assert.deepEqual(calibrationGimbalPose(null, {yawDeg: 12, pitchDeg: 3}, 1000, false),
+    {gimbalYawDeg: 12, gimbalPitchDeg: 3, feedbackVerified: false});
 });

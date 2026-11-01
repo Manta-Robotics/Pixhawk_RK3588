@@ -8,7 +8,7 @@ const functions=html.slice(html.indexOf('function uwbFollowIsStarting()'),html.i
 function ui(follow={}){
  const elements=new Map();const el=id=>{if(!elements.has(id))elements.set(id,{textContent:'',disabled:false,classList:{toggle(){}},setAttribute(){}});return elements.get(id);};
  const calls=[];let handler;
- const box={state:{driveMode:'auto',connected:true,controlLink:true,uwb:{online:false,fresh:false},uwbFollow:follow},
+ const box={window:{},driveModeGeneration:0,state:{driveMode:'auto',connected:true,controlLink:true,uwb:{online:false,fresh:false},uwbFollow:follow},
   $:el,$$:()=>[],pageCanControl:()=>true,renderRelativePosition(){},localize:zh=>zh,showToast:message=>calls.push(['toast',message]),
   ensureTransport:()=>({startUwbFollow:async()=>{calls.push(['start']);return {searching:true};},stopUwbFollow:()=>{calls.push(['stop']);return Promise.resolve();}})};
  const context=vm.createContext(box);vm.runInContext(functions,context);

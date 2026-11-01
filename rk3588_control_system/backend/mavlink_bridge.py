@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from experiment_tap import record_mavlink
 from uwb_fusion import DualUwbFusion
 from uwb_measurement_filter import GatedUwbKalman, DEFAULTS as UWB_FILTER_DEFAULTS
 from rover_pilot_mapping import motor_target_axes, valid_pilot_type
@@ -308,6 +309,7 @@ class MAVLinkBridge:
             switch_blend_ms=uwb_dual_config.get('switch_blend_ms', 180),
             enabled_receiver_ids=uwb_dual_config.get('enabled_receiver_ids', (1, 2)),
             require_gated_measurements=self.uwb_filter_enabled,
+            ordered_observations=True,
         )
         self._uwb_measurement_filters = {
             receiver_id: GatedUwbKalman(
@@ -364,6 +366,8 @@ class MAVLinkBridge:
         self._last_battery_state = 'UNKNOWN'
         self._last_gps_fix_reported: Optional[bool] = None
         self._last_log_sent_at: Dict[str, float] = {}
+        self._propulsion_lease = None
+        self.command_timeout_s = 0.35
 
     def _param_name(self, raw_name: Any) -> str:
         if isinstance(raw_name, bytes):
@@ -397,7 +401,8 @@ class MAVLinkBridge:
         sample_time_boot_ms: Optional[int] = None,
     ) -> None:
         now_ms = int(time.time() * 1000)
-        updated = self.uwb_fusion.update(name, value, source=source, now_ms=now_ms)
+        updated = self.uwb_fusion.update(name, value, source=source, now_ms=now_ms,
+            sample_time_boot_ms=sample_time_boot_ms)
         if updated is None:
             parsed = self.uwb_fusion.parse_name(name)
             if self.uwb_filter_enabled and parsed and parsed[1] in ('DIST', 'AZ', 'EL') and not math.isfinite(value):
@@ -519,6 +524,7 @@ class MAVLinkBridge:
             getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_SYS_STATUS', 1): 5.0,
             getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_EKF_STATUS_REPORT', 193): 5.0,
             getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_HIGHRES_IMU', 105): 10.0,
+            getattr(mavutil.mavlink, 'MAVLINK_MSG_ID_SCALED_IMU', 26): 20.0,
         }
 
         esc_groups = {
@@ -1316,6 +1322,26 @@ class MAVLinkBridge:
         if channel_has_feedback(self.rover_right_output_channel):
             self.flight_data.motor_right_esc_updated_at = now_ms
 
+    def _remember_propulsion(self, kind, first, second, sent):
+        if sent:
+            self._propulsion_lease = (kind, time.monotonic()) if first != 0 or second != 0 else None
+
+    def _expire_propulsion_lease(self, force=False, now=None):
+        lease = getattr(self, '_propulsion_lease', None)
+        if lease is None:
+            return False
+        now = time.monotonic() if now is None else now
+        if not force and now - lease[1] <= getattr(self, 'command_timeout_s', .35):
+            return False
+        # Stop using the active protocol: MANUAL_CONTROL alone cannot clear a
+        # velocity target retained by GUIDED mode. Clear before calling a sender.
+        self._propulsion_lease = None
+        sender = {'drive': self._send_rover_drive, 'acro': self._send_rover_acro,
+                  'ned': self._send_rover_velocity_ned, 'body': self._send_rover_body_velocity}[lease[0]]
+        sender(0.0, 0.0)
+        logger.warning('Propulsion command lease expired; neutral command sent')
+        return True
+
     def _handle_command_packet(self, raw_data: bytes) -> None:
         try:
             packet = json.loads(raw_data.decode('utf-8'))
@@ -1323,12 +1349,36 @@ class MAVLinkBridge:
             logger.error('Invalid command packet: %s', exc)
             return
 
+        if not isinstance(packet, dict) or not isinstance(packet.get('params', {}), dict):
+            logger.warning('Ignored malformed command object')
+            return
         command = str(packet.get('command', '')).upper().strip()
         params = packet.get('params', {}) or {}
+        motion_fields = {
+            'ROVER_DRIVE': ('throttle', 'steering', 'throttlePwm', 'steeringPwm'),
+            'ROVER_ACRO': ('forwardSpeedMps', 'yawRateDegS'),
+            'ROVER_VELOCITY_NED': ('vx', 'vy'),
+            'ROVER_BODY_VELOCITY': ('forwardSpeedMps', 'yawRateRadS'),
+        }
+        fields = motion_fields.get(command, ())
+        if any(isinstance(params[key], bool) or not isinstance(params[key], (int, float))
+               or not math.isfinite(params[key]) for key in fields if key in params):
+            logger.warning('Ignored invalid numeric propulsion command')
+            return
+        if fields and 'timestamp' in packet:
+            stamp = packet['timestamp']
+            if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
+                return
+            age = time.time() - stamp / 1000.0
+            nonneutral = any(params.get(key, 0) != 0 for key in fields)
+            if nonneutral and (age < -.1 or age > getattr(self, 'command_timeout_s', .35)):
+                logger.warning('Ignored expired propulsion command')
+                return
 
         if command == 'ROVER_ACRO':
             try:
-                self._send_rover_acro(float(params.get('forwardSpeedMps', 0)), float(params.get('yawRateDegS', 0)))
+                first, second = float(params.get('forwardSpeedMps', 0)), float(params.get('yawRateDegS', 0))
+                self._remember_propulsion('acro', first, second, self._send_rover_acro(first, second))
             except (ValueError, TypeError):
                 self._send_rover_drive(0.0, 0.0)
             return
@@ -1351,21 +1401,18 @@ class MAVLinkBridge:
                 steering = self.rover_steering_min + (steering_pwm - 1000) * (
                     self.rover_steering_max - self.rover_steering_min
                 ) / 1000.0
-            self._send_rover_drive(throttle, steering, bool(params.get('motorTargetSemantics', False)))
+            self._remember_propulsion('drive', throttle, steering,
+                                     self._send_rover_drive(throttle, steering, params.get('motorTargetSemantics') is True))
             return
 
         if command == 'ROVER_VELOCITY_NED':
-            self._send_rover_velocity_ned(
-                float(params.get('vx', 0.0)),
-                float(params.get('vy', 0.0)),
-            )
+            first, second = float(params.get('vx', 0.0)), float(params.get('vy', 0.0))
+            self._remember_propulsion('ned', first, second, self._send_rover_velocity_ned(first, second))
             return
 
         if command == 'ROVER_BODY_VELOCITY':
-            self._send_rover_body_velocity(
-                float(params.get('forwardSpeedMps', 0.0)),
-                float(params.get('yawRateRadS', 0.0)),
-            )
+            first, second = float(params.get('forwardSpeedMps', 0.0)), float(params.get('yawRateRadS', 0.0))
+            self._remember_propulsion('body', first, second, self._send_rover_body_velocity(first, second))
             return
 
         if command == 'SET_MODE':
@@ -1377,6 +1424,7 @@ class MAVLinkBridge:
             return
 
         if command == 'DISARM':
+            self._expire_propulsion_lease(force=True)
             self._arm_disarm(False)
             return
 
@@ -1391,6 +1439,8 @@ class MAVLinkBridge:
             return
 
         if command == 'EMERGENCY_STOP':
+            self._expire_propulsion_lease(force=True)
+            self._propulsion_lease = None
             self._send_rover_drive(0.0, 0.0)
             self._arm_disarm(False)
             return
@@ -1410,6 +1460,7 @@ class MAVLinkBridge:
             self._handle_command_packet(raw_data)
 
     def _parse_message(self, msg: Any) -> None:
+        record_mavlink(msg, getattr(self, 'target_system', None), getattr(self, 'target_component', None))
         msg_type = msg.get_type()
 
         if msg_type == 'PARAM_VALUE':
@@ -1872,6 +1923,7 @@ class MAVLinkBridge:
 
                 self._poll_mavlink()
                 self._poll_commands()
+                self._expire_propulsion_lease()
                 self._poll_mission_planner()
                 self._request_pilot_steer_type()
                 self._request_acro_parameters()
@@ -1897,6 +1949,7 @@ class MAVLinkBridge:
         except KeyboardInterrupt:
             logger.info('Keyboard interrupt received, stopping bridge')
         finally:
+            self._expire_propulsion_lease(force=True)
             self.disconnect()
 
 
@@ -1944,6 +1997,7 @@ def main() -> None:
             mission_planner_tcp_config=mission_planner_tcp_config,
         )
 
+        bridge.command_timeout_s = max(.2, float(config.get('rover_command_timeout_ms', 350)) / 1000.0)
         if bridge.connect(timeout=8.0):
             bridge.run()
             logger.warning('Bridge disconnected from Pixhawk, retrying in 2 seconds...')

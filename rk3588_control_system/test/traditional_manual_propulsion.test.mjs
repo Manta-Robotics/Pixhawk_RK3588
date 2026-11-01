@@ -154,7 +154,7 @@ test('real server traditional sender uses the joystick sender and marks motor ta
     sendMavlinkCommand: (command, params) => calls.push({ command, params }),
     forceNeutralRoverControl: () => calls.push({ command: 'neutral' })
   };
-  vm.createContext(sandbox);
+  vm.createContext(Object.assign(sandbox, {emitDashboardState:()=>{}}));
   vm.runInContext(functions, sandbox);
   vm.runInContext("sendUwbRelativeDrive({ controlMode: 'relative_manual', safe: true, throttlePercent: 20, steeringDegrees: 0 })", sandbox);
   assert.equal(calls.length, 1);

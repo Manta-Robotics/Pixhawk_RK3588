@@ -24,6 +24,7 @@ test('lost raw UWB still renders an explicitly labelled dashed predicted target'
   vm.runInContext('var transport=null;\n'+html.slice(html.indexOf('function uwbDisplayIdentity('),html.indexOf('function renderUwbStatus(){')),context);
   vm.runInContext('var window=globalThis;\n' + fs.readFileSync(new URL('../frontend/js/uwb-display-smoother.js', import.meta.url), 'utf8'), context);
   vm.runInContext(fs.readFileSync(new URL('../frontend/js/uwb-raw-display.js', import.meta.url), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(new URL('../frontend/js/uwb-radar-geometry.js', import.meta.url), 'utf8'), context);
   vm.runInContext(html.slice(html.indexOf('var uwbDisplaySmoother='), html.indexOf('function renderRelativePosition(){')), context);
   const fn = html.slice(html.indexOf('function renderRelativePosition(){'), html.indexOf('function currentMapLocation(){'));
   vm.runInContext(fn + '\nrenderRelativePosition();', context);
@@ -47,10 +48,10 @@ test('lost raw UWB still renders an explicitly labelled dashed predicted target'
   state.connected = false;
   vm.runInContext('renderRelativePosition()', context);
   assert.equal($('#relativePositionPanel').dataset.state, 'offline');
-  assert.equal(vm.runInContext('uwbDisplaySmoother.angle', context), null);
+  assert.equal($('#relativeTargetPoint').attributes.visibility, 'hidden');
 });
 
-test('rejected fresh raw position is visible alongside an independently admitted position', () => {
+test('rejected diagnostics never become the admitted radar target', () => {
   const elements = new Map(), $ = id => {
     if (!elements.has(id)) elements.set(id, { style: {}, dataset: {}, attributes: {}, classList: { toggle() {} },
       setAttribute(k, v) { this.attributes[k] = v; } });
@@ -65,28 +66,25 @@ test('rejected fresh raw position is visible alongside an independently admitted
   const context = vm.createContext({ state, $, Date: { now: () => now }, localize: zh => zh,
     clamp: (x, lo, hi) => Math.min(hi, Math.max(lo, x)) });
   vm.runInContext('var transport=null;\n'+html.slice(html.indexOf('function uwbDisplayIdentity('),html.indexOf('function renderUwbStatus(){')),context);
-  for (const name of ['uwb-display-smoother', 'uwb-raw-display']) {
+  for (const name of ['uwb-display-smoother', 'uwb-raw-display', 'uwb-radar-geometry']) {
     vm.runInContext('var window=globalThis;\n' + fs.readFileSync(new URL('../frontend/js/' + name + '.js', import.meta.url), 'utf8'), context);
   }
   vm.runInContext(html.slice(html.indexOf('var uwbDisplaySmoother='), html.indexOf('function currentMapLocation(){')), context);
   const before = structuredClone(state);
   vm.runInContext('renderRelativePosition()', context);
-  assert.equal($('#relativePositionPanel').dataset.state, 'raw-only');
-  assert.equal($('#relativeRawPoint').attributes.visibility, 'visible');
+  assert.equal($('#relativePositionPanel').dataset.state, 'offline');
+  assert.equal($('#relativeRawPoint').attributes.visibility, 'hidden');
   assert.equal($('#relativeTargetPoint').attributes.visibility, 'hidden');
-  assert.equal($('#relativeRawValue').textContent, '1.11 m / 11.0°');
-  assert.equal($('#relativeRawLabel').textContent, '○ 原始·基站1');
-  assert.match($('#relativeDecision').textContent, /未接纳：突跳隔离/);
-  assert.match($('#relativeRangeValue').textContent, /拒收/);
+  assert.match($('#relativeDecision').textContent, /无新鲜定位帧/);
   assert.deepEqual(state, before); // Display cannot change admission or control.
   Object.assign(state.uwb, { online: true, fresh: true, measurementStatus: 'trusted',
     measurementUpdatedAt: now, distanceM: 1.2, azimuthDeg: 10 });
   vm.runInContext('renderRelativePosition()', context);
   assert.equal($('#relativePositionPanel').dataset.state, 'online');
-  assert.equal($('#relativeRawPoint').attributes.visibility, 'visible');
+  assert.equal($('#relativeRawPoint').attributes.visibility, 'hidden');
   assert.equal($('#relativeTargetPoint').attributes.visibility, 'visible');
-  assert.notEqual($('#relativeRawPoint').attributes.cx, $('#relativeTargetPoint').attributes.cx);
-  assert.equal($('#relativeRangeValue').textContent, '1.20 m / 10.0°');
+  assert.ok(Number.isFinite(Number($('#relativeTargetPoint').attributes.cx)));
+  assert.match($('#relativeRangeValue').textContent, /1.20 m/);
   state.connected = false;
   vm.runInContext('renderRelativePosition()', context);
   assert.equal($('#relativeRawPoint').attributes.visibility, 'hidden');

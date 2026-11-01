@@ -1,0 +1,13 @@
+{
+  "directory": "./data/experiment_logs",
+  "rate_hz": 10,
+  "motor_channels": [
+    1,
+    3
+  ],
+  "neutral_pwm": 1500,
+  "neutral_deadband_pwm": 25,
+  "rotate_seconds": 900,
+  "min_free_gb": 2,
+  "max_total_gb": 20
+}

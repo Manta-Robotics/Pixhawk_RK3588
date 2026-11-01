@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import { startExperimentSnapshot } from './experiment_snapshot.js';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
 import path from 'path';
@@ -11,6 +12,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import bodyParser from 'body-parser';
 import dgram from 'dgram';
+import { UwbUsbWorkerSource } from './uwb_usb_worker_source.js';
 import { spawn } from 'child_process';
 import { createAsyncHealth } from './async_health.js';
 import net from 'net';
@@ -21,15 +23,21 @@ import { Bonjour } from 'bonjour-service';
 import { validateSystemConfig } from '../scripts/validate_config.mjs';
 import { isSameOriginRequest, rejectCrossOrigin } from './origin_policy.js';
 import { createControlAccess, loadControlPin } from './control_access.js';
+import { createGimbalWebrtcProxy } from './gimbal_webrtc_proxy.js';
+import { WifiLatestDelivery, WIFI_COMPRESSION, restrictCompressionToWifi, emitWifiAwareState } from './wifi_latest_delivery.js';
 import { computeBeaconControl, normalizeAngleDeg } from './gimbal_beacon.js';
-import { fitBeaconCalibration, generateBeaconCalibrationPoints } from './gimbal_beacon_calibration.js';
+import { fitBeaconCalibration, generateBeaconCalibrationPoints, assertBeaconCalibrationGrid } from './gimbal_beacon_calibration.js';
+import { calibrationUwbObservation, calibrationGimbalPose } from './beacon_calibration_input.js';
+import { summarizeBeaconCalibrationReadings } from './beacon_calibration_sampling.js';
 import { shapeRoverAxis } from './rover_slew.js';
 import { DualThrustRoverLimiter } from './dual_thrust_rover.js';
 import { TraditionalManualPropulsion } from './traditional_manual_propulsion.js';
 import { UwbFollowController } from './uwb_follow.js';
 import { IntermittentUwbFollow } from './uwb_target_prediction.js';
-import { UwbRawControl } from './uwb_raw_control.js';
+import { SmoothedUwbPath } from './uwb_path_integration.js';
+import { SmoothedUwbOutput } from './uwb_smoothed_output.js';
 import { UwbAutoResume } from './uwb_auto_resume.js';
+import { LastUwbPointApproach } from './uwb_loss_policy.js';
 import { UwbGpsDriftHold } from './uwb_gps_drift_hold.js';
 import { NeuralUwbFollowController } from './neural_uwb_follow.js';
 import { NeuralManualPropulsion } from './neural_manual_propulsion.js';
@@ -42,6 +50,7 @@ import {
   resetGimbalLinkHealth
 } from './gimbal_link_health.js';
 import { limitOutgoingGimbalFrame } from './gimbal_frame_limits.js';
+import { trackerControlPixels } from './gimbal_geometry.js';
 import { SiyiGimbal, decodeSiyiPackets } from './siyi_gimbal.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -93,6 +102,9 @@ const cameraConfig = config.camera || {};
 const gimbalConfig = config.gimbal || {};
 const GIMBAL_BEACON_CONFIG = gimbalConfig.beacon || {};
 const UWB_FOLLOW_CONFIG = config.uwb_follow || {};
+const UWB_HOLD_ON_POSITION_LOSS = UWB_FOLLOW_CONFIG.uwb_loss_action === 'last_point_model';
+const UWB_USB_ENABLED = config.uwb_usb?.enabled === true;
+const usbUwbSource = UWB_USB_ENABLED ? new UwbUsbWorkerSource(config.uwb_usb, config.uwb_dual) : null;
 const UWB_ACRO = UWB_FOLLOW_CONFIG.execution_mode === 'acro';
 const UWB_RELATIVE_IMU = UWB_FOLLOW_CONFIG.execution_mode === 'relative_imu';
 const UWB_RELATIVE_NMPC = UWB_RELATIVE_IMU && UWB_FOLLOW_CONFIG.relative_nmpc?.enabled === true;
@@ -105,14 +117,16 @@ const uwbControllerConfig = {
   bearing_offset_deg: GIMBAL_BEACON_CONFIG.yaw_offset_deg ?? UWB_FOLLOW_CONFIG.bearing_offset_deg,
   neural_model_path: path.resolve(PROJECT_ROOT, UWB_FOLLOW_CONFIG.neural_model_path || 'models/smart_usv_uwb_policy.json')
 };
-const rawUwbControl = new UwbRawControl({
-  ...config.uwb_dual, timeout_ms: UWB_FOLLOW_CONFIG.uwb_timeout_ms
-});
+const smoothedUwbOutput = new SmoothedUwbOutput();
+// Coordinate admission and controller selection are independent settings.
+const directUwbGuidance = UWB_FOLLOW_CONFIG.direct_control ?? (UWB_FOLLOW_CONFIG.control_input === 'raw');
 const intermittentUwbFollow = new IntermittentUwbFollow(UWB_FOLLOW_CONFIG.prediction, uwbControllerConfig);
 const uwbAutoResume = new UwbAutoResume(uwbControllerConfig);
+const lastUwbPointApproach = new LastUwbPointApproach(uwbControllerConfig);
 const uwbGpsDriftHold = new UwbGpsDriftHold(uwbControllerConfig);
 let startUwbFollowRequest = null;
 const traditionalUwbFollowController = new UwbFollowController({ ...uwbControllerConfig, manual_propulsion: 'single_side' });
+const uwbPathPlanner = new SmoothedUwbPath(traditionalUwbFollowController.config);
 let neuralUwbFollowController = null;
 let neuralUwbFollowLoadError = null;
 try {
@@ -279,8 +293,15 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   allowRequest: (request, callback) => callback(null, isSameOriginRequest(request)),
   transports: ['polling', 'websocket'],
-  perMessageDeflate: false
+  perMessageDeflate: WIFI_COMPRESSION
 });
+
+const wirelessAddresses = () => os.networkInterfaces()[String(config.wireless_interface || 'wlan0')] || [];
+restrictCompressionToWifi(io, wirelessAddresses);
+const wifiDelivery = new WifiLatestDelivery({ wirelessAddresses, maxInFlight: 2 });
+function emitDashboardState(event, value, options) {
+  emitWifiAwareState(io, wifiDelivery, event, value, options);
+}
 
 const controlAccess = createControlAccess({
   pin: loadControlPin(PROJECT_ROOT),
@@ -312,7 +333,10 @@ const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
 
 const GIMBAL_PROTOCOL = String(gimbalConfig.protocol || 'ztd095').toLowerCase();
 const IS_SIYI = GIMBAL_PROTOCOL === 'siyi';
-const siyiGimbal = IS_SIYI ? new SiyiGimbal(gimbalConfig.siyi || {}) : null;
+const siyiGimbal = IS_SIYI ? new SiyiGimbal({ ...gimbalConfig.siyi,
+  pitch_min_deg: gimbalConfig.axis?.pitch_min_deg,
+  pitch_max_deg: gimbalConfig.axis?.pitch_max_deg
+}) : null;
 let siyiPollTimer = null;
 const GIMBAL_FRAME_LENGTH = 44;
 const GIMBAL_COMMAND_HZ = Math.max(1, Number(gimbalConfig.command_hz || 25));
@@ -478,6 +502,7 @@ const gimbalState = {
   model: String(gimbalConfig.model || 'ZTD095'),
   capabilities: { osd: !IS_SIYI, laserRange: !IS_SIYI, cameraDetector: !IS_SIYI, cameraSdRecording: !IS_SIYI },
   videoMirrorX: gimbalVideoConfig.mirror_x !== false,
+  controlGeometry: { width: GIMBAL_CALIB_WIDTH, height: GIMBAL_CALIB_HEIGHT },
   transport: GIMBAL_CONTROL_TRANSPORT,
   serialPort: GIMBAL_SERIAL_PORT,
   baudRate: GIMBAL_BAUD_RATE,
@@ -500,6 +525,8 @@ const gimbalState = {
   beacon: {
     enabled: GIMBAL_BEACON_CONFIG.enabled !== false,
     dryRun: GIMBAL_BEACON_DRY_RUN,
+    pitchControlEnabled: GIMBAL_BEACON_CONFIG.use_pitch !== false,
+    pitchHoldDeg: asFiniteNumber(GIMBAL_BEACON_CONFIG.hold_pitch_deg, null),
     calibrationRequired: GIMBAL_BEACON_CONFIG.calibration_required === true,
     yawSourceScale: Number(GIMBAL_BEACON_CONFIG.yaw_source_scale || 1),
     pitchSourceScale: Number(GIMBAL_BEACON_CONFIG.pitch_source_scale || 1),
@@ -524,6 +551,7 @@ let gimbalBeaconCalibrationState = {
   point: null,
   samples: [],
   result: null,
+  resumeBeaconTracking: false,
   message: ''
 };
 let gimbalBeaconSourceGuard = null;
@@ -896,9 +924,10 @@ const systemState = {
       distanceM: null,
       azimuthDeg: null,
       elevationDeg: null,
-      rawDistanceM: null,
-      rawAzimuthDeg: null,
-      rawElevationDeg: null,
+      coordinateSource: 'smoothed',
+      controlSource: 'smoothed',
+      elevationValid: false,
+      elevationStatus: 'unverified_protocol_field',
       goodCount: 0,
       updatedAt: null,
       receiverCount: 0,
@@ -958,6 +987,11 @@ app.use(bodyParser.json({ limit: '1mb', inflate: false }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '64kb', parameterLimit: 100, inflate: false }));
 controlAccess.installRoutes(app);
 app.use('/api', controlAccess.middleware);
+app.use('/api/gimbal/webrtc', createGimbalWebrtcProxy());
+
+app.get('/api/diagnostics/wifi', (_req, res) => {
+  res.set('Cache-Control', 'no-store').json({ success: true, timestamp: Date.now(), clients: wifiDelivery.diagnostics() });
+});
 app.get(['/', '/index.html'], (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
@@ -1110,7 +1144,7 @@ function addLog(level, message) {
 
 function emitTelemetryUpdate() {
   // Motor-output writes must not cause the following telemetry packet to be dropped.
-  io.emit('telemetry_update', systemState.telemetry);
+  emitDashboardState('telemetry_update', systemState.telemetry);
 }
 
 function flushTelemetryCsv(force = false) {
@@ -1235,7 +1269,7 @@ function emitGimbalState() {
   updateGimbalDiagnostics();
   gimbalState.lastRx = gimbalLastRx.updatedAt ? gimbalLastRx : null;
   gimbalState.updatedAt = Date.now();
-  io.emit('gimbal_state', { ...gimbalState });
+  emitDashboardState('gimbal_state', { ...gimbalState });
 }
 
 function parseGimbalFeedbackFrames() {
@@ -1490,6 +1524,8 @@ function openGimbalPort(source = 'auto') {
 
 function writeGimbalFrame(frame) {
   const limited = limitOutgoingGimbalFrame(frame, {
+    yawMinDeg: GIMBAL_YAW_MIN_DEG,
+    yawMaxDeg: GIMBAL_YAW_MAX_DEG,
     pitchMinDeg: GIMBAL_PITCH_MIN_DEG,
     pitchMaxDeg: GIMBAL_PITCH_MAX_DEG,
     ratePitchMinDeg: GIMBAL_PITCH_RATE_MIN_FEEDBACK_DEG,
@@ -1514,6 +1550,8 @@ function writeGimbalFrameBurst(frame, count = 1) {
   if (!gimbalState.enabled || !gimbalStream) return false;
   try {
     const limited = limitOutgoingGimbalFrame(frame, {
+      yawMinDeg: GIMBAL_YAW_MIN_DEG,
+      yawMaxDeg: GIMBAL_YAW_MAX_DEG,
       pitchMinDeg: GIMBAL_PITCH_MIN_DEG,
       pitchMaxDeg: GIMBAL_PITCH_MAX_DEG,
       ratePitchMinDeg: GIMBAL_PITCH_RATE_MIN_FEEDBACK_DEG,
@@ -1596,8 +1634,10 @@ function applyGimbalSoftLimit(rate, angleDeg, minDeg, maxDeg) {
 
 function limitGimbalTrackRates(rateX, rateY) {
   const feedback = gimbalState.feedback;
-  if (!feedback || !feedback.checksumValid || Date.now() - feedback.updatedAt > 300) {
-    return { x: rateX, y: rateY, limited: false };
+  const age = Date.now() - feedback?.updatedAt;
+  if (feedback?.checksumValid !== true || !Number.isFinite(feedback.yawDeg)
+    || !Number.isFinite(feedback.pitchDeg) || !Number.isFinite(age) || age < 0 || age > 300) {
+    return { x: 0, y: 0, limited: rateX !== 0 || rateY !== 0 };
   }
   const x = applyGimbalSoftLimit(rateX, feedback.yawDeg, GIMBAL_YAW_MIN_DEG, GIMBAL_YAW_MAX_DEG);
   const y = applyGimbalSoftLimit(rateY, feedback.pitchDeg, GIMBAL_PITCH_MIN_DEG, GIMBAL_PITCH_MAX_DEG);
@@ -1605,26 +1645,12 @@ function limitGimbalTrackRates(rateX, rateY) {
 }
 
 function stabilizeBeaconUwb(now, uwb) {
-  if (!uwb || !uwb.online || !uwb.fresh || !Number.isFinite(Number(uwb.azimuthDeg)) || !Number.isFinite(Number(uwb.elevationDeg))) {
-    gimbalBeaconSourceGuard = null;
-    return uwb;
+  if (!uwb || !uwb.online || !uwb.fresh || !Number.isFinite(uwb.azimuthDeg) || !Number.isFinite(uwb.relativeXM) || !Number.isFinite(uwb.relativeYM)) {
+    return { ...(uwb || {}), online: false, fresh: false };
   }
-  const azimuthDeg = Number(uwb.azimuthDeg);
-  const elevationDeg = Number(uwb.elevationDeg);
-  if (!gimbalBeaconSourceGuard || now - gimbalBeaconSourceGuard.updatedAt > 700) {
-    gimbalBeaconSourceGuard = { azimuthDeg, elevationDeg, updatedAt: now };
-    return uwb;
-  }
-  const dt = clamp((now - gimbalBeaconSourceGuard.updatedAt) / 1000, 0.001, 0.1);
-  const maxStep = Math.max(0.8, 90 * dt);
-  const yawDelta = normalizeAngleDeg(azimuthDeg - gimbalBeaconSourceGuard.azimuthDeg);
-  const pitchDelta = elevationDeg - gimbalBeaconSourceGuard.elevationDeg;
-  gimbalBeaconSourceGuard = {
-    azimuthDeg: normalizeAngleDeg(gimbalBeaconSourceGuard.azimuthDeg + clamp(yawDelta, -maxStep, maxStep)),
-    elevationDeg: gimbalBeaconSourceGuard.elevationDeg + clamp(pitchDelta, -maxStep, maxStep),
-    updatedAt: now
-  };
-  return { ...uwb, azimuthDeg: gimbalBeaconSourceGuard.azimuthDeg, elevationDeg: gimbalBeaconSourceGuard.elevationDeg };
+  // The bridge owns measurement filtering. Preserve the admitted observation
+  // and its clock on every read; actuator limits belong to command slew below.
+  return uwb;
 }
 
 // Keep vessel following and gimbal beacon tracking on the same guarded UWB
@@ -1633,9 +1659,7 @@ function stabilizeBeaconUwb(now, uwb) {
 function sharedUwbControlTelemetry(now = Date.now()) {
   return {
     ...systemState.telemetry,
-    uwb: UWB_FOLLOW_CONFIG.control_input === 'raw'
-      ? rawUwbControl.view(systemState.telemetry.uwb, now, systemState.isConnected)
-      : stabilizeBeaconUwb(now, systemState.telemetry.uwb)
+    uwb: { ...stabilizeBeaconUwb(now, systemState.telemetry.uwb), directControl: directUwbGuidance }
   };
 }
 
@@ -1656,8 +1680,11 @@ function slewBeaconAbsoluteCommand(result, now) {
     setBeaconAbsoluteCommand(feedbackFresh ? feedback.yawDeg : 0, feedbackFresh ? feedback.pitchDeg : 0, now - GIMBAL_COMMAND_INTERVAL_MS);
   }
   const dt = clamp((now - gimbalBeaconAbsoluteCommand.updatedAt) / 1000, 0.001, 0.1);
-  const yawErrorDeg = normalizeAngleDeg(Number(result.targetYawDeg) - gimbalBeaconAbsoluteCommand.yawDeg);
-  const pitchErrorDeg = Number(result.targetPitchDeg) - gimbalBeaconAbsoluteCommand.pitchDeg;
+  const yawTarget = clamp(Number(result.targetYawDeg), GIMBAL_YAW_MIN_DEG, GIMBAL_YAW_MAX_DEG);
+  const pitchTarget = clamp(Number(result.targetPitchDeg), GIMBAL_PITCH_MIN_DEG, GIMBAL_PITCH_MAX_DEG);
+  // A bounded pan axis cannot take a wrapped shortcut through its hard stop.
+  const yawErrorDeg = yawTarget - gimbalBeaconAbsoluteCommand.yawDeg;
+  const pitchErrorDeg = pitchTarget - gimbalBeaconAbsoluteCommand.pitchDeg;
   const yawStep = Math.abs(yawErrorDeg) <= Number(result.yawDeadbandDeg || 0)
     ? 0
     : clamp(yawErrorDeg, -Number(result.maxYawRateDps) * dt, Number(result.maxYawRateDps) * dt);
@@ -1684,7 +1711,9 @@ function computeGimbalBeaconDesiredRate(now) {
     now,
     uwb: guardedUwb,
     feedback: gimbalState.feedback || {},
-    config: GIMBAL_BEACON_CONFIG
+    config: GIMBAL_BEACON_CONFIG,
+    limits: { yawMinDeg: GIMBAL_YAW_MIN_DEG, yawMaxDeg: GIMBAL_YAW_MAX_DEG,
+      pitchMinDeg: GIMBAL_PITCH_MIN_DEG, pitchMaxDeg: GIMBAL_PITCH_MAX_DEG }
   });
   if (!result.valid) {
     const message = result.reason === 'gimbal_feedback_stale'
@@ -1712,7 +1741,8 @@ function computeGimbalBeaconDesiredRate(now) {
       status: GIMBAL_BEACON_DRY_RUN ? 'dry_run' : 'track',
       mode: 'beacon',
       controlMode: 'absolute_angle',
-      message: GIMBAL_BEACON_DRY_RUN ? 'UWB BEACON DRY RUN' : 'UWB BEACON LOCKED',
+      message: GIMBAL_BEACON_DRY_RUN ? 'UWB BEACON DRY RUN' : result.pitchHeld ? '水平追踪；俯仰固定水平' : 'UWB BEACON LOCKED',
+      pitchHeld: Boolean(result.pitchHeld),
       dryRun: GIMBAL_BEACON_DRY_RUN,
       azimuthDeg: result.azimuthDeg,
       elevationDeg: result.elevationDeg,
@@ -1722,12 +1752,13 @@ function computeGimbalBeaconDesiredRate(now) {
       targetPitchDeg: result.targetPitchDeg,
       commandYawDeg: command.yawDeg,
       commandPitchDeg: command.pitchDeg,
+      limited: Boolean(result.limited),
       errorYawDeg: command.yawErrorDeg,
       errorPitchDeg: command.pitchErrorDeg,
       proposedRateX: command.rateX,
       proposedRateY: command.rateY,
       uwbAgeMs: Math.round(result.uwbAgeMs),
-      feedbackRequired: false,
+      feedbackRequired: Boolean(result.feedbackRequired),
       updatedAt: now
     };
     gimbalState.lastTarget = target;
@@ -1749,7 +1780,8 @@ function computeGimbalBeaconDesiredRate(now) {
     locked: true,
     status: GIMBAL_BEACON_DRY_RUN ? 'dry_run' : 'track',
     mode: 'beacon',
-    message: GIMBAL_BEACON_DRY_RUN ? 'UWB BEACON DRY RUN' : 'UWB BEACON LOCKED',
+    message: GIMBAL_BEACON_DRY_RUN ? 'UWB BEACON DRY RUN' : result.pitchHeld ? '水平追踪；俯仰固定水平' : 'UWB BEACON LOCKED',
+      pitchHeld: Boolean(result.pitchHeld),
     dryRun: GIMBAL_BEACON_DRY_RUN,
     azimuthDeg: result.azimuthDeg,
     elevationDeg: result.elevationDeg,
@@ -1998,7 +2030,20 @@ function startGimbalLoop() {
   gimbalLastFrame = buildGimbalFrame();
   gimbalCommandTimer = setInterval(() => {
     const now = Date.now();
-    if (gimbalState.trackingActive && now < gimbalTrackCommandPauseUntil) {
+    const calibrationActive = isBeaconCalibrationActive();
+    if (calibrationActive) {
+      // Nine-point calibration owns the gimbal output until it finishes or is cancelled.
+      // Keep replaying its absolute-angle frame and suppress any follow state reasserted
+      // by another client without cancelling the calibration session itself.
+      if (gimbalState.trackingActive) {
+        stopGimbalTracking(false, { cancelCalibration: false });
+        addLog('GIMBAL', 'Blocked tracking while UWB beacon calibration owns gimbal control');
+      }
+      gimbalHoldUntil = 0;
+      gimbalStopFramesRemaining = 0;
+      gimbalTxEnabled = true;
+      gimbalState.mode = 'calibration';
+    } else if (gimbalState.trackingActive && now < gimbalTrackCommandPauseUntil) {
       gimbalTrackDesiredRateX = 0;
       gimbalTrackDesiredRateY = 0;
       gimbalTrackRateAccelX = 0;
@@ -2092,7 +2137,8 @@ function setFaceTrackerActive(active) {
   }
 }
 
-function stopGimbalTracking(resetState = true) {
+function stopGimbalTracking(resetState = true, options = {}) {
+  if (options.cancelCalibration !== false) cancelBeaconCalibrationSession();
   gimbalTrackStopRequested = true;
   const shouldCounterBrake = resetState && Math.hypot(gimbalLastRateX, gimbalLastRateY) >= GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS;
   const keepWarm = GIMBAL_FACE_KEEP_WARM
@@ -2312,21 +2358,47 @@ function sendGimbalClickTarget(dx, dy, holdMs = null) {
 }
 
 function publicBeaconCalibrationState() {
+  const now = Date.now();
+  const uwbReady = Boolean(calibrationUwbObservation(systemState.telemetry.uwb, now));
+  const feedback = gimbalState.feedback;
+  const feedbackReady = !IS_SIYI || Boolean(feedback?.checksumValid === true && feedback.attitudeValid !== false
+    && now >= Number(feedback.updatedAt) && now - Number(feedback.updatedAt) <= 300);
+  const available = Boolean(gimbalState.portOpen && uwbReady && feedbackReady);
   return {
     ...gimbalBeaconCalibrationState,
+    available,
+    unavailableReason: !gimbalState.portOpen ? '云台连接未打开' : !feedbackReady ? '等待实时云台姿态反馈'
+      : systemState.telemetry.uwb.elevationValid === false ? 'UWB 仰角未通过等高验证，暂不能进行三维校准'
+      : !uwbReady ? '等待有效 UWB 定位，请将信标放在基站视野内并保持静止' : '',
+    defaultProfile: 'precision25',
+    profiles: [{id:'precision25', label:'25 点精细校准', total:25}, {id:'quick9', label:'9 点快速校准', total:9}],
     samples: gimbalBeaconCalibrationState.samples.map((sample) => ({ ...sample }))
   };
 }
 
+function isBeaconCalibrationActive() {
+  return Boolean(gimbalBeaconCalibrationState && gimbalBeaconCalibrationState.active);
+}
+
+function beaconCalibrationTrackingConflict() {
+  return {
+    ok: false,
+    statusCode: 409,
+    error: 'UWB beacon calibration owns gimbal control; finish or cancel calibration before starting tracking'
+  };
+}
+
 function moveGimbalToCalibrationPoint(point) {
-  const yawDeg = clamp(Number(point.yawDeg), Math.max(GIMBAL_YAW_MIN_DEG, -45), Math.min(GIMBAL_YAW_MAX_DEG, 45));
-  const pitchDeg = clamp(Number(point.pitchDeg), Math.max(GIMBAL_PITCH_MIN_DEG, -25), Math.min(GIMBAL_PITCH_MAX_DEG, 20));
+  const yawDeg = Number(point.yawDeg);
+  const pitchDeg = Number(point.pitchDeg);
+  if (!Number.isFinite(yawDeg) || !Number.isFinite(pitchDeg) || yawDeg < GIMBAL_YAW_MIN_DEG || yawDeg > GIMBAL_YAW_MAX_DEG
+    || pitchDeg < GIMBAL_PITCH_MIN_DEG || pitchDeg > GIMBAL_PITCH_MAX_DEG) throw new Error('Calibration point exceeds gimbal limits');
   const frame = buildGimbalFrame({ command: 0x72, param1: Math.round(yawDeg * 100), param2: Math.round(pitchDeg * 100) });
   const target = { controlMode: 'beacon_calibration', command: 0x72, targetYawDeg: yawDeg, targetPitchDeg: pitchDeg };
   setGimbalFrame(frame, 'beacon-calibration', 'calibration', 1200, target);
   writeGimbalFrameBurst(frame, 5);
   setBeaconAbsoluteCommand(yawDeg, pitchDeg);
-  gimbalBeaconCalibrationState.point = { yawDeg, pitchDeg };
+  gimbalBeaconCalibrationState.point = { yawDeg, pitchDeg, role: point.role || 'fit' };
   gimbalBeaconCalibrationState.status = 'awaiting_center';
   gimbalBeaconCalibrationState.readyAt = Date.now() + 1200;
   gimbalBeaconCalibrationState.message = 'Move the UWB beacon to the image center, then capture this point.';
@@ -2356,24 +2428,40 @@ function persistBeaconCalibration(result) {
   Object.assign(gimbalState.beacon, { calibrationRequired: false, calibrationModel: 'rigid_3d', extrinsic3dEnabled: true, calibrationMetrics: result.metrics });
 }
 
-function startBeaconCalibrationSession() {
+function startBeaconCalibrationSession(options = {}) {
+  if (isBeaconCalibrationActive()) throw new Error('UWB beacon calibration is already active');
   if (!gimbalState.portOpen) throw new Error('Gimbal control port is not open');
-  const uwb = systemState.telemetry.uwb || {};
-  if (!uwb.online || !uwb.fresh || Date.now() - Number(uwb.updatedAt || 0) > 700) throw new Error('UWB signal is not fresh');
-  stopGimbalTracking(false);
-  const points = generateBeaconCalibrationPoints();
+  const resumeBeaconTracking = Boolean(gimbalState.trackingActive && gimbalState.trackMode === 'beacon');
+  const profile = options.profile || 'precision25';
+  const points = generateBeaconCalibrationPoints(Math.random, { profile,
+    limits: {yawMinDeg:GIMBAL_YAW_MIN_DEG, yawMaxDeg:GIMBAL_YAW_MAX_DEG, pitchMinDeg:GIMBAL_PITCH_MIN_DEG, pitchMaxDeg:GIMBAL_PITCH_MAX_DEG} });
+  assertBeaconCalibrationGrid(points, { yawMinDeg: GIMBAL_YAW_MIN_DEG, yawMaxDeg: GIMBAL_YAW_MAX_DEG,
+    pitchMinDeg: GIMBAL_PITCH_MIN_DEG, pitchMaxDeg: GIMBAL_PITCH_MAX_DEG });
+  const readiness = publicBeaconCalibrationState();
+  if (!readiness.available) throw new Error(readiness.unavailableReason);
+  if (systemState.telemetry.armed || uwbFollowState.active || uwbFollowState.followRequested) throw new Error('Stop vessel following and disarm before starting gimbal calibration');
   gimbalBeaconCalibrationState = {
     active: true,
     status: 'moving',
     index: 0,
     total: points.length,
+    profile,
+    receiverIdentity: null,
     points,
     point: null,
     samples: [],
     result: null,
+    resumeBeaconTracking,
     message: 'Moving to calibration point 1.'
   };
+  stopGimbalTracking(false, { cancelCalibration: false });
+  resetGimbalTrackMotionState();
+  gimbalTrackDesiredRateX = 0;
+  gimbalTrackDesiredRateY = 0;
+  gimbalLastRateX = 0;
+  gimbalLastRateY = 0;
   moveGimbalToCalibrationPoint(points[0]);
+  addLog('GIMBAL', `${points.length}-point UWB calibration started; beacon tracking paused=${resumeBeaconTracking}`);
   return publicBeaconCalibrationState();
 }
 
@@ -2388,68 +2476,101 @@ function mean(values) {
   return values.reduce((sum, value) => sum + Number(value), 0) / values.length;
 }
 
+function cancelBeaconCalibrationSession() {
+  if (!gimbalBeaconCalibrationState.active) return;
+  gimbalBeaconCalibrationState.active = false;
+  gimbalBeaconCalibrationState.status = 'cancelled';
+  gimbalBeaconCalibrationState.resumeBeaconTracking = false;
+  gimbalBeaconCalibrationState.message = 'Calibration cancelled by a newer gimbal command.';
+}
+
+function assertBeaconCalibrationSession(session) {
+  if (session !== gimbalBeaconCalibrationState || !session.active) throw new Error('Calibration cancelled');
+  if (!gimbalState.portOpen) throw new Error('Gimbal control port closed during calibration');
+}
+
 async function collectBeaconCalibrationReading() {
-  const readings = [];
-  const point = gimbalBeaconCalibrationState.point || {};
-  if (!Number.isFinite(Number(point.yawDeg)) || !Number.isFinite(Number(point.pitchDeg))) throw new Error('Calibration target angle is unavailable');
-  for (let index = 0; index < 12; index += 1) {
-    const uwb = systemState.telemetry.uwb || {};
-    if (!uwb.online || !uwb.fresh || Date.now() - Number(uwb.updatedAt || 0) > 700) throw new Error('UWB signal is not fresh');
-    const distanceM = Number.isFinite(Number(uwb.rawDistanceM)) ? Number(uwb.rawDistanceM) : Number(uwb.distanceM);
-    const azimuthDeg = Number.isFinite(Number(uwb.rawAzimuthDeg)) ? Number(uwb.rawAzimuthDeg) : Number(uwb.azimuthDeg);
-    const elevationDeg = Number.isFinite(Number(uwb.rawElevationDeg)) ? Number(uwb.rawElevationDeg) : Number(uwb.elevationDeg);
-    if (!Number.isFinite(distanceM) || distanceM <= 0) throw new Error('UWB distance is unavailable');
-    readings.push({
-      distanceM,
-      uwbAzimuthDeg: azimuthDeg,
-      uwbElevationDeg: elevationDeg,
-      gimbalYawDeg: Number(point.yawDeg),
-      gimbalPitchDeg: Number(point.pitchDeg)
-    });
-    if (index < 11) await new Promise((resolve) => setTimeout(resolve, 45));
+  let readings = [];
+  const clocks = new Set();
+  const session = gimbalBeaconCalibrationState;
+  const point = { ...session.point };
+  if (!Number.isFinite(point.yawDeg) || !Number.isFinite(point.pitchDeg)) throw new Error('Calibration target angle is unavailable');
+  const deadline = performance.now() + 5000;
+  let identity = session.receiverIdentity || null, lastAt = null;
+  let lastError = 'Not enough distinct stable UWB observations; hold the beacon still and retry this point';
+  while (performance.now() < deadline) {
+    assertBeaconCalibrationSession(session);
+    const now = Date.now();
+    const sample = calibrationUwbObservation(systemState.telemetry.uwb, now, identity);
+    if (sample && lastAt !== null && sample.at < lastAt) throw new Error('UWB source clock changed during calibration');
+    if (sample && !clocks.has(sample.at)) {
+      try {
+        const pose = calibrationGimbalPose(gimbalState.feedback, point, now, IS_SIYI);
+        if (IS_SIYI && Math.abs(sample.at - Number(gimbalState.feedback.updatedAt)) > 150) throw new Error('Waiting for time-aligned UWB and gimbal feedback');
+        if (lastAt !== null && sample.at - lastAt > 300) readings = [];
+        readings.push({ ...sample, ...pose });
+        clocks.add(sample.at); lastAt = sample.at; identity = sample.key;
+        if (readings.length > 40) readings.shift();
+        if (readings.length >= 32) {
+          const averaged = summarizeBeaconCalibrationReadings(readings);
+          assertBeaconCalibrationSession(session);
+          return averaged;
+        }
+      } catch (error) {
+        lastError = error.message;
+      }
+    } else if (!sample) {
+      lastError = 'Waiting for valid UWB observations; keep the beacon still at image center';
+    }
+    await new Promise(resolve => setTimeout(resolve, 40));
   }
-  const averaged = {
-    distanceM: mean(readings.map((reading) => reading.distanceM)),
-    uwbAzimuthDeg: circularMeanDeg(readings.map((reading) => reading.uwbAzimuthDeg)),
-    uwbElevationDeg: mean(readings.map((reading) => reading.uwbElevationDeg)),
-    gimbalYawDeg: circularMeanDeg(readings.map((reading) => reading.gimbalYawDeg)),
-    gimbalPitchDeg: mean(readings.map((reading) => reading.gimbalPitchDeg))
-  };
-  const yawSpread = Math.max(...readings.map((reading) => Math.abs(normalizeAngleDeg(reading.uwbAzimuthDeg - averaged.uwbAzimuthDeg))));
-  const pitchSpread = Math.max(...readings.map((reading) => Math.abs(reading.uwbElevationDeg - averaged.uwbElevationDeg)));
-  const distanceSpread = Math.max(...readings.map((reading) => Math.abs(reading.distanceM - averaged.distanceM)));
-  if (yawSpread > 3 || pitchSpread > 3) throw new Error('UWB angle is moving; hold the beacon still at image center');
-  if (distanceSpread > Math.max(0.15, averaged.distanceM * 0.12)) throw new Error('UWB distance is moving; hold the beacon still at image center');
-  return averaged;
+  assertBeaconCalibrationSession(session);
+  throw new Error(lastError);
 }
 
 async function captureBeaconCalibrationPoint() {
   const session = gimbalBeaconCalibrationState;
-  if (!session.active) throw new Error('No active UWB beacon calibration');
+  assertBeaconCalibrationSession(session);
+  if (session.captureInProgress) throw new Error('Calibration capture already in progress');
   if (Date.now() < Number(session.readyAt || 0)) throw new Error('Wait for the gimbal to settle');
-  const uwb = systemState.telemetry.uwb || {};
-  if (!uwb.online || !uwb.fresh || Date.now() - Number(uwb.updatedAt || 0) > 700) throw new Error('UWB signal is not fresh');
-  const averaged = await collectBeaconCalibrationReading();
-  session.samples.push({
-    point: session.index + 1,
-    ...averaged,
-    capturedAt: Date.now()
-  });
-  session.index += 1;
-  if (session.index < session.total) {
-    session.status = 'moving';
-    session.message = `Moving to calibration point ${session.index + 1}.`;
-    moveGimbalToCalibrationPoint(session.points[session.index]);
+  session.captureInProgress = true;
+  try {
+    const averaged = await collectBeaconCalibrationReading();
+    assertBeaconCalibrationSession(session);
+    session.captureError = '';
+    session.receiverIdentity = averaged.receiverIdentity;
+    session.samples.push({ point: session.index + 1, role: session.points[session.index].role || 'fit', ...averaged, capturedAt: Date.now() });
+    session.index += 1;
+    if (session.index < session.total) {
+      session.status = 'moving';
+      session.message = `Moving to calibration point ${session.index + 1}.`;
+      moveGimbalToCalibrationPoint(session.points[session.index]);
+      return publicBeaconCalibrationState();
+    }
+    const result = fitBeaconCalibration(session.samples);
+    assertBeaconCalibrationSession(session);
+    persistBeaconCalibration(result);
+    const resumeBeaconTracking = session.resumeBeaconTracking === true;
+    session.active = false;
+    session.status = 'complete';
+    session.result = result;
+    session.resumeBeaconTracking = false;
+    session.message = resumeBeaconTracking
+      ? 'Multi-point 3D UWB beacon calibration completed; Beacon tracking resumed.'
+      : 'Multi-point 3D UWB beacon calibration completed.';
+    if (resumeBeaconTracking) {
+      const resumed = startGimbalBeaconTracking();
+      if (!resumed.ok) {
+        session.message += ` Tracking resume failed: ${resumed.error}`;
+        addLog('GIMBAL_ERR', session.message);
+      }
+    } else {
+      stopGimbalTracking(true);
+    }
     return publicBeaconCalibrationState();
+  } finally {
+    session.captureInProgress = false;
   }
-  const result = fitBeaconCalibration(session.samples);
-  persistBeaconCalibration(result);
-  session.active = false;
-  session.status = 'complete';
-  session.result = result;
-  session.message = 'Nine-point 3D UWB beacon calibration completed.';
-  startGimbalBeaconTracking();
-  return publicBeaconCalibrationState();
 }
 
 function planGimbalClickMove(dx, dy) {
@@ -2488,10 +2609,8 @@ function undistortNormalizedPoint(xd, yd) {
 }
 
 function gimbalAnglesFromPixelDelta(dx, dy) {
-  const centerU = GIMBAL_CALIB_CX;
-  const centerV = GIMBAL_CALIB_CY;
-  const u = centerU + asFiniteNumber(dx, 0);
-  const v = centerV + asFiniteNumber(dy, 0);
+  const u = GIMBAL_CALIB_WIDTH * .5 + asFiniteNumber(dx, 0);
+  const v = GIMBAL_CALIB_HEIGHT * .5 + asFiniteNumber(dy, 0);
   const xd = (u - GIMBAL_CALIB_CX) / Math.max(GIMBAL_CALIB_FX, 1e-6);
   const yd = (v - GIMBAL_CALIB_CY) / Math.max(GIMBAL_CALIB_FY, 1e-6);
   const ray = undistortNormalizedPoint(xd, yd);
@@ -2642,6 +2761,8 @@ function gimbalRateFromDelta(dx, dy, gain, useSlew = true) {
 }
 
 function sendGimbalTrackDelta(dx, dy, vx = 0, vy = 0, metadata = {}) {
+  const pixels = trackerControlPixels(dx, dy, vx, vy, metadata, GIMBAL_CALIB_WIDTH, GIMBAL_CALIB_HEIGHT);
+  ({ dx, dy, vx, vy } = pixels);
   const delta = normalizeGimbalDelta(dx, dy);
   const now = Date.now();
   let measuredVx = asFiniteNumber(vx, 0) * GIMBAL_YAW_SIGN;
@@ -2741,6 +2862,7 @@ function gimbalTrackLostMessage(mode = gimbalState.trackMode) {
 }
 
 function startGimbalBeaconTracking() {
+  if (isBeaconCalibrationActive()) return beaconCalibrationTrackingConflict();
   if (IS_SIYI && GIMBAL_BEACON_CONFIG.calibration_required === true) {
     return { ok: false, error: 'SIYI A8 replacement requires UWB-to-camera recalibration before beacon tracking' };
   }
@@ -2782,6 +2904,7 @@ function startGimbalBeaconTracking() {
 }
 
 function startGimbalTracking(options = {}) {
+  if (isBeaconCalibrationActive()) return beaconCalibrationTrackingConflict();
   const requestedMode = normalizeGimbalTrackMode(options.mode || options.detectorMode || options.target);
   if (requestedMode === 'beacon') return startGimbalBeaconTracking();
   const warmOnly = requestedMode === 'face' && Boolean(options.warmOnly);
@@ -2962,7 +3085,7 @@ function startGimbalTracking(options = {}) {
             const message = { ...target, mode: requestedMode, commandDx: sent.x, commandDy: sent.y, predictedDx: sent.predictedX, predictedDy: sent.predictedY, targetSpeed: sent.targetSpeed, rawVx: sent.rawVx, rawVy: sent.rawVy, filteredVx: sent.filteredVx, filteredVy: sent.filteredVy, leadMs: sent.leadMs, detectorAgeMs: sent.detectorAgeMs, angleGain: sent.angleGain, rateX: sent.rateX, rateY: sent.rateY, desiredRateX: sent.desiredRateX ?? sent.rateX, desiredRateY: sent.desiredRateY ?? sent.rateY, holdMs: sent.holdMs || 0, axis: sent.axis || '', pulse: Boolean(sent.pulse), smooth: Boolean(sent.smooth), gated: Boolean(sent.gated), limited: Boolean(sent.limited), locked: true, message: target.message || lockedLabel, workerActive: true, timestamp: Date.now() };
             gimbalState.lastTarget = message;
             updateGimbalTrackStatus({ ...message, status: target.status || 'track', detections: Number(target.detections || 0) });
-            io.emit('gimbal_target', message);
+            emitDashboardState('gimbal_target', message);
           } catch (error) {
             addLog('GIMBAL_ERR', `Invalid target output: ${error.message}`);
           }
@@ -3434,7 +3557,7 @@ function sendManualRoverOutput(controlInput = {}, sourceLabel = manualRoverSourc
   systemState.motorStatus[`ch${ROVER_LEFT_CHANNEL}`] = normalized.leftPwm;
   systemState.motorStatus[`ch${ROVER_RIGHT_CHANNEL}`] = normalized.rightPwm;
 
-  io.emit('rover_control_update', {
+  emitDashboardState('rover_control_update', {
     ...systemState.roverControl,
     source: sourceLabel,
     timestamp: new Date().toISOString()
@@ -3443,10 +3566,13 @@ function sendManualRoverOutput(controlInput = {}, sourceLabel = manualRoverSourc
 }
 
 function applyRoverControl(controlInput = {}, sourceLabel = 'WEB') {
-  const requested = normalizeRoverControl(controlInput);
-  if ((uwbFollowState.active || uwbFollowTransitionBusy || uwbFollowState.autoResumePending) && (requested.throttle !== 0 || requested.steering !== 0)) {
-    stopUwbFollow('manual_override', { disarm: uwbFollowTransitionBusy });
+  for (const axis of ['throttle', 'steering']) {
+    const value = controlInput?.[axis];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value))) {
+      return { ok: false, error: `Invalid ${axis}; a finite number is required` };
+    }
   }
+  const requested = normalizeRoverControl(controlInput);
   refreshHardwareState();
   const neutralCommand = requested.throttle === 0 && requested.steering === 0;
   if (!systemState.isConnected && !neutralCommand) {
@@ -3455,6 +3581,19 @@ function applyRoverControl(controlInput = {}, sourceLabel = 'WEB') {
   }
   if (!neutralCommand && systemState.telemetry.pilotSteering?.ready !== true) {
     return { ok: false, error: 'Waiting for Pixhawk PILOT_STEER_TYPE; manual propulsion held neutral' };
+  }
+  if (!neutralCommand && systemState.telemetry.armed !== true) {
+    return { ok: false, error: 'Pixhawk is disarmed; arm before requesting propulsion' };
+  }
+  if (!neutralCommand && systemState.telemetry.imuCalibration?.active) {
+    return { ok: false, error: 'IMU calibration is active; propulsion is locked' };
+  }
+  if (!neutralCommand && (uwbFollowState.active || uwbFollowTransitionBusy || uwbFollowState.autoResumePending)) {
+    stopUwbFollow('manual_override', { disarm: uwbFollowTransitionBusy });
+    return { ok: false, error: 'Automatic follow stopped; select manual mode before driving' };
+  }
+  if (!neutralCommand && String(systemState.telemetry.flightMode).toUpperCase() !== 'MANUAL') {
+    return { ok: false, error: 'Select MANUAL flight mode before requesting manual propulsion' };
   }
   const target = normalizeRoverControl({
     throttle: shapeRoverAxis(requested.throttle, {
@@ -3498,7 +3637,7 @@ function publishNeutralRoverControl(source = 'SAFETY') {
   systemState.motorStatus[`ch${ROVER_LEFT_CHANNEL}`] = PWM_CENTER;
   systemState.motorStatus[`ch${ROVER_RIGHT_CHANNEL}`] = PWM_CENTER;
   lastRoverCommandAt = Date.now();
-  io.emit('rover_control_update', {
+  emitDashboardState('rover_control_update', {
     ...systemState.roverControl,
     source,
     timestamp: new Date().toISOString()
@@ -3531,6 +3670,16 @@ function updateManualRoverSlew() {
   if (uwbFollowState.active || uwbFollowTransitionBusy) return;
   const target = manualRoverSlew.target || {};
   const targetNonNeutral = Number(target.throttle) !== 0 || Number(target.steering) !== 0;
+  const outputNonNeutral = Number(manualRoverSlew.output?.throttle) !== 0 || Number(manualRoverSlew.output?.steering) !== 0;
+  if (targetNonNeutral || outputNonNeutral) {
+    refreshHardwareState();
+    if (!systemState.isConnected || systemState.telemetry.armed !== true
+      || systemState.telemetry.imuCalibration?.active
+      || String(systemState.telemetry.flightMode).toUpperCase() !== 'MANUAL') {
+      forceNeutralRoverControl('MANUAL_INTERLOCK', 'manual_control_unavailable');
+      return;
+    }
+  }
   if (targetNonNeutral && now - lastRoverCommandAt > ROVER_COMMAND_TIMEOUT_MS) {
     addLog('SAFETY', `Rover command lease expired after ${ROVER_COMMAND_TIMEOUT_MS}ms; MANUAL_CONTROL neutralized`);
     forceNeutralRoverControl('ROVER_WATCHDOG', 'command_lease_expired');
@@ -3588,7 +3737,7 @@ function publishUwbFollowState(result, active = uwbFollowState.active) {
     updatedAt: Date.now()
   };
   systemState.uwbFollow = uwbFollowState;
-  io.emit('uwb_follow_update', uwbFollowState);
+  emitDashboardState('uwb_follow_update', uwbFollowState);
 }
 
 function buildUwbTestSample(result = uwbFollowState, event = 'sample', reason = null) {
@@ -3623,11 +3772,13 @@ function buildUwbTestSample(result = uwbFollowState, event = 'sample', reason = 
     yaw_rate_deg_s: attitude.yawRateDegS,
     velocity_north_mps: velocity.vx,
     velocity_east_mps: velocity.vy,
-    uwb_raw_distance_m: uwb.rawDistanceM,
     uwb_distance_m: uwb.distanceM,
-    uwb_raw_azimuth_deg: uwb.rawAzimuthDeg,
     uwb_azimuth_deg: uwb.azimuthDeg,
     uwb_elevation_deg: uwb.elevationDeg,
+    path_active: result.pathFollowActive===true, path_reason:result.pathFollowReason,
+    path_points:result.pathReference?.pointCount,path_length_m:result.pathReference?.pathLengthM,
+    path_remaining_m:result.pathReference?.remainingM,path_cross_track_m:result.pathReference?.crossTrackErrorM,
+    path_reference_speed_mps:result.pathReference?.desiredSpeedMps,
     target_relative_x_m: relative.x,
     target_relative_y_m: relative.y,
     bearing_deg: result.bearingDeg,
@@ -3694,6 +3845,7 @@ function resetUwbHoldTransition() {
 }
 
 function stopUwbFollow(reason = 'manual_stop', { disarm = false } = {}) {
+  lastUwbPointApproach.reset();
   uwbAutoResume.cancel();
   uwbGpsDriftHold.reset();
   const wasRunning = uwbFollowState.active || uwbFollowTransitionBusy;
@@ -3739,6 +3891,7 @@ function selectUwbTrackingMethod(requestedMethod) {
     return { ok: false, error: 'stop_tracking_before_switching_method' };
   }
   intermittentUwbFollow.reset();
+  lastUwbPointApproach.reset();
   sendUwbFollowStop('tracking_method_switch');
   uwbAutoResume.cancel();
   traditionalUwbFollowController.reset();
@@ -3751,6 +3904,9 @@ function selectUwbTrackingMethod(requestedMethod) {
 }
 
 function requireUwbFollowStartClearance(controlMode = uwbFollowControlMode) {
+  if (UWB_USB_ENABLED && config.uwb_usb.vessel_control_enabled !== true) {
+    return { safe: false, reason: 'usb_uwb_gimbal_only', controlMode };
+  }
   const now = Date.now();
   return uwbFollowController.preflight({
     now,
@@ -3876,7 +4032,7 @@ function sendUwbRelativeDrive(result) {
   };
   systemState.motorStatus[`ch${ROVER_LEFT_CHANNEL}`] = normalized.leftPwm;
   systemState.motorStatus[`ch${ROVER_RIGHT_CHANNEL}`] = normalized.rightPwm;
-  io.emit('rover_control_update', {
+  emitDashboardState('rover_control_update', {
     ...systemState.roverControl,
     source: 'UWB_RELATIVE',
     timestamp: new Date().toISOString()
@@ -4028,13 +4184,28 @@ function updateUwbFollow() {
   }
 
   const now = Date.now();
+  const controlTelemetry = sharedUwbControlTelemetry(now);
   let result = intermittentUwbFollow.update({
     controller: uwbFollowController,
     now,
-    telemetry: sharedUwbControlTelemetry(now),
+    telemetry: controlTelemetry,
     connected: systemState.isConnected,
     controlMode: uwbFollowControlMode
   });
+  result = lastUwbPointApproach.update({ enabled: UWB_HOLD_ON_POSITION_LOSS, result,
+    telemetry: controlTelemetry, connected: systemState.isConnected, now,
+    controlMode: uwbFollowControlMode, imuTimeoutMs: uwbFollowController.config.navigationTimeoutMs,
+    appliedCommand: systemState.roverControl, calibration: uwbFollowController.config });
+  if (result.positionWaiting && !uwbFollowState.positionWaiting) {
+    uwbFollowController.reset();
+    addLog('UWB_FOLLOW', 'UWB position unavailable; maintaining neutral output in the current armed session');
+  } else if (!result.positionWaiting && uwbFollowState.positionWaiting && result.safe) {
+    addLog('UWB_FOLLOW', 'UWB position recovered; continuing the current armed session');
+  }
+  if (result.lastPointApproach?.active && !uwbFollowState.lastPointApproach?.active) {
+    uwbFollowController.reset();
+    addLog('UWB_FOLLOW', 'UWB lost; bounded model approach to the frozen last position (estimated displacement)');
+  }
   if (result.safe && !result.pausePropulsion) result = uwbAutoResume.ramp(result, now);
   const previousReason = uwbFollowState.reason;
   const previousStatus = uwbFollowState.status;
@@ -4047,6 +4218,7 @@ function updateUwbFollow() {
     }
     sendUwbFollowStop(result.reason);
     disarmAndReturnManual(result.reason);
+    lastUwbPointApproach.reset();
     uwbFollowTransitionId += 1;
     uwbFollowTransitionBusy = false;
     uwbAutoResume.stopped(result.reason);
@@ -4061,7 +4233,10 @@ function updateUwbFollow() {
   }
 
   if (result.pausePropulsion) {
-    if (result.controlMode !== 'relative_acro') sendUwbFollowStop(result.reason);
+    if (result.relativeImuControl) {
+      const drive = sendUwbRelativeDrive({ ...result, throttlePercent: 0, steeringDegrees: 0 });
+      if (drive.safe === false) { stopUwbFollow(drive.reason, { disarm: true }); return; }
+    } else if (result.controlMode !== 'relative_acro') sendUwbFollowStop(result.reason);
     if (!maintainUwbHoldingMode(result)) return;
     publishUwbFollowState(result, true);
     recordUwbTestSample(result, 'waiting_target');
@@ -4120,52 +4295,11 @@ function updateUwbFollow() {
   }
 }
 
-function mergeUwbTelemetry(previous, incomingUwb) {
-  const nextTelemetry = { uwb: { ...previous } };
-  nextTelemetry.uwb.measurementStatus = String(incomingUwb.measurementStatus || 'unavailable');
-  nextTelemetry.uwb.rejectionReason = incomingUwb.rejectionReason ? String(incomingUwb.rejectionReason) : null;
-  for (const key of ['distanceM', 'azimuthDeg', 'elevationDeg', 'rawDistanceM', 'rawAzimuthDeg', 'rawElevationDeg', 'relativeXM', 'relativeYM', 'updatedAt', 'measurementUpdatedAt', 'measurementNis']) {
-    if (Object.prototype.hasOwnProperty.call(incomingUwb, key)) {
-      nextTelemetry.uwb[key] = incomingUwb[key] === null
-        ? null
-        : asFiniteNumber(incomingUwb[key], nextTelemetry.uwb[key]);
-    }
-  }
-  nextTelemetry.uwb.goodCount = asFiniteNumber(incomingUwb.goodCount, nextTelemetry.uwb.goodCount || 0);
-  nextTelemetry.uwb.receiverCount = asFiniteNumber(
-    incomingUwb.receiverCount,
-    nextTelemetry.uwb.receiverCount || 0
-  );
-  nextTelemetry.uwb.observingReceiverCount = asFiniteNumber(
-    incomingUwb.observingReceiverCount,
-    nextTelemetry.uwb.observingReceiverCount || 0
-  );
-  if (Array.isArray(incomingUwb.activeReceiverIds)) {
-    nextTelemetry.uwb.activeReceiverIds = incomingUwb.activeReceiverIds
-      .map((value) => Number(value))
-      .filter((value) => Number.isInteger(value) && value >= 1 && value <= 2);
-  }
-  if (typeof incomingUwb.fusionMode === 'string') {
-    nextTelemetry.uwb.fusionMode = incomingUwb.fusionMode;
-  }
-  if (Object.prototype.hasOwnProperty.call(incomingUwb, 'bearingDisagreementDeg')) {
-    nextTelemetry.uwb.bearingDisagreementDeg = incomingUwb.bearingDisagreementDeg === null
-      ? null
-      : asFiniteNumber(incomingUwb.bearingDisagreementDeg, nextTelemetry.uwb.bearingDisagreementDeg);
-  }
-  if (Object.prototype.hasOwnProperty.call(incomingUwb, 'positionDisagreementM')) {
-    nextTelemetry.uwb.positionDisagreementM = incomingUwb.positionDisagreementM === null
-      ? null
-      : asFiniteNumber(incomingUwb.positionDisagreementM, nextTelemetry.uwb.positionDisagreementM);
-  }
-  if (Array.isArray(incomingUwb.sensors)) {
-    nextTelemetry.uwb.sensors = incomingUwb.sensors.map((sensor) => ({ ...sensor }));
-  }
-  if (typeof incomingUwb.online === 'boolean') nextTelemetry.uwb.online = incomingUwb.online;
-  if (typeof incomingUwb.fresh === 'boolean') nextTelemetry.uwb.fresh = incomingUwb.fresh;
-  if (typeof incomingUwb.source === 'string') nextTelemetry.uwb.source = incomingUwb.source;
-  if (typeof incomingUwb.filter === 'string') nextTelemetry.uwb.filter = incomingUwb.filter;
-  return nextTelemetry.uwb;
+function mergeUwbTelemetry(_previous, incomingUwb) {
+  return {...smoothedUwbOutput.view(incomingUwb, Date.now()),coordinateCalibration:{
+    bearingSign:traditionalUwbFollowController.config.bearingSign,
+    bearingScale:traditionalUwbFollowController.config.bearingScale,
+    bearingOffsetDeg:traditionalUwbFollowController.config.bearingOffsetDeg}};
 }
 
 function updateTelemetry(newTelemetry = {}) {
@@ -4185,6 +4319,7 @@ function updateTelemetry(newTelemetry = {}) {
     temperature: { ...previous.temperature },
     gps: { ...previous.gps },
     uwb: { ...(previous.uwb || {}) },
+    uwbPath: previous.uwbPath || null,
     imuCalibration: { ...(previous.imuCalibration || createDefaultImuCalibrationState()) },
     flightMode: previous.flightMode,
     pilotSteering: newTelemetry.pilotSteering || previous.pilotSteering,
@@ -4219,6 +4354,11 @@ function updateTelemetry(newTelemetry = {}) {
   }
 
   if (newTelemetry.velocity) {
+    // The bridge's velocity vector and position share GLOBAL_POSITION_INT.
+    // Preserve that observation clock even when cached telemetry is republished.
+    if(Number.isFinite(newTelemetry.velocity.vx)&&Number.isFinite(newTelemetry.velocity.vy))
+      nextTelemetry.velocity.updatedAt=Number.isFinite(newTelemetry.velocity.updatedAt)?newTelemetry.velocity.updatedAt
+        :newTelemetry.position?.source==='GLOBAL_POSITION_INT'&&Number.isFinite(newTelemetry.position.updatedAt)?newTelemetry.position.updatedAt:null;
     nextTelemetry.velocity.vx = asFiniteNumber(newTelemetry.velocity.vx, nextTelemetry.velocity.vx);
     nextTelemetry.velocity.vy = asFiniteNumber(newTelemetry.velocity.vy, nextTelemetry.velocity.vy);
     nextTelemetry.velocity.vz = asFiniteNumber(newTelemetry.velocity.vz, nextTelemetry.velocity.vz);
@@ -4284,7 +4424,7 @@ function updateTelemetry(newTelemetry = {}) {
     nextTelemetry.gps.updatedAt = mergeNullableFiniteNumber(newTelemetry.gps, 'updatedAt', nextTelemetry.gps.updatedAt);
   }
 
-  if (newTelemetry.uwb && typeof newTelemetry.uwb === 'object') {
+  if (!UWB_USB_ENABLED && newTelemetry.uwb && typeof newTelemetry.uwb === 'object') {
     nextTelemetry.uwb = mergeUwbTelemetry(nextTelemetry.uwb, newTelemetry.uwb);
   }
 
@@ -4392,11 +4532,11 @@ function updateTelemetry(newTelemetry = {}) {
   }
   refreshHardwareState();
   if (motorOutputsUpdated) {
-    io.volatile.emit('motor_output_update', {
+    emitDashboardState('motor_output_update', {
       left: systemState.hardware.motors.left,
       right: systemState.hardware.motors.right,
       timestamp: Date.now()
-    });
+    }, { volatile: true });
   }
   emitTelemetryUpdate();
   appendTelemetryCsv(systemState.telemetry);
@@ -4427,10 +4567,11 @@ telemetrySocket.on('message', (rawMessage) => {
     const packet = JSON.parse(rawMessage.toString('utf8'));
 
     if (packet.type === 'uwb') {
+      if (UWB_USB_ENABLED) return; // USB owns the observation; TELEM cannot overwrite it.
       // This path does not refresh any other sensor or wait for the full telemetry timer.
       systemState.telemetry = { ...systemState.telemetry,
         uwb: mergeUwbTelemetry(systemState.telemetry.uwb, packet.payload || {}) };
-      io.emit('uwb_update', systemState.telemetry.uwb);
+      emitDashboardState('uwb_update', systemState.telemetry.uwb);
       return;
     }
 
@@ -4463,10 +4604,28 @@ telemetrySocket.bind(BRIDGE_TELEMETRY_PORT, '127.0.0.1', () => {
   addLog('INFO', `Listening bridge telemetry on 127.0.0.1:${BRIDGE_TELEMETRY_PORT}`);
 });
 
+if (usbUwbSource) {
+  usbUwbSource.on('packet', packet => {
+    systemState.telemetry = { ...systemState.telemetry,
+      uwb: mergeUwbTelemetry(systemState.telemetry.uwb, packet) };
+    emitDashboardState('uwb_update', systemState.telemetry.uwb);
+  });
+  usbUwbSource.on('diagnostic', message => addLog('UWB_USB', message));
+  usbUwbSource.start();
+}
+
 refreshHostBoardTemperature();
 setInterval(refreshHostBoardTemperature, 5000);
 setInterval(refreshPeripheralState, 5000);
 setInterval(refreshHardwareState, 1000);
+function updateUwbPathTelemetry() {
+  const now=Date.now();
+  const path={...uwbPathPlanner.update(now,systemState.telemetry),
+    controlEnabled:!UWB_USB_ENABLED||config.uwb_usb.vessel_control_enabled===true};
+  systemState.telemetry={...systemState.telemetry,uwbPath:path};
+  emitDashboardState('uwb_path_update',path);
+}
+const uwbPathTimer=setInterval(updateUwbPathTelemetry,100);
 const uwbFollowTimer = setInterval(updateUwbFollow, Math.round(1000 / UWB_FOLLOW_RATE_HZ));
 const manualRoverSlewTimer = setInterval(updateManualRoverSlew, Math.round(1000 / ROVER_MANUAL_SLEW_RATE_HZ));
 manualRoverSlewTimer.unref();
@@ -4560,6 +4719,8 @@ app.get('/api/uwb-follow/state', (_req, res) => {
     },
     config: {
       executionMode: uwbFollowController.config.executionMode,
+      pathFollow: traditionalUwbFollowController.config.pathFollow,
+      vesselControlEnabled: !UWB_USB_ENABLED||config.uwb_usb.vessel_control_enabled===true,
       gpsSpeedClosedLoop: uwbFollowController.config.gpsSpeedClosedLoop,
       relativeNmpc: uwbFollowController.config.relativeNmpc,
       prediction: intermittentUwbFollow.config,
@@ -4652,7 +4813,7 @@ app.get('/api/uwb-follow/logs/:fileName/download', (req, res) => {
 
 app.post('/api/uwb-follow/start', startUwbFollowRequest = async (req, res) => {
   const automatic = req.uwbAutoResume === true;
-  if (automatic && (!uwbAutoResume.pending || !uwbAutoResume.attempting)) {
+  if (automatic && (!uwbAutoResume.enabled || !uwbAutoResume.pending || !uwbAutoResume.attempting)) {
     return res.status(409).json({ success: false, message: 'auto_resume_cancelled' });
   }
   if (!UWB_FOLLOW_ENABLED) {
@@ -4677,9 +4838,10 @@ app.post('/api/uwb-follow/start', startUwbFollowRequest = async (req, res) => {
   intermittentUwbFollow.reset();
   uwbFollowController.reset();
   uwbGpsDriftHold.reset();
+  lastUwbPointApproach.reset();
   const initialPreflight = requireUwbFollowStartClearance('auto');
   if (!initialPreflight.safe) {
-    if (!automatic && initialPreflight.reason === 'uwb_stale') {
+    if (!automatic && !UWB_HOLD_ON_POSITION_LOSS && initialPreflight.reason === 'uwb_stale') {
       // Retain the explicit follow request, without entering mode/arm startup.
       uwbFollowTransitionId += 1;
       sendUwbFollowStop('awaiting_trusted_uwb');
@@ -4854,7 +5016,7 @@ function startVision() {
           try {
             const det = JSON.parse(line.slice(7));
             systemState.vision.detections = det;
-            io.emit('vision_detections', det);
+            emitDashboardState('vision_detections', det);
           } catch (_) {}
         } else {
           addLog('VISION', line);
@@ -5000,6 +5162,10 @@ app.delete('/api/gimbal/recordings/:name', (req, res) => {
 });
 
 app.post('/api/gimbal/connect', (_req, res) => {
+  if (gimbalStream) {
+    res.json({ success: true, alreadyOpen: true, state: gimbalState });
+    return;
+  }
   const ok = openGimbalPort('web');
   if (ok) {
     gimbalTxEnabled = false;
@@ -5149,6 +5315,20 @@ app.post('/api/gimbal/json', async (req, res) => {
 });
 
 app.post('/api/gimbal/click', (req, res) => {
+  const body = req.body || {};
+  if (![body.dx, body.dy].every(value => typeof value === 'number' && Number.isFinite(value))) {
+    res.status(400).json({ success: false, message: 'Click coordinates must be finite numbers' });
+    return;
+  }
+  if (['guided_angle', 'feedback_rate'].includes(GIMBAL_CLICK_CONTROL_MODE)) {
+    const feedback = gimbalState.feedback;
+    const age = Date.now() - feedback?.updatedAt;
+    if (feedback?.checksumValid !== true || !Number.isFinite(feedback.yawDeg)
+      || !Number.isFinite(feedback.pitchDeg) || !Number.isFinite(age) || age < 0 || age > 300) {
+      res.status(409).json({ success: false, message: 'Fresh gimbal attitude required before click control', state: gimbalState });
+      return;
+    }
+  }
   if (!gimbalStream || !gimbalState.connected) {
     const opened = openGimbalPort('web');
     if (!opened) {
@@ -5160,7 +5340,6 @@ app.post('/api/gimbal/click', (req, res) => {
     res.status(500).json({ success: false, message: 'Gimbal serial open failed.', state: gimbalState });
     return;
   }
-  const body = req.body || {};
   stopGimbalTracking(false);
   sendGimbalDetectorPaused(true, 'web:preclick');
   sendGimbalCancelTrack('web:preclick');
@@ -5183,7 +5362,7 @@ app.post('/api/gimbal/track/start', (req, res) => {
   const body = req.body || {};
   const result = startGimbalTracking({ mode: body.mode || body.target || body.detectorMode });
   if (!result.ok) {
-    res.status(500).json({ success: false, message: result.error, state: gimbalState });
+    res.status(result.statusCode || 500).json({ success: false, message: result.error, state: gimbalState });
     return;
   }
   if (!result.alreadyRunning && result.mode !== 'beacon') beginGimbalResponseCheck(`track-start:${result.mode || gimbalState.trackMode}`);
@@ -5200,9 +5379,9 @@ app.get('/api/gimbal/beacon/calibration', (_req, res) => {
   res.json({ success: true, calibration: publicBeaconCalibrationState() });
 });
 
-app.post('/api/gimbal/beacon/calibration/start', (_req, res) => {
+app.post('/api/gimbal/beacon/calibration/start', (req, res) => {
   try {
-    const calibration = startBeaconCalibrationSession();
+    const calibration = startBeaconCalibrationSession(req.body || {});
     res.json({ success: true, calibration });
   } catch (error) {
     res.status(409).json({ success: false, message: error.message, calibration: publicBeaconCalibrationState() });
@@ -5210,33 +5389,54 @@ app.post('/api/gimbal/beacon/calibration/start', (_req, res) => {
 });
 
 app.post('/api/gimbal/beacon/calibration/capture', async (_req, res) => {
+  const session = gimbalBeaconCalibrationState;
   try {
     const calibration = await captureBeaconCalibrationPoint();
     res.json({ success: true, calibration, state: gimbalState });
   } catch (error) {
-    if (gimbalBeaconCalibrationState.index >= gimbalBeaconCalibrationState.total) {
-      gimbalBeaconCalibrationState.active = false;
-      gimbalBeaconCalibrationState.status = 'failed';
-    } else {
-      gimbalBeaconCalibrationState.status = 'awaiting_center';
+    if (session === gimbalBeaconCalibrationState && session.active && !session.captureInProgress) {
+      session.captureError = error.message;
+      if (session.index >= session.total) {
+        const resumeBeaconTracking = session.resumeBeaconTracking === true;
+        session.active = false;
+        session.status = 'failed';
+        session.resumeBeaconTracking = false;
+        if (resumeBeaconTracking) {
+          const resumed = startGimbalBeaconTracking();
+          if (!resumed.ok) addLog('GIMBAL_ERR', `Beacon tracking resume after calibration failure failed: ${resumed.error}`);
+        }
+      } else {
+        session.status = 'awaiting_center';
+      }
+      session.message = error.message;
     }
-    gimbalBeaconCalibrationState.message = error.message;
     res.status(422).json({ success: false, message: error.message, calibration: publicBeaconCalibrationState() });
   }
 });
 
 app.post('/api/gimbal/beacon/calibration/cancel', (_req, res) => {
+  const resumeBeaconTracking = gimbalBeaconCalibrationState.resumeBeaconTracking === true;
   gimbalBeaconCalibrationState = {
     active: false,
     status: 'cancelled',
     index: 0,
-    total: 8,
+    total: 9,
     point: null,
     samples: [],
     result: null,
+    resumeBeaconTracking: false,
     message: 'Calibration cancelled.'
   };
   stopGimbalSerial('beacon-calibration-cancel');
+  if (resumeBeaconTracking) {
+    const resumed = startGimbalBeaconTracking();
+    if (!resumed.ok) {
+      gimbalBeaconCalibrationState.message += ` Tracking resume failed: ${resumed.error}`;
+      addLog('GIMBAL_ERR', gimbalBeaconCalibrationState.message);
+    } else {
+      gimbalBeaconCalibrationState.message = 'Calibration cancelled; Beacon tracking resumed.';
+    }
+  }
   res.json({ success: true, calibration: publicBeaconCalibrationState(), state: gimbalState });
 });
 
@@ -5336,6 +5536,7 @@ app.post('/api/system/reboot', (req, res) => {
 });
 
 app.post('/api/emergency/stop', (req, res) => {
+  const requestedAt = Date.now();
   addLog('CRITICAL', 'Emergency stop triggered');
   stopUwbFollow('emergency_stop');
 
@@ -5357,16 +5558,15 @@ app.post('/api/emergency/stop', (req, res) => {
   });
   disarmAndReturnManual('emergency_stop');
   controlAccess.clearDisconnectedOwner('emergency_stop');
-  systemState.telemetry.armed = false;
-
-  io.emit('aircraft_disarmed');
+  // A queued DISARM is not a flight-controller confirmation. Only incoming
+  // FCU telemetry may change armed state or emit aircraft_disarmed.
   io.emit('motor_update', {
     channel: 0,
     pwm: PWM_CENTER,
     timestamp: new Date().toISOString()
   });
 
-  res.json({ success: true, message: 'Emergency stop activated' });
+  res.json({ success: true, requestedAt, confirmed: false, message: 'Emergency stop requested; awaiting FCU confirmation' });
 });
 
 app.get('/health', (req, res) => {
@@ -5423,8 +5623,14 @@ io.on('connection', (socket) => {
 
   socket.on('arm', () => {
     if (!controlAccess.authorizeSocket(socket, true)) return;
+    refreshHardwareState();
+    if (!systemState.isConnected || systemState.telemetry.imuCalibration?.active
+      || uwbFollowState.active || uwbFollowTransitionBusy || uwbFollowState.autoResumePending) {
+      socket.emit('error_message', { message: 'Arming unavailable: check Pixhawk link, calibration and follow mode' });
+      return;
+    }
     if (systemState.telemetry.armed) {
-      socket.emit('info_message', { message: 'Rover already armed' });
+      socket.emit('aircraft_armed', { armed: true, alreadyArmed: true });
       return;
     }
 
@@ -5447,7 +5653,9 @@ io.on('connection', (socket) => {
 
   socket.on('request_telemetry', () => {
     if (!controlAccess.authorizeSocket(socket, false)) return;
-    socket.emit('telemetry_update', systemState.telemetry);
+    if (!wifiDelivery.enqueue(socket, 'telemetry_update', systemState.telemetry)) {
+      socket.emit('telemetry_update', systemState.telemetry);
+    }
   });
 
   socket.on('disconnect', () => {
@@ -5459,6 +5667,18 @@ io.on('connection', (socket) => {
     addLog('ERROR', `Socket error (${socket.id}): ${error}`);
   });
 });
+
+const stopExperimentSnapshot = startExperimentSnapshot(() => ({
+  telemetry: systemState.telemetry,
+  hardware: systemState.hardware,
+  roverControl: systemState.roverControl,
+  follow: uwbFollowState,
+  vision: systemState.vision,
+  gimbal: gimbalState,
+  gimbalTrackTarget,
+  channels: { left: ROVER_LEFT_CHANNEL, right: ROVER_RIGHT_CHANNEL },
+  neutralPwm: PWM_CENTER
+}));
 
 httpServer.listen(WEB_PORT, WEB_HOST, () => {
   console.log(`
@@ -5518,9 +5738,13 @@ function shutdown() {
   }, 2500);
   forceExitTimer.unref();
 
+  usbUwbSource?.close();
+  stopExperimentSnapshot();
   controlAccess.close();
+  wifiDelivery.close();
   flushTelemetryCsv(true);
   addLog('INFO', 'Server shutting down');
+  clearInterval(uwbPathTimer);
   clearInterval(uwbFollowTimer);
   clearInterval(manualRoverSlewTimer);
   stopUwbFollow('server_shutdown', { disarm: true });

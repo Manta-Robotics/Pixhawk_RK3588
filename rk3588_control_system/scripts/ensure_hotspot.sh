@@ -3,11 +3,30 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_FILE="$PROJECT_DIR/config/system.config.json"
+CONFIG_FILE="${MANTA_CONFIG_FILE:-$PROJECT_DIR/config/system.config.json}"
 ACTION="${1:-start}"
 HOTSPOT_WAIT_SECONDS="${HOTSPOT_WAIT_SECONDS:-20}"
 
+case "$ACTION" in
+    start|stop|ensure) ;;
+    watch)
+        trap 'exit 0' TERM INT
+        while true; do
+            if ! bash "$0" ensure; then
+                echo "[hotspot] Recovery failed; retrying in ${HOTSPOT_CHECK_INTERVAL_SECONDS:-15}s." >&2
+            fi
+            sleep "${HOTSPOT_CHECK_INTERVAL_SECONDS:-15}" &
+            wait $! || true
+        done
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|ensure|watch}" >&2
+        exit 2
+        ;;
+esac
+
 eval "$(python3 - "$CONFIG_FILE" <<'PY'
+import ipaddress
 import json
 import shlex
 import sys
@@ -24,6 +43,7 @@ values = {
     'HOTSPOT_FALLBACK_INTERFACE': hotspot.get('fallback_interface', 'wlan0'),
     'HOTSPOT_BAND': hotspot.get('band', 'bg'),
     'HOTSPOT_CHANNEL': hotspot.get('channel', 6),
+    'HOTSPOT_PORTAL_IP': str(ipaddress.IPv4Address(hotspot.get('portal_ip', '10.42.0.1'))),
     'PREFERRED_WIRELESS': cfg.get('wireless_interface', 'p2p0')
 }
 
@@ -57,14 +77,31 @@ pick_interface() {
         fi
     done
 
-    return 1
+    # Jetson uses predictable names such as wlP1p1s0 instead of wlan0.
+    nmcli -t -f DEVICE,TYPE device status | awk -F: '$2 == "wifi" {print $1; exit}'
 }
 
-nmcli radio wifi on >/dev/null 2>&1 || true
+hotspot_is_active() {
+    [[ "$(nmcli -g GENERAL.CONNECTION device show "$HOTSPOT_IFACE")" == "$HOTSPOT_CONNECTION_NAME" ]] &&
+        nmcli -g IP4.ADDRESS device show "$HOTSPOT_IFACE" | grep -Fxq "$HOTSPOT_PORTAL_IP/24"
+}
+
+if ! command -v nmcli >/dev/null 2>&1; then
+    echo "[hotspot] NetworkManager (nmcli) is required." >&2
+    exit 1
+fi
 
 if [[ "$ACTION" == "stop" ]]; then
     nmcli connection down "$HOTSPOT_CONNECTION_NAME" >/dev/null 2>&1 || true
     echo "[hotspot] Hotspot stopped: $HOTSPOT_CONNECTION_NAME"
+    exit 0
+fi
+
+nmcli radio wifi on >/dev/null 2>&1 || true
+
+# An ensure check must not disconnect clients on a healthy hotspot.
+HOTSPOT_IFACE="$(pick_interface || true)"
+if [[ "$ACTION" == "ensure" && -n "$HOTSPOT_IFACE" ]] && hotspot_is_active; then
     exit 0
 fi
 
@@ -107,11 +144,16 @@ nmcli connection modify "$HOTSPOT_CONNECTION_NAME" \
     connection.interface-name "$HOTSPOT_IFACE" \
     connection.autoconnect yes \
     connection.autoconnect-priority 100 \
+    connection.autoconnect-retries 0 \
+    connection.permissions "" \
     802-11-wireless.mode ap \
     802-11-wireless.ssid "$HOTSPOT_SSID" \
     802-11-wireless.band "$HOTSPOT_BAND" \
     802-11-wireless.channel "$HOTSPOT_CHANNEL" \
+    802-11-wireless.powersave 2 \
     ipv4.method shared \
+    ipv4.addresses "$HOTSPOT_PORTAL_IP/24" \
+    ipv4.never-default yes \
     ipv6.method disabled >/dev/null
 
 if [[ "$HOTSPOT_SECURITY" == "open" || "$HOTSPOT_SECURITY" == "none" ]]; then
@@ -126,7 +168,6 @@ else
         wifi-sec.psk "$HOTSPOT_PASSWORD" >/dev/null
 fi
 
-nmcli device disconnect "$HOTSPOT_IFACE" >/dev/null 2>&1 || true
 nmcli connection up "$HOTSPOT_CONNECTION_NAME" ifname "$HOTSPOT_IFACE" >/dev/null
 
 echo "[hotspot] Hotspot started on $HOTSPOT_IFACE"

@@ -95,9 +95,15 @@ test('camera requests remain active while standalone UWB and full telemetry keep
     config.bridge_telemetry_port, '127.0.0.1', (error) => error ? reject(error) : resolve()));
   const started = performance.now();
   await send({ type: 'uwb', payload: { distanceM: 1.23, azimuthDeg: 4, fresh: true, online: true,
-    measurementStatus: 'trusted', measurementUpdatedAt: 1000 } });
+    measurementStatus: 'trusted', measurementUpdatedAt: Date.now(),
+    relativeXM: 1.23*Math.cos(4*Math.PI/180), relativeYM: 1.23*Math.sin(4*Math.PI/180),
+    smoothing:{ready:true}, rawDistanceM:99, rawAzimuthDeg:179 } });
   while (!packets.some(([name]) => name === 'uwb_update') && performance.now() - started < 1000) await delay(10);
   assert.ok(packets.some(([name, data]) => name === 'uwb_update' && data.distanceM === 1.23));
+  const firstUwb=packets.find(([name,data])=>name==='uwb_update' && data.distanceM===1.23)[1];
+  assert.equal(firstUwb.coordinateSource,'smoothed');
+  assert.equal(firstUwb.elevationDeg,null);
+  assert.doesNotMatch(JSON.stringify(firstUwb),/rawDistanceM|rawAzimuthDeg|rawObservation/);
   assert.ok(performance.now() - started < 400, 'slow camera requests must not delay UWB publication');
   const statusStarted = performance.now();
   const status = await (await read('/api/status')).json();
@@ -111,14 +117,15 @@ test('camera requests remain active while standalone UWB and full telemetry keep
   assert.ok(packets.some(([name]) => name === 'motor_output_update'));
   assert.ok(packets.some(([name]) => name === 'telemetry_update'));
   // Exercise the production UDP -> Socket.IO path with 40 Hz observations.
-  const streamStart = performance.now();
+  const streamStart = performance.now(), streamClock=Date.now();
   for (let index = 0; index < 80; index++) {
     const wait = streamStart + index * 25 - performance.now();
     if (wait > 0) await delay(wait);
     await send({ type: 'uwb', payload: { distanceM: 1.23, azimuthDeg: 4,
-      fresh: true, online: true, measurementStatus: 'trusted', measurementUpdatedAt: 2000 + index * 25 } });
+      fresh: true, online: true, measurementStatus: 'trusted', measurementUpdatedAt: Date.now(),
+      relativeXM:1.23*Math.cos(4*Math.PI/180),relativeYM:1.23*Math.sin(4*Math.PI/180),smoothing:{ready:true} } });
   }
-  const received = () => new Set(packets.filter(([name, data]) => name === 'uwb_update' && data.measurementUpdatedAt >= 2000)
+  const received = () => new Set(packets.filter(([name, data]) => name === 'uwb_update' && data.measurementUpdatedAt >= streamClock)
     .map(([, data]) => data.measurementUpdatedAt));
   const streamDeadline = performance.now() + 1000;
   while (received().size < 80 && performance.now() < streamDeadline) await delay(10);

@@ -28,7 +28,7 @@ function sender(manualLimit=100) {
     asFiniteNumber:(v,f)=>Number.isFinite(Number(v))?Number(v):f,
     clamp:(v,a,b)=>Math.max(a,Math.min(b,v)),toPwm:v=>Math.round(Math.max(1000,Math.min(2000,v))),
     sendMavlinkCommand:(command,params)=>calls.push({command,params})};
-  const context=vm.createContext(box);vm.runInContext(functions,context);
+  const context=vm.createContext(Object.assign(box, {emitDashboardState:()=>{}}));vm.runInContext(functions,context);
   return {calls,advance(ms){now+=ms;},run(throttle,steering,extra={}) {
     box.input={relativeImuControl:true,safe:true,throttlePercent:throttle,steeringDegrees:steering,...extra};
     return vm.runInContext('sendUwbRelativeDrive(input)',context);

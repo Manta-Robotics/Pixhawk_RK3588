@@ -1,7 +1,6 @@
 // SIYI A8 mini SDK: https://siyi.biz/siyi_file/A8%20mini/SDK%20-%20V0.1.1.pdf
 // Application coordinates: yaw right positive, pitch down positive.
-// Ship camera policy: horizontal (0 degrees) through straight down (90 degrees).
-// Enforce the horizon at the wire boundary as well as in the control planner.
+// Enforce configured pitch limits within SDK bounds at the wire boundary.
 // The existing control planner uses 44-byte internal command envelopes. Only
 // SIYI packets produced here may reach an A8 socket; envelopes are never sent.
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -53,6 +52,8 @@ export class SiyiGimbal {
   constructor(options = {}) {
     this.sequence = 0;
     this.options = options;
+    this.pitchMinDeg = clamp(Number(options.pitch_min_deg ?? 0), -90, 90);
+    this.pitchMaxDeg = clamp(Number(options.pitch_max_deg ?? 90), this.pitchMinDeg, 90);
     this.mounting = null;
     this.lastOneShot = '';
     this.configuration = {};
@@ -66,20 +67,29 @@ export class SiyiGimbal {
     if (!(packet.control & 2)) return null;
     if (packet.command === 0x0a && p.length >= 6) {
       this.mounting = p[5];
-      this.configuration = { cameraRecording: p[3] === 1, recordStatus: p[3], tfCardInserted: p[3] !== 2, mounting: p[5] };
+      this.configuration = { cameraRecording: p[3] === 1, recordStatus: p[3], tfCardInserted: p[3] !== 2, mounting: p[5], reportedMounting: p[5] };
       return null;
     }
     if (packet.command !== 0x0d || p.length !== 12 || ![1, 2].includes(this.mounting)) return null;
     const rawPitchDeg = p.readInt16LE(2) / 10;
     // A8 upside-down mounting reports ~180 degrees at center (verified on hardware).
     const nativePitch = wrap(rawPitchDeg - (this.mounting === 2 ? 180 : 0));
+    // Physical camera coordinates: down positive in either mounting. On the
+    // installed inverted camera, raw -155 degrees means 25 degrees DOWN.
+    const pitchSign = this.mounting === 2 ? 1 : -1;
+    const pitchDeg = pitchSign * nativePitch;
+    const sdkPitchMinDeg = this.mounting === 2 ? -90 : -25;
+    const sdkPitchMaxDeg = this.mounting === 2 ? 25 : 90;
+    const attitudeValid = pitchDeg >= sdkPitchMinDeg && pitchDeg <= sdkPitchMaxDeg;
     return {
       ...previous, ...this.configuration, protocol: 'siyi',
-      yawDeg: wrap(p.readInt16LE(0) / 10), pitchDeg: -nativePitch,
+      yawDeg: wrap(p.readInt16LE(0) / 10), pitchDeg,
       rollDeg: p.readInt16LE(4) / 10,
-      gyroYawDps: p.readInt16LE(6) / 10, gyroPitchDps: -p.readInt16LE(8) / 10,
+      gyroYawDps: p.readInt16LE(6) / 10, gyroPitchDps: pitchSign * p.readInt16LE(8) / 10,
       gyroRollDps: p.readInt16LE(10) / 10,
-      rawPitchDeg, checksumValid: true, updatedAt: now
+      rawPitchDeg, attitudeValid,
+      attitudeInvalidReason: attitudeValid ? null : 'pitch_out_of_sdk_range',
+      checksumValid: true, updatedAt: now
     };
   }
 
@@ -92,7 +102,21 @@ export class SiyiGimbal {
     if (check !== frame[42]) throw new Error('Invalid internal gimbal checksum');
     const command = frame[2];
     let id; let payload;
-    const fresh = feedback?.checksumValid === true && now - Number(feedback.updatedAt) <= 350;
+    const age = now - feedback?.updatedAt;
+    const fresh = feedback?.checksumValid === true && feedback?.attitudeValid === true
+      && feedback.mounting === this.mounting
+      && Number.isFinite(feedback.updatedAt) && feedback.updatedAt > 0
+      && Number.isFinite(feedback.yawDeg) && Number.isFinite(feedback.pitchDeg)
+      && age >= 0 && age <= 350;
+    // A valid packet is not necessarily a valid attitude. Fail closed for every
+    // motion command, including home; keep non-motion camera commands unchanged.
+    if ([0, 0x72, 0x71].includes(command) && !fresh) {
+      this.lastOneShot = '';
+      return [this.packet(0x07, Buffer.alloc(2))];
+    }
+    const inverted = (feedback?.mounting ?? this.mounting) === 2;
+    const pitchMinDeg = Math.max(this.pitchMinDeg, inverted ? -90 : -25);
+    const pitchMaxDeg = Math.min(this.pitchMaxDeg, inverted ? 25 : 90);
     if (command === 0) {
       if (![0, 0x70].includes(frame[37])) throw new Error('SIYI requires guided_angle click control');
       this.lastOneShot = '';
@@ -101,13 +125,15 @@ export class SiyiGimbal {
         let yaw = frame.readInt16LE(38);
         let pitch = frame.readInt16LE(40);
         if ((yaw < 0 && feedback.yawDeg <= -135) || (yaw > 0 && feedback.yawDeg >= 135)) yaw = 0;
-        if ((pitch < 0 && feedback.pitchDeg <= 0) || (pitch > 0 && feedback.pitchDeg >= 90)) pitch = 0;
+        if ((pitch < 0 && feedback.pitchDeg <= pitchMinDeg) || (pitch > 0 && feedback.pitchDeg >= pitchMaxDeg)) pitch = 0;
         // SDK 0x07 uses signed percentage, not degrees/second. Keep an explicit
         // commissioning gain and cap instead of treating them as equal units.
         const gain = Number(this.options.rate_units_per_dps ?? 1);
         const cap = Number(this.options.max_rate_command ?? 40);
         payload.writeInt8(Math.round(clamp(yaw * gain, -cap, cap)), 0);
-        payload.writeInt8(Math.round(clamp(-pitch * gain, -cap, cap)), 1);
+        // Positive native speed moves physically UP in both mountings.
+        const nativePitchRate = -pitch;
+        payload.writeInt8(Math.round(clamp(nativePitchRate * gain, -cap, cap)), 1);
       }
       return [this.packet(0x07, payload)];
     }
@@ -115,7 +141,8 @@ export class SiyiGimbal {
       if (!fresh) return [this.packet(0x07, Buffer.alloc(2))];
       payload = Buffer.alloc(4);
       payload.writeInt16LE(Math.round(clamp(frame.readInt16LE(3) / 100, -135, 135) * 10), 0);
-      payload.writeInt16LE(Math.round(-clamp(frame.readInt16LE(5) / 100, 0, 90) * 10), 2);
+      const physicalPitch = clamp(frame.readInt16LE(5) / 100, pitchMinDeg, pitchMaxDeg);
+      payload.writeInt16LE(Math.round((inverted ? physicalPitch : -physicalPitch) * 10), 2);
       this.lastOneShot = '';
       return [this.packet(0x0e, payload)];
     }
