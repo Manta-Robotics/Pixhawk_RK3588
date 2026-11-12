@@ -23,6 +23,7 @@ import { Bonjour } from 'bonjour-service';
 import { validateSystemConfig } from '../scripts/validate_config.mjs';
 import { isSameOriginRequest, rejectCrossOrigin } from './origin_policy.js';
 import { createControlAccess, loadControlPin } from './control_access.js';
+import { installUwbVisionApi } from './uwb_vision_service.js';
 import { createGimbalWebrtcProxy } from './gimbal_webrtc_proxy.js';
 import { WifiLatestDelivery, WIFI_COMPRESSION, restrictCompressionToWifi, emitWifiAwareState } from './wifi_latest_delivery.js';
 import { computeBeaconControl, normalizeAngleDeg } from './gimbal_beacon.js';
@@ -315,6 +316,7 @@ const controlAccess = createControlAccess({
       return false;
     }
     stopUwbFollow(reason, { disarm: true });
+    uwbVisionService.stop();
     forceNeutralRoverControl('CONTROL_SESSION_ENDED', reason);
     if (isVisionActive()) stopVision();
     return false;
@@ -997,6 +999,23 @@ app.get(['/', '/index.html'], (_req, res) => {
   res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
 });
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
+
+const uwbVisionService = installUwbVisionApi(app, {
+  filename: process.env.MANTA_UWB_VISION_CONFIG || path.join(PROJECT_ROOT, 'data', 'uwb-vision.json'),
+  model: String(gimbalConfig.swimmer?.weights || 'scripts/best.pt'),
+  getInputs: () => ({
+    uwb: sharedUwbControlTelemetry().uwb,
+    pose: gimbalState.connected ? (gimbalState.feedback || {}) : {},
+    target: gimbalState.lastTarget || {},
+    trackerActive: gimbalState.trackingActive && isGimbalTrackingActive()
+      && gimbalState.trackMode === 'swimmer' && gimbalState.trackStatus.locked === true,
+    bearingCalibration: {
+      bearingSign: traditionalUwbFollowController.config.bearingSign,
+      bearingScale: traditionalUwbFollowController.config.bearingScale,
+      bearingOffsetDeg: traditionalUwbFollowController.config.bearingOffsetDeg
+    }
+  })
+});
 
 const telemetryCsvBuffer = [];
 let telemetryCsvFlushTimer = null;
@@ -5538,6 +5557,7 @@ app.post('/api/system/reboot', (req, res) => {
 app.post('/api/emergency/stop', (req, res) => {
   const requestedAt = Date.now();
   addLog('CRITICAL', 'Emergency stop triggered');
+  uwbVisionService.stop();
   stopUwbFollow('emergency_stop');
 
   for (let channel = 1; channel <= 8; channel += 1) {

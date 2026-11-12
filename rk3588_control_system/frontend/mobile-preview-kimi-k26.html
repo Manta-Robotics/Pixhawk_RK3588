@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#0a1017">
 <title>MANTA — Your AI Camera on Water</title>
+<link rel="stylesheet" href="css/uwb-vision.css?v=20261112">
 <style>
 :root{
   --bg:#0a1017;--bg2:#18232e;--bg3:#121c26;--glass:rgba(22,33,44,.84);
@@ -579,6 +580,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
         <span id="controlSessionLabel"></span>
         <button class="disconnect-btn" id="disconnectButton" type="button">断开</button>
       </div>
+      <section id="uwbVisionModule" aria-label="UWB与视觉融合追踪"></section>
       <div class="quadrant-grid" id="quadrantGrid">
         <div class="quad quad-imu" data-area="imu">
           <div class="quad-header">
@@ -2910,8 +2912,9 @@ setEmergency(true);setModal("imuCalibrationModal",false);
   document.addEventListener("keydown",function(e){if(e.key==="Escape"){if(relativeRadarHome)setRadarExpanded(false);toggleDrawer($("#toolDrawer"),false);toggleDrawer($("#demoConsole"),false)}});
 }
 function seedLogs(){ [ {source:"APP",message:"Manta App Preview 已启动",messageEn:"Manta App Preview started",category:"system"}, {source:"BLE",message:"近距离发现模块待机",messageEn:"Nearby discovery is standing by",category:"hardware"}, {source:"PIXHAWK",message:"等待设备连接",messageEn:"Waiting for device connection",category:"hardware"}, {source:"GIMBAL",message:"测试视频已载入",messageEn:"Test video loaded",category:"hardware"} ].forEach(addLog) }
-installEvents();installJoystick();installArmControl();seedLogs();renderTransportMode();renderConnection();renderTelemetry();renderGpsStatus();renderGimbalOsd();renderCalibrationWizard();renderMediaPlayer();renderMediaFilter();showView("device");window.MantaPreview={state:state,showView:showView,applyDemoState:applyDemoState,applyLanguage:applyLanguage,openImuCalibrationWizard:openImuCalibrationWizard};
+installEvents();installJoystick();installArmControl();seedLogs();renderTransportMode();renderConnection();renderTelemetry();renderGpsStatus();renderGimbalOsd();renderCalibrationWizard();renderMediaPlayer();renderMediaFilter();showView("device");window.MantaPreview={state:state,getTransport:function(){return transport},showView:showView,applyDemoState:applyDemoState,applyLanguage:applyLanguage,openImuCalibrationWizard:openImuCalibrationWizard};
 })()
 </script>
+<script type="module" src="js/uwb-vision-panel.js?v=20261112"></script>
 </body>
 </html>
