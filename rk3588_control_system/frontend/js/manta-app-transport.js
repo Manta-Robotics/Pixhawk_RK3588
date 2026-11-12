@@ -193,22 +193,32 @@
     };
 
     MockTransport.prototype.startUwbFollow = function () {
-        var state = { active: true, status: "tracking", reason: "tracking", desiredSpeedMps: 0.6, speedLimitMps: 0.8 };
+        var state = { active: true, status: "tracking", reason: "tracking", followMode: this.followMode || "rear", sideDistanceM: this.sideDistanceM || 2, trackingMethod: this.trackingMethod || "traditional", desiredSpeedMps: 0.6, speedLimitMps: 0.8 };
         this.emit("uwbFollow", state);
         return Promise.resolve({ success: true, state: state });
     };
 
     MockTransport.prototype.stopUwbFollow = function () {
-        var state = { active: false, status: "stopped", reason: "manual_stop", desiredSpeedMps: 0 };
+        var state = { active: false, status: "stopped", reason: "manual_stop", followMode: this.followMode || "rear", sideDistanceM: this.sideDistanceM || 2, trackingMethod: this.trackingMethod || "traditional", desiredSpeedMps: 0 };
         this.emit("uwbFollow", state);
         return Promise.resolve({ success: true, state: state });
     };
 
     MockTransport.prototype.setUwbFollowMethod = function (method) {
         var selected = method === "neural" ? "neural" : "traditional";
-        var state = { active: false, status: "stopped", reason: "method_selected", trackingMethod: selected, desiredSpeedMps: 0 };
+        this.trackingMethod = selected;
+        var state = { active: false, status: "stopped", reason: "method_selected", trackingMethod: selected, followMode: this.followMode || "rear", sideDistanceM: this.sideDistanceM || 2, desiredSpeedMps: 0 };
         this.emit("uwbFollow", state);
         return Promise.resolve({ success: true, trackingMethod: selected, state: state });
+    };
+
+    MockTransport.prototype.setUwbFollowMode = function (mode, distanceM) {
+        this.followMode = mode; this.sideDistanceM = distanceM;
+        if (mode !== "rear") this.trackingMethod = "traditional";
+        var state = { active: false, status: "stopped", reason: "mode_selected", followMode: mode,
+            sideDistanceM: distanceM, trackingMethod: this.trackingMethod || "traditional", desiredSpeedMps: 0 };
+        this.emit("uwbFollow", state);
+        return Promise.resolve({ success: true, followMode: mode, state: state });
     };
 
     MockTransport.prototype.arm = function () {
@@ -707,6 +717,13 @@
 
     LiveTransport.prototype.setUwbFollowMethod = function (method) {
         return postJson("/api/uwb-follow/method", { method: method }).then(function (result) {
+            if (result && result.state) this.emit("uwbFollow", result.state);
+            return result;
+        }.bind(this));
+    };
+
+    LiveTransport.prototype.setUwbFollowMode = function (mode, distanceM) {
+        return postJson("/api/uwb-follow/mode", { mode: mode, distanceM: distanceM }).then(function (result) {
             if (result && result.state) this.emit("uwbFollow", result.state);
             return result;
         }.bind(this));

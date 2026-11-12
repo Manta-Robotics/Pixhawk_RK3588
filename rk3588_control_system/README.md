@@ -20,6 +20,9 @@ backend/server.js
 
 详细的数据流与组件职责见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
+自动跟随新增后方、左侧、右侧位置选择；左右侧伴随的定位条件、控制方式、API 和验证边界见
+[左右侧伴随](docs/SIDE_FOLLOW.md)。
+
 ## 2. 硬件接线
 
 ### Pixhawk TELEM2

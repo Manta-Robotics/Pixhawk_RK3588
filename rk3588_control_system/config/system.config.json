@@ -92,6 +92,14 @@
     "traditional_yaw_rate_damping": 0.6,
     "traditional_minimum_turn_speed_scale": 0.15,
     "following_distance_m": 0.5,
+    "side_follow": {
+      "distance_m": 2,
+      "position_gain": 0.4,
+      "minimum_target_speed_mps": 0.2,
+      "motion_confirm_ms": 800,
+      "motion_window_ms": 1600,
+      "max_speed_mps": 0.8
+    },
     "safety_distance_m": 0.3,
     "safety_resume_distance_m": 1.2,
     "hard_stop_enabled": false,

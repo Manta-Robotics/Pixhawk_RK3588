@@ -700,6 +700,13 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
             </div>
             <div class="drive-side">
               <div class="tracking-method-control" id="trackingMethodControl" hidden>
+                <div class="tracking-method-head"><span>跟随位置</span><b>相对目标前进方向</b></div>
+                <div class="tracking-method-switch" style="grid-template-columns:repeat(3,minmax(0,1fr))" role="radiogroup" aria-label="跟随位置">
+                  <button class="tracking-method-btn active" type="button" data-follow-mode="rear" role="radio" aria-checked="true"><strong>后方</strong></button>
+                  <button class="tracking-method-btn" type="button" data-follow-mode="left" role="radio" aria-checked="false"><strong>左侧</strong></button>
+                  <button class="tracking-method-btn" type="button" data-follow-mode="right" role="radio" aria-checked="false"><strong>右侧</strong></button>
+                </div>
+                <label class="tracking-method-head" for="sideFollowDistance"><span>侧向间距 / 米</span><input id="sideFollowDistance" type="number" min="0.5" max="20" step="0.1" value="2" style="width:64px;padding:4px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--t2)"></label>
                 <div class="tracking-method-head"><span>跟踪控制方法</span><b id="trackingMethodState">TRADITIONAL</b></div>
                 <div class="tracking-method-switch" role="radiogroup" aria-label="跟踪控制方法">
                   <button class="tracking-method-btn active" type="button" data-tracking-method="traditional" role="radio" aria-checked="true"><strong>传统控制</strong><small>TRADITIONAL</small></button>
@@ -1423,11 +1430,19 @@ function renderUwbFollow(){
   if(!button||!label||!status)return;
   var busy=uwbFollowIsStarting(),searching=Boolean(follow.autoResumePending)&&!busy,requested=uwbFollowIsRequested();
   var trackingMethod=String(follow.trackingMethod||"traditional").toLowerCase()==="neural"?"neural":"traditional";
+  var followMode=["left","right"].indexOf(follow.followMode)>=0?follow.followMode:"rear";
+  $$("[data-follow-mode]").forEach(function(modeButton){
+    modeButton.classList.toggle("active",modeButton.dataset.followMode===followMode);
+    modeButton.setAttribute("aria-checked",String(modeButton.dataset.followMode===followMode));
+    modeButton.disabled=requested||!state.connected||!state.controlLink||!pageCanControl();
+  });
+  var distanceInput=$("#sideFollowDistance");
+  if(distanceInput){distanceInput.disabled=requested||!state.connected||!state.controlLink||!pageCanControl();if(document.activeElement!==distanceInput)distanceInput.value=Number(follow.sideDistanceM)||2;}
   $$("[data-tracking-method]").forEach(function(methodButton){
     var selected=methodButton.dataset.trackingMethod===trackingMethod;
     methodButton.classList.toggle("active",selected);
     methodButton.setAttribute("aria-checked",String(selected));
-    methodButton.disabled=requested||!state.connected||!state.controlLink;
+    methodButton.disabled=requested||!state.connected||!state.controlLink||(followMode!=="rear"&&methodButton.dataset.trackingMethod==="neural");
   });
   $("#trackingMethodState").textContent=trackingMethod==="neural"?"SMARTUSV PPO":"TRADITIONAL";
   button.classList.toggle("active",requested);
@@ -1436,6 +1451,21 @@ function renderUwbFollow(){
   label.textContent=follow.active?localize("停止跟随","Stop follow"):searching?localize("停止搜索","Stop search"):busy?localize("取消启动","Cancel start"):localize("启动跟随","Start follow");
   var labels={awaiting_signal:localize("搜索 UWB","Searching for UWB"),awaiting_trusted_uwb:localize("搜索 UWB","Searching for UWB"),auto_resume_ready:localize("UWB 已找到，准备跟随","UWB acquired; preparing to follow"),confirming_recovered_uwb:localize("确认连续有效 UWB","Confirming valid UWB samples"),auto_resume_recovering:localize("定位恢复中","Recovering target"),acro_velocity_unavailable:localize("等待有效航速数据","Waiting for valid velocity"),acro_parameters_not_ready:localize("等待ACRO控制参数","Waiting for ACRO parameters"),imu_stale:localize("航向数据过期，已退出","Stale heading; stopped"),prediction_clock_reset:localize("时钟变化，已退出","Clock changed; stopped"),predicting:localize("短时预测跟随","Predicted following"),waiting_target:localize("等待目标出水","Waiting for swimmer"),recovering:localize("定位恢复中","Recovering target"),prediction_tracking:localize("短时预测跟随","Predicted following"),prediction_recovering:localize("定位恢复中","Recovering target"),prediction_reacquiring:localize("校验出水测量","Checking new measurements"),prediction_pose_unavailable:localize("运动状态不足，等待出水","Motion estimate unavailable; waiting"),prediction_warming_up:localize("等待连续有效测量","Waiting for valid samples"),prediction_limit:localize("预测到限，等待出水","Prediction limit; waiting"),prediction_clearance:localize("间距不足，等待出水","Insufficient clearance; waiting"),prediction_speed_limit:localize("船速过高，暂停预测推进","Vessel too fast; waiting"),prediction_wait_timeout:localize("目标失联超时，已退出","Target timeout; stopped"),target_identity_changed:localize("目标身份变化，已退出","Target changed; stopped"),tracking:localize("跟随中","Tracking"),holding:localize("间距保护，保持停止","Separation protection; holding"),holding_distance:localize("间距保护，保持停止","Separation protection; holding"),method_selected:localize("等待启动","Ready to start"),disarming:localize("正在解除武装","Disarming"),switching_mode:localize("正在切换控制模式","Switching control mode"),arming:localize("正在自动武装","Auto arming"),gps_fix_invalid:localize("GPS无效","GPS invalid"),ekf_unhealthy:localize("EKF无效","EKF invalid"),imu_invalid:localize("IMU航向无效","IMU yaw invalid"),uwb_stale:localize("UWB失效","UWB stale"),guided_required:localize("需要GUIDED模式","GUIDED required"),manual_required:localize("需要MANUAL模式","MANUAL required"),pilot_steering_not_ready:localize("等待电机控制参数","Waiting for motor control parameters"),manual_mode_timeout:localize("MANUAL切换超时","MANUAL timeout"),acro_required:localize("需要ACRO模式","ACRO required"),guided_mode_timeout:localize("GUIDED切换超时","GUIDED timeout"),acro_mode_timeout:localize("ACRO切换超时","ACRO timeout"),arming_timeout:localize("武装超时","Arming timeout"),manual_stop:localize("已停止","Stopped"),not_started:localize("未启动","Not started")};
   var estimate=follow.targetEstimate||{};
+  Object.assign(labels,{
+    mode_selected:localize("位置已选择，等待启动","Position selected; ready to start"),
+    side_tracking:localize(followMode==="left"?"左侧伴随中":"右侧伴随中",followMode==="left"?"Following on the left":"Following on the right"),
+    side_direction_unavailable:localize("等待目标稳定前进，确认左右方向","Waiting for target motion to confirm direction"),
+    disabled:localize("航速反馈未启用","Speed feedback is unavailable"),
+    side_gps_confirming:localize("正在确认航速","Confirming ground speed"),
+    side_navigation_stale:localize("定位或航速过期，已停止","Navigation or velocity stale; stopped"),
+    ekf_unavailable:localize("定位融合无效，已停止","Navigation estimate invalid; stopped"),
+    velocity_invalid:localize("航速无效，已停止","Velocity invalid; stopped"),
+    gps_stale:localize("GPS 数据过期","GPS data stale"),
+    velocity_stale:localize("航速数据过期","Velocity data stale"),
+    side_receiver_coverage_required:localize("UWB 侧面覆盖不足","UWB side coverage is insufficient"),
+    side_target_outside_coverage:localize("目标超出 UWB 覆盖，推进停止","Target outside UWB coverage; propulsion stopped"),
+    side_measurement_untrusted:localize("正在校验 UWB 测量","Checking UWB measurements")
+  });
   status.textContent=searching?localize("搜索 UWB · 等待有效信号","Searching for UWB · waiting for valid signal"):labels[follow.reason]||labels[follow.status]||String(follow.reason||follow.status||localize("未启动","Not started"));
   if(follow.positionWaiting)status.textContent=localize("定位暂失 · 推进归零等待","Position unavailable · neutral waiting");
   if(follow.active&&follow.relativeImuControl&&!follow.pausePropulsion)status.textContent=(follow.planner==="nmpc"?(follow.gpsSpeedControlActive?localize("GPS 闭环预测 · ","GPS predictive control · "):localize("UWB 相对预测 · ","UWB relative predictive control · ")):(follow.gpsSpeedControlActive?localize("GPS 速度闭环 · ","GPS speed feedback · "):localize("UWB 角度跟随 · ","UWB bearing follow · ")))+status.textContent;
@@ -2857,6 +2887,20 @@ if(!gimbalControlAvailable()){showToast("云台当前不可控制","Gimbal contr
     }).catch(function(error){showToast(error.message||localize("控制方法切换失败","Controller switch failed"));renderUwbFollow()});
   })});
   $("#beaconCalibrationNext").addEventListener("click",advanceBeaconCalibration);
+  function selectFollowPosition(mode){
+    if(uwbFollowIsRequested()){showToast(localize("请先停止跟随，再切换位置","Stop following before changing position"));return}
+    var activeTransport=ensureTransport(),distance=Number($("#sideFollowDistance").value);
+    if(!Number.isFinite(distance)||distance<0.5||distance>20){showToast(localize("侧向间距应为 0.5–20 米","Side distance must be 0.5–20 m"));return}
+    if(!activeTransport||!activeTransport.setUwbFollowMode){showToast(localize("当前连接不支持位置切换","Position selection is unavailable"));return}
+    $$("[data-follow-mode]").forEach(function(button){button.disabled=true});
+    activeTransport.setUwbFollowMode(mode,distance).then(function(result){
+      if(result&&result.state)state.uwbFollow=result.state;
+      renderUwbFollow();
+      showToast(localize(mode==="left"?"已选择左侧伴随":mode==="right"?"已选择右侧伴随":"已选择后方跟随",mode==="left"?"Left side selected":mode==="right"?"Right side selected":"Rear following selected"));
+    }).catch(function(){showToast(localize("位置切换失败，请先停止跟随并检查间距","Could not change position; stop following and check the distance"));renderUwbFollow()});
+  }
+  $$("[data-follow-mode]").forEach(function(button){button.addEventListener("click",function(){selectFollowPosition(button.dataset.followMode)})});
+  $("#sideFollowDistance").addEventListener("change",function(){selectFollowPosition((state.uwbFollow||{}).followMode||"rear")});
   $("#beaconCalibrationProfile").addEventListener("change",renderBeaconCalibration);
   $("#beaconCalibrationCancel").addEventListener("click",cancelBeaconCalibration);
   $("#beaconCalibrationClose").addEventListener("click",cancelBeaconCalibration);
