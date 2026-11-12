@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FUSION_DEFAULTS, validateFusionConfig, evaluateUwbVision } from '../frontend/js/uwb-vision-core.js';
 
-export function installUwbVisionApi(app, { filename, getInputs, model = '' }) {
-    let config = { ...FUSION_DEFAULTS }, enabled = false;
+export function installUwbVisionApi(app, { filename, getInputs, model = '', defaults = {} }) {
+    let config = { ...FUSION_DEFAULTS, ...validateFusionConfig(defaults) }, enabled = false;
     if (fs.existsSync(filename)) {
         try { config = { ...config, ...validateFusionConfig(JSON.parse(fs.readFileSync(filename, 'utf8'))) }; }
         catch (error) { console.error('[UWB Vision] Invalid saved config; using uncalibrated defaults:', error.message); }
