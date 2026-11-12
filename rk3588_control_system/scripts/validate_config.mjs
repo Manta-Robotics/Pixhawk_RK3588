@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { PATH_FOLLOW_BOUNDS } from '../backend/uwb_path_follow.js';
+import { SIDE_FOLLOW_BOUNDS, SIDE_FOLLOW_DEFAULTS } from '../backend/uwb_side_follow.js';
 import { PREDICTION_DEFAULTS } from '../backend/uwb_target_prediction.js';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -169,6 +170,21 @@ export function validateSystemConfig(config) {
   const recordings = isObject(config.recordings) ? config.recordings : {};
   if (!String(recordings.dir || '').trim()) errors.push('recordings.dir is required');
   const executionMode = config.uwb_follow?.execution_mode;
+  const sideFollow = config.uwb_follow?.side_follow;
+  if (sideFollow !== undefined) {
+    if (!isObject(sideFollow)) errors.push('uwb_follow.side_follow must be an object');
+    else {
+      for (const [key, [low, high]] of Object.entries(SIDE_FOLLOW_BOUNDS)) {
+        if (sideFollow[key] !== undefined && (typeof sideFollow[key] !== 'number'
+          || !Number.isFinite(sideFollow[key]) || sideFollow[key] < low || sideFollow[key] > high))
+          errors.push(`Invalid side_follow.${key}`);
+      }
+      const side = { ...SIDE_FOLLOW_DEFAULTS, ...sideFollow };
+      if (side.motion_window_ms < side.motion_confirm_ms) errors.push('side_follow motion window must cover confirmation');
+      if (side.distance_m <= (config.uwb_follow.safety_distance_m ?? 1) + 0.2)
+        errors.push('side_follow.distance_m must exceed safety distance plus 0.2 m');
+    }
+  }
   const vesselBearing = config.uwb_follow || {};
   if (vesselBearing.bearing_sign !== undefined && ![-1, 1].includes(vesselBearing.bearing_sign))
     errors.push('uwb_follow.bearing_sign must be -1 or 1');

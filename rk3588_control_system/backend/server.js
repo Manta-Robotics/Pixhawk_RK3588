@@ -33,6 +33,7 @@ import { shapeRoverAxis } from './rover_slew.js';
 import { DualThrustRoverLimiter } from './dual_thrust_rover.js';
 import { TraditionalManualPropulsion } from './traditional_manual_propulsion.js';
 import { UwbFollowController } from './uwb_follow.js';
+import { UwbSideFollowController, FOLLOW_MODES } from './uwb_side_follow.js';
 import { IntermittentUwbFollow } from './uwb_target_prediction.js';
 import { SmoothedUwbPath } from './uwb_path_integration.js';
 import { SmoothedUwbOutput } from './uwb_smoothed_output.js';
@@ -126,6 +127,9 @@ const lastUwbPointApproach = new LastUwbPointApproach(uwbControllerConfig);
 const uwbGpsDriftHold = new UwbGpsDriftHold(uwbControllerConfig);
 let startUwbFollowRequest = null;
 const traditionalUwbFollowController = new UwbFollowController({ ...uwbControllerConfig, manual_propulsion: 'single_side' });
+const sideUwbFollowController = new UwbSideFollowController({ ...uwbControllerConfig,
+  side_receiver_fov_half_deg: config.uwb_dual?.receiver_fov_half_deg });
+let uwbFollowMode = 'rear';
 const uwbPathPlanner = new SmoothedUwbPath(traditionalUwbFollowController.config);
 let neuralUwbFollowController = null;
 let neuralUwbFollowLoadError = null;
@@ -145,6 +149,8 @@ let uwbFollowState = {
   status: 'idle',
   reason: 'not_started',
   trackingMethod: uwbTrackingMethod,
+  followMode: uwbFollowMode,
+  sideDistanceM: sideUwbFollowController.options.distance_m,
   controlMode: 'auto',
   requiredFlightMode: null,
   navigationAvailable: false,
@@ -3731,6 +3737,8 @@ function publishUwbFollowState(result, active = uwbFollowState.active) {
   uwbFollowState = {
     ...result,
     ...uwbAutoResume.snapshot(),
+    followMode: result.followMode || uwbFollowController.followMode || 'rear',
+    sideDistanceM: result.sideDistanceM ?? uwbFollowState.sideDistanceM ?? 2,
     trackingMethod: result.trackingMethod || uwbTrackingMethod,
     active,
     status: result.status || (active && result.safe ? 'tracking' : (result.reason === 'safety_distance' ? 'safety_stop' : 'stopped')),
@@ -3884,6 +3892,9 @@ function selectUwbTrackingMethod(requestedMethod) {
   if (!['traditional', 'neural'].includes(method)) {
     return { ok: false, error: 'tracking_method_must_be_traditional_or_neural' };
   }
+  if (method === 'neural' && uwbFollowMode !== 'rear') {
+    return { ok: false, error: 'side_follow_requires_traditional' };
+  }
   if (method === 'neural' && !neuralUwbFollowController) {
     return { ok: false, error: `neural_policy_unavailable:${neuralUwbFollowLoadError || 'load_failed'}` };
   }
@@ -3897,10 +3908,34 @@ function selectUwbTrackingMethod(requestedMethod) {
   traditionalUwbFollowController.reset();
   if (neuralUwbFollowController) neuralUwbFollowController.reset();
   uwbTrackingMethod = method;
-  uwbFollowController = method === 'neural' ? neuralUwbFollowController : traditionalUwbFollowController;
+  uwbFollowController = uwbFollowMode !== 'rear' ? sideUwbFollowController
+    : method === 'neural' ? neuralUwbFollowController : traditionalUwbFollowController;
   publishUwbFollowState(idleUwbFollowResult('method_selected'), false);
   addLog('UWB_FOLLOW', `Tracking method selected: ${method}`);
   return { ok: true, method };
+}
+
+function selectUwbFollowMode(requestedMode, distanceM) {
+  if (!FOLLOW_MODES.includes(requestedMode)) return { ok: false, error: 'follow_mode_must_be_rear_left_or_right' };
+  if (uwbFollowState.active || uwbFollowTransitionBusy || uwbAutoResume.pending)
+    return { ok: false, error: 'stop_tracking_before_switching_mode' };
+  const distance = distanceM === undefined ? sideUwbFollowController.options.distance_m : distanceM;
+  try { sideUwbFollowController.setMode(requestedMode === 'rear' ? 'left' : requestedMode, distance); }
+  catch (error) { return { ok: false, error: error.message }; }
+  // Selecting a position never starts propulsion or changes flight mode.
+  sendUwbFollowStop('follow_mode_switch');
+  intermittentUwbFollow.reset();
+  lastUwbPointApproach.reset();
+  uwbGpsDriftHold.reset();
+  traditionalUwbFollowController.reset();
+  neuralUwbFollowController?.reset();
+  uwbFollowMode = requestedMode;
+  if (uwbFollowMode !== 'rear') uwbTrackingMethod = 'traditional';
+  uwbFollowController = uwbFollowMode !== 'rear' ? sideUwbFollowController
+    : uwbTrackingMethod === 'neural' ? neuralUwbFollowController : traditionalUwbFollowController;
+  publishUwbFollowState({ ...idleUwbFollowResult('mode_selected'), sideDistanceM: distance }, false);
+  addLog('UWB_FOLLOW', `Follow position selected: ${uwbFollowMode}, side distance ${distance}m`);
+  return { ok: true };
 }
 
 function requireUwbFollowStartClearance(controlMode = uwbFollowControlMode) {
@@ -3954,13 +3989,14 @@ function sendUwbRelativeDrive(result) {
     const sameDirectionSteeringLimit=throttle*steeringSpan/throttleSpan
       *traditionalManualPropulsion.limiter.config.steeringShare;
     const steering=clamp(requested.steering,-sameDirectionSteeringLimit,sameDirectionSteeringLimit);
-    const limited=result.rawControl?traditionalManualPropulsion.update({
+    const limited=result.rawControl||result.followMode?traditionalManualPropulsion.update({
       now:Date.now(),result:{...result,throttlePercent:throttle,steeringDegrees:steering},
       telemetry:systemState.telemetry,connected:systemState.isConnected
     }):{throttle,steering,safe:true};
     if(!limited.safe){forceNeutralRoverControl('UWB_IMU_RELATIVE',limited.reason);return limited;}
     const output=sendManualRoverOutput(limited,'UWB_IMU_RELATIVE');
     uwbFollowController.relativeImuControl?.trackApplied?.(output.throttle,output.steering);
+    uwbFollowController.trackApplied?.(output.throttle, output.steering);
     lastRoverCommandAt=Date.now();
     Object.assign(result,{throttlePercent:output.throttle,steeringDegrees:output.steering});
     return {...output,safe:true,sameDirectionSteeringLimit,
@@ -4185,14 +4221,18 @@ function updateUwbFollow() {
 
   const now = Date.now();
   const controlTelemetry = sharedUwbControlTelemetry(now);
-  let result = intermittentUwbFollow.update({
+  const followInput = {
     controller: uwbFollowController,
     now,
     telemetry: controlTelemetry,
     connected: systemState.isConnected,
     controlMode: uwbFollowControlMode
-  });
-  result = lastUwbPointApproach.update({ enabled: UWB_HOLD_ON_POSITION_LOSS, result,
+  };
+  // Side guidance requires live measurements and its own confirmed ground
+  // track. Rear-follow prediction cannot turn stale data into a side route.
+  let result = !uwbFollowController.followMode ? intermittentUwbFollow.update(followInput)
+    : uwbFollowController.update(followInput);
+  result = lastUwbPointApproach.update({ enabled: UWB_HOLD_ON_POSITION_LOSS && !uwbFollowController.followMode, result,
     telemetry: controlTelemetry, connected: systemState.isConnected, now,
     controlMode: uwbFollowControlMode, imuTimeoutMs: uwbFollowController.config.navigationTimeoutMs,
     appliedCommand: systemState.roverControl, calibration: uwbFollowController.config });
@@ -4702,6 +4742,10 @@ app.get('/api/uwb-follow/state', (_req, res) => {
     success: true,
     enabled: UWB_FOLLOW_ENABLED,
     trackingMethod: uwbTrackingMethod,
+    followMode: uwbFollowMode,
+    followModes: FOLLOW_MODES,
+    sideFollow: { ...sideUwbFollowController.options, requiresGps: true,
+      receiverFovHalfDeg: sideUwbFollowController.receiverFovHalfDeg },
     trackingMethods: {
       traditional: { available: true, controllerProfile: traditionalUwbFollowController.config.controllerProfile, propulsion: UWB_ACRO ? 'acro_velocity' : UWB_RELATIVE_NMPC ? 'optional_gps_relative_nmpc' : UWB_RELATIVE_IMU ? 'uwb_imu_optional_gps_speed' : 'dual_motor', controlMode: UWB_ACRO ? 'relative_acro' : 'relative_manual', requiredFlightMode: UWB_ACRO ? 'ACRO' : 'MANUAL', outputLogicVersion: UWB_ACRO ? 'traditional_acro_v1' : UWB_RELATIVE_NMPC ? 'relative_nmpc_forward_arc_v1' : UWB_RELATIVE_IMU ? 'relative_optional_gps_v1' : 'traditional_dual_v1' },
       neural: {
@@ -4773,6 +4817,12 @@ app.post('/api/uwb-follow/method', (req, res) => {
   const result = selectUwbTrackingMethod(req.body?.method);
   if (!result.ok) return res.status(409).json({ success: false, message: result.error, state: uwbFollowState });
   return res.json({ success: true, trackingMethod: result.method, state: uwbFollowState });
+});
+
+app.post('/api/uwb-follow/mode', (req, res) => {
+  const result = selectUwbFollowMode(req.body?.mode, req.body?.distanceM);
+  if (!result.ok) return res.status(409).json({ success: false, message: result.error, state: uwbFollowState });
+  return res.json({ success: true, followMode: uwbFollowMode, state: uwbFollowState });
 });
 
 app.get('/api/uwb-follow/logs', (_req, res) => {
