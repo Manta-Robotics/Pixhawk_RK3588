@@ -20,7 +20,7 @@ const moduleSources = {
 };
 const moduleFields = {
   fc: 'fc_mode armed heading_deg yaw_rate_deg_s ground_speed_m_s',
-  mode: 'control_owner follow_active follow_side follow_method follow_control_mode gimbal_mode',
+  mode: 'control_owner follow_active follow_source follow_side follow_method follow_control_mode gimbal_mode',
   imu: 'ax_m_s2 ay_m_s2 az_m_s2 acc_norm_m_s2 gx_rad_s gy_rad_s gz_rad_s',
   uwb: 'uwb_range_m uwb_bearing_deg uwb_elevation_deg uwb_quality uwb_pred_range_m uwb_pred_bearing_deg bearing_error_deg',
   gimbal:
@@ -39,6 +39,7 @@ const labels = {
   ground_speed_m_s: '地速',
   control_owner: '船控来源',
   follow_active: '跟随启动',
+  follow_source: '跟随定位',
   follow_side: '跟随位置',
   follow_method: '跟随方法',
   follow_control_mode: '控制模式',

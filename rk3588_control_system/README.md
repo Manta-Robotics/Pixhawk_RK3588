@@ -102,7 +102,7 @@ GIMBAL_REQUIRE_4K=1 bash scripts/probe_gimbal_rtsp.sh
 
 ## 7. 跟踪模式
 
-控制网页新增“UWB+视觉追踪”模块和融合窗口，支持 YOLO 泳者检测与 UWB 距离/方位融合、实时诊断、相机标定配置和独立演示。使用方法、API 和实机验证边界见 [UWB + YOLO 视觉追踪](docs/UWB_VISION_FUSION.md)。融合计算不接管船体推进。
+设备页「自主跟随」可选择仅用 UWB 或用 UWB＋视觉融合方位控制船体。融合模式共用首页云台画面，可展开定位诊断和相机标定。[操作说明与接口](docs/UWB_VISION_FUSION.md)
 
 `face` 与 `swimmer` 是独立检测器，但共用云台运动控制层：
 

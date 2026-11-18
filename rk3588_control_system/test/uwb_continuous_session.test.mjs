@@ -5,7 +5,10 @@ import vm from 'node:vm';
 import {UwbFollowController} from '../backend/uwb_follow.js';
 import {IntermittentUwbFollow} from '../backend/uwb_target_prediction.js';
 import {UwbAutoResume} from '../backend/uwb_auto_resume.js';
-import {LastUwbPointApproach} from '../backend/uwb_loss_policy.js';
+import {LastUwbPointApproach, holdForMissingUwb} from '../backend/uwb_loss_policy.js';
+import {withFollowBearing} from '../backend/uwb_follow_source.js';
+import {evaluateUwbVision} from '../frontend/js/uwb-vision-core.js';
+import {fusionBodyLeftUwb} from '../backend/swimmer_vision_input.js';
 
 const source=fs.readFileSync(new URL('../backend/server.js',import.meta.url),'utf8');
 const config={execution_mode:'relative_imu',bearing_sign:1,bearing_scale:1,bearing_offset_deg:0,
@@ -67,6 +70,49 @@ test('real server loss path estimates briefly, then renews neutral leases withou
  assert.ok(estimated&&waited);f.step(true);assert.equal(f.c.uwbFollowState.active,true);
  assert.equal(f.c.uwbFollowState.reason,'tracking');
  assert.equal(f.commands.filter(x=>['ARM','DISARM','STOP'].includes(x.cmd)).length,0);
+});
+
+test('fusion steers the vessel, falls back to radio bearing, and only permits neutral output during range loss', () => {
+  const run = fixture();
+  const {c, t} = run;
+  const calibration = { bearingSign: -1, bearingScale: 0.8, bearingOffsetDeg: 4 };
+  Object.assign(c.uwbFollowController.config, calibration);
+  Object.assign(t.uwb, {azimuthDeg: 5, relativeXM: 2, relativeYM: 0});
+  let vision = true;
+  c.withFollowBearing = withFollowBearing;
+  c.holdForMissingUwb = holdForMissingUwb;
+  c.directUwbGuidance = true;
+  c.uwbVisionService = { guidance(now) {
+    return evaluateUwbVision({ now, enabled: true, config: {calibrated: true},
+      uwb: fusionBodyLeftUwb(t.uwb, calibration), trackerActive: vision,
+      pose: {checksumValid: true, yawDeg: 15, updatedAt: now},
+      target: {mode: 'swimmer', locked: true, conf: 1, frame_w: 100, frame_h: 100,
+        x: 50, y: 50, w: 10, h: 10, timestamp: now} });
+  }};
+  for (const name of ['stabilizeBeaconUwb', 'sharedUwbControlTelemetry'])
+    vm.runInContext(functionSource(name), c);
+  for (let i = 0; i < 10; i++) run.step(true);
+  assert.equal(c.uwbFollowState.guidanceSource, 'uwb+vision');
+  assert.ok(Math.abs(c.uwbFollowState.bearingDeg + 9.75) < 1e-8);
+  assert.ok(c.systemState.roverControl.steering < 0);
+  assert.equal(t.uwb.azimuthDeg, 5);
+  vision = false;
+  run.step(true);
+  assert.equal(c.uwbFollowState.guidanceSource, 'uwb');
+  assert.equal(c.uwbFollowState.bearingDeg, 0);
+  const lastAt = t.uwb.measurementUpdatedAt;
+  vision = true;
+  for (let i = 0; i < 8; i++) {
+    run.step(false);
+    assert.equal(c.uwbFollowState.guidanceSource, 'unavailable');
+    assert.equal(c.uwbFollowState.pausePropulsion, true);
+    assert.equal(c.uwbFollowState.active, true);
+    assert.equal(c.systemState.roverControl.throttle, 0);
+    assert.equal(c.systemState.roverControl.steering, 0);
+    assert.equal(t.uwb.measurementUpdatedAt, lastAt);
+  }
+  run.step(true);
+  assert.equal(c.uwbFollowState.guidanceSource, 'uwb+vision');
 });
 
 test('a genuine Pixhawk disconnect still stops the session',()=>{

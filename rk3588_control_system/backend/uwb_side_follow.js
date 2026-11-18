@@ -142,7 +142,9 @@ export class UwbSideFollowController extends UwbFollowController {
     if (rawNear) return this.neutral('holding_distance', { ...base, status: 'holding', holdingDistanceM: c.safetyDistanceM });
     if (distanceM <= c.safetyDistanceM + uncertaintyM)
       return this.neutral('holding_distance', { ...base, status: 'holding', holdingDistanceM: c.safetyDistanceM + uncertaintyM });
-    if (Math.abs(bearingDeg) > this.receiverFovHalfDeg) return this.neutral('side_target_outside_coverage', base);
+    const receiverBearing = normalizeAngleDeg(u.azimuthDeg * c.bearingSign * c.bearingScale + c.bearingOffsetDeg);
+    if (Math.max(Math.abs(receiverBearing), Math.abs(bearingDeg)) > this.receiverFovHalfDeg)
+      return this.neutral('side_target_outside_coverage', base);
     const ageS = (now - u.measurementUpdatedAt) / 1000;
     const acquisitionYaw = (t.attitude.yaw + t.attitude.yawRateDegS * (u.measurementUpdatedAt - t.attitude.updatedAt) / 1000) * RAD;
     const relative = { x: relativeBodyM.x * Math.cos(acquisitionYaw) - relativeBodyM.y * Math.sin(acquisitionYaw),

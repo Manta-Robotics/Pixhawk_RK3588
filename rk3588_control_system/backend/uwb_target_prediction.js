@@ -133,7 +133,7 @@ export class UwbTargetEstimator {
     const sign = number(this.calibration.bearing_sign) ?? -1;
     const scale = number(this.calibration.bearing_scale) ?? 0.8148;
     const offset = number(this.calibration.bearing_offset_deg) ?? -4.816;
-    const bearing = wrap(azimuth * sign * scale + offset);
+    const bearing = uwb.followBearingDeg ?? wrap(azimuth * sign * scale + offset);
     const body = { x: range * Math.cos(bearing * rad), y: range * Math.sin(bearing * rad) };
     const relative = rotate(body, pose.yaw * rad);
     const age = (now - at) / 1000;
@@ -449,7 +449,8 @@ export class IntermittentUwbFollow {
     // Without a trustworthy velocity estimate, hold during loss but allow
     // recovery from consecutive real UWB observations (never from prediction).
     if (estimate.reason === 'prediction_pose_unavailable' && rawFresh) {
-      const bearing = (uwb.azimuthDeg * controller.config.bearingSign * controller.config.bearingScale + controller.config.bearingOffsetDeg) * rad;
+      const bearing = (uwb.followBearingDeg ??
+        (uwb.azimuthDeg * controller.config.bearingSign * controller.config.bearingScale + controller.config.bearingOffsetDeg)) * rad;
       const body = { x: uwb.distanceM * Math.cos(bearing), y: uwb.distanceM * Math.sin(bearing) };
       if (wasLost) {
         const previous = this.rawRecovery;

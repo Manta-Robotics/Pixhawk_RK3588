@@ -32,6 +32,7 @@ import { validateSystemConfig } from '../scripts/validate_config.mjs';
 import { isSameOriginRequest, rejectCrossOrigin } from './origin_policy.js';
 import { createControlAccess, loadControlPin } from './control_access.js';
 import { installUwbVisionApi } from './uwb_vision_service.js';
+import { withFollowBearing } from './uwb_follow_source.js';
 import { captureSwimmerVisionSample, swimmerVisionInputs, fusionBodyLeftUwb } from './swimmer_vision_input.js';
 import { createGimbalWebrtcProxy } from './gimbal_webrtc_proxy.js';
 import { WifiLatestDelivery, WIFI_COMPRESSION, restrictCompressionToWifi, emitWifiAwareState } from './wifi_latest_delivery.js';
@@ -48,7 +49,7 @@ import { IntermittentUwbFollow } from './uwb_target_prediction.js';
 import { SmoothedUwbPath } from './uwb_path_integration.js';
 import { SmoothedUwbOutput } from './uwb_smoothed_output.js';
 import { UwbAutoResume } from './uwb_auto_resume.js';
-import { LastUwbPointApproach } from './uwb_loss_policy.js';
+import { holdForMissingUwb, LastUwbPointApproach } from './uwb_loss_policy.js';
 import { UwbGpsDriftHold } from './uwb_gps_drift_hold.js';
 import { NeuralUwbFollowController } from './neural_uwb_follow.js';
 import { NeuralManualPropulsion } from './neural_manual_propulsion.js';
@@ -500,6 +501,7 @@ let gimbalHoldUntil = 0;
 let gimbalLastFrame = Buffer.alloc(GIMBAL_FRAME_LENGTH, 0);
 let gimbalTxEnabled = false;
 let gimbalTrackProcess = null;
+let followFusionOwnsTracker = false;
 let experimentTrackGeneration = 0;
 let experimentTrackWorker = null;
 let gimbalTrackRestartTimer = null;
@@ -1062,8 +1064,20 @@ const uwbVisionService = installUwbVisionApi(app, {
   model: String(gimbalConfig.swimmer?.weights || 'scripts/best.pt'),
   // A8 feedback is right-positive; fusion uses left-positive, bow-zero bearings.
   defaults: IS_SIYI ? { yawSign: -1 } : {},
-  getInputs: () => ({
-    uwb: fusionBodyLeftUwb(sharedUwbControlTelemetry().uwb, {
+  followInProgress: () => uwbFollowState.active || uwbFollowTransitionBusy || uwbAutoResume.pending,
+  onFollowSourceChange: source => {
+    const conflictingTracker = gimbalState.trackingActive && gimbalState.trackMode !== 'swimmer';
+    if ((source === 'uwb+vision' && (conflictingTracker || isBeaconCalibrationActive()))
+        || (source === 'uwb' && followFusionOwnsTracker)) stopGimbalTracking(true);
+    experimentLive.modes({ follow_source: source });
+    uwbFollowController.reset();
+    intermittentUwbFollow.reset();
+    lastUwbPointApproach.reset();
+    uwbPathPlanner.planner.reset();
+    systemState.telemetry.uwbPath = null;
+  },
+  getInputs: now => ({
+    uwb: fusionBodyLeftUwb(sharedUwbControlTelemetry(now).uwb, {
       bearingSign: traditionalUwbFollowController.config.bearingSign,
       bearingScale: traditionalUwbFollowController.config.bearingScale,
       bearingOffsetDeg: traditionalUwbFollowController.config.bearingOffsetDeg
@@ -1075,6 +1089,8 @@ const uwbVisionService = installUwbVisionApi(app, {
     })
   })
 });
+
+experimentLive.modes({ follow_source: uwbVisionService.followSource });
 
 const telemetryCsvBuffer = [];
 let telemetryCsvFlushTimer = null;
@@ -1767,11 +1783,13 @@ function stabilizeBeaconUwb(now, uwb) {
 // Keep vessel following and gimbal beacon tracking on the same guarded UWB
 // solution.  This prevents one path from accepting a fused target while the
 // other path still reports a stale/invalid raw sample.
-function sharedUwbControlTelemetry(now = Date.now()) {
-  return {
+function sharedUwbControlTelemetry(now = Date.now(), forFollow = false) {
+  const telemetry = {
     ...systemState.telemetry,
     uwb: { ...stabilizeBeaconUwb(now, systemState.telemetry.uwb), directControl: directUwbGuidance }
   };
+  if (!forFollow) return telemetry;
+  return withFollowBearing(telemetry, uwbVisionService.guidance(now), now, uwbFollowController.config.uwbTimeoutMs);
 }
 
 function setBeaconAbsoluteCommand(yawDeg, pitchDeg, now = Date.now()) {
@@ -2253,6 +2271,7 @@ function setFaceTrackerActive(active) {
 }
 
 function stopGimbalTracking(resetState = true, options = {}) {
+  followFusionOwnsTracker = false;
   if (options.cancelCalibration !== false) cancelBeaconCalibrationSession();
   gimbalTrackStopRequested = true;
   if (experimentTrackWorker) experimentLive?.visionWorker('stopped', {
@@ -3047,6 +3066,7 @@ function startGimbalTracking(options = {}) {
       return { ok: true, alreadyRunning: true, warm: true, mode: gimbalState.trackMode };
     }
     const previousWorker = gimbalTrackProcess;
+    followFusionOwnsTracker = false;
     gimbalTrackProcess = null;
     try { previousWorker.kill('SIGTERM'); } catch (_) {}
     cleanupStaleGimbalTrackWorkers(`switch-${gimbalState.trackMode}-to-${requestedMode}`);
@@ -3158,6 +3178,7 @@ function startGimbalTracking(options = {}) {
     experimentTrackWorker = worker;
     if (!warmOnly) experimentLive?.visionWorker('start', worker);
     gimbalTrackProcess = child;
+    followFusionOwnsTracker = requestedMode === 'swimmer' && options.followFusion === true;
     gimbalTrackTarget = null;
     gimbalTrackHolding = true;
     gimbalTrackLastTargetAt = 0;
@@ -3260,7 +3281,7 @@ function startGimbalTracking(options = {}) {
         gimbalTrackRestartTimer = setTimeout(() => {
           gimbalTrackRestartTimer = null;
           if (!gimbalTrackStopRequested && gimbalState.trackingActive) {
-            startGimbalTracking({ mode: gimbalState.trackMode });
+            startGimbalTracking({ mode: gimbalState.trackMode, followFusion: followFusionOwnsTracker });
           }
         }, 1000);
         return;
@@ -3921,6 +3942,9 @@ function buildUwbTestSample(result = uwbFollowState, event = 'sample', reason = 
   const relative = result.relativeBodyM || {};
   return {
     event,
+    follow_source: result.followSource ?? uwbVisionService.followSource,
+    guidance_source: result.guidanceSource ?? (result.targetEstimate?.source === 'predicted' ? 'predicted' : result.safe ? 'uwb' : null),
+    fusion_reason: result.fusionReason,
     target_source: result.targetEstimate?.source,
     target_last_measured_at: result.targetEstimate?.lastMeasuredAt,
     prediction_age_ms: result.targetEstimate?.predictionAgeMs,
@@ -4107,7 +4131,7 @@ function requireUwbFollowStartClearance(controlMode = uwbFollowControlMode) {
   const now = Date.now();
   return uwbFollowController.preflight({
     now,
-    telemetry: sharedUwbControlTelemetry(now),
+    telemetry: sharedUwbControlTelemetry(now, true),
     connected: systemState.isConnected,
     controlMode
   });
@@ -4382,7 +4406,7 @@ function updateUwbFollow() {
   }
 
   const now = Date.now();
-  const controlTelemetry = sharedUwbControlTelemetry(now);
+  const controlTelemetry = sharedUwbControlTelemetry(now, true);
   const followInput = {
     controller: uwbFollowController,
     now,
@@ -4392,12 +4416,28 @@ function updateUwbFollow() {
   };
   // Side guidance requires live measurements and its own confirmed ground
   // track. Rear-follow prediction cannot turn stale data into a side route.
-  let result = !uwbFollowController.followMode ? intermittentUwbFollow.update(followInput)
-    : uwbFollowController.update(followInput);
-  result = lastUwbPointApproach.update({ enabled: UWB_HOLD_ON_POSITION_LOSS && !uwbFollowController.followMode, result,
-    telemetry: controlTelemetry, connected: systemState.isConnected, now,
-    controlMode: uwbFollowControlMode, imuTimeoutMs: uwbFollowController.config.navigationTimeoutMs,
-    appliedCommand: systemState.roverControl, calibration: uwbFollowController.config });
+  let result;
+  if (controlTelemetry.guidanceSource === 'unavailable') {
+    // Visual bearing alone has no range. Do not enter rear prediction, last-point
+    // approach, or GPS drift guidance. The existing mode/arm/link checks still apply.
+    const reason = controlTelemetry.uwb.rejectionReason === 'target_identity_changed' ? 'target_identity_changed' : 'uwb_stale';
+    const stale = { safe: false, reason, controlMode: uwbFollowControlMode };
+    result = holdForMissingUwb({ ...followInput, enabled: true, result: stale, imuTimeoutMs: uwbFollowController.config.navigationTimeoutMs });
+    if (!uwbFollowState.positionWaiting) intermittentUwbFollow.reset();
+    lastUwbPointApproach.reset();
+  } else {
+    result = !uwbFollowController.followMode ? intermittentUwbFollow.update(followInput)
+      : uwbFollowController.update(followInput);
+    result = lastUwbPointApproach.update({ enabled: UWB_HOLD_ON_POSITION_LOSS && !uwbFollowController.followMode, result,
+      telemetry: controlTelemetry, connected: systemState.isConnected, now,
+      controlMode: uwbFollowControlMode, imuTimeoutMs: uwbFollowController.config.navigationTimeoutMs,
+      appliedCommand: systemState.roverControl, calibration: uwbFollowController.config });
+  }
+  if (controlTelemetry.guidanceSource) {
+    result.followSource = 'uwb+vision';
+    result.guidanceSource = controlTelemetry.guidanceSource;
+    result.fusionReason = controlTelemetry.fusionReason;
+  }
   if (result.positionWaiting && !uwbFollowState.positionWaiting) {
     uwbFollowController.reset();
     addLog('UWB_FOLLOW', 'UWB position unavailable; maintaining neutral output in the current armed session');
@@ -4836,7 +4876,8 @@ setInterval(refreshPeripheralState, 5000);
 setInterval(refreshHardwareState, 1000);
 function updateUwbPathTelemetry() {
   const now=Date.now();
-  const path={...uwbPathPlanner.update(now,systemState.telemetry),
+  const telemetry = uwbVisionService.followSource === 'uwb+vision' ? sharedUwbControlTelemetry(now, true) : systemState.telemetry;
+  const path={...uwbPathPlanner.update(now,telemetry),
     controlEnabled:!UWB_USB_ENABLED||config.uwb_usb.vessel_control_enabled===true};
   systemState.telemetry={...systemState.telemetry,uwbPath:path};
   emitDashboardState('uwb_path_update',path);
@@ -5125,13 +5166,19 @@ app.post('/api/uwb-follow/start', startUwbFollowRequest = async (req, res) => {
 
     uwbFollowController.reset();
     const now = Date.now();
+    const controlTelemetry = sharedUwbControlTelemetry(now, true);
     let result = uwbFollowController.update({
       now,
-      telemetry: sharedUwbControlTelemetry(now),
+      telemetry: controlTelemetry,
       connected: systemState.isConnected,
       controlMode: uwbFollowControlMode
     });
     if (!result.safe) throw new Error(result.reason);
+    if (controlTelemetry.guidanceSource) {
+      result.followSource = 'uwb+vision';
+      result.guidanceSource = controlTelemetry.guidanceSource;
+      result.fusionReason = controlTelemetry.fusionReason;
+    }
     uwbAutoResume.started(sharedUwbControlTelemetry(now), now, automatic);
     result = uwbAutoResume.ramp(result, now);
     // Establish an actual neutral ACRO command before publishing an active
@@ -5464,6 +5511,14 @@ app.post('/api/gimbal/disconnect', (_req, res) => {
   res.json({ success: true, state: gimbalState });
 });
 
+// A late standalone camera command must not take over the fusion camera after a source switch.
+app.post(['/api/gimbal/home', '/api/gimbal/click', '/api/gimbal/beacon/calibration/start', '/api/gimbal/track/start'], (req, res, next) => {
+  if (uwbVisionService.followSource !== 'uwb+vision') return next();
+  const mode = req.body?.mode || req.body?.target || req.body?.detectorMode;
+  if (req.path === '/api/gimbal/track/start' && mode === 'swimmer') return next();
+  return res.status(409).json({ success: false, message: '自主跟随正在使用云台，请先切回仅 UWB' });
+});
+
 app.post('/api/gimbal/home', (req, res) => {
   if (!gimbalStream) {
     gimbalPendingHomeSource = 'web';
@@ -5630,6 +5685,16 @@ app.post('/api/gimbal/click', (req, res) => {
 });
 
 app.post('/api/gimbal/track/start', (req, res) => {
+  const body = req.body || {};
+  const mode = body.mode || body.target || body.detectorMode;
+  if (body.followFusion === true) {
+    if (mode !== 'swimmer' || uwbVisionService.followSource !== 'uwb+vision') {
+      return res.status(409).json({ success: false, message: '请先在自主跟随中选择 UWB＋视觉融合' });
+    }
+    if (gimbalState.trackingActive && gimbalState.trackMode === 'swimmer' && isGimbalTrackingActive()) {
+      return res.json({ success: true, active: true, alreadyRunning: true, mode, state: gimbalState });
+    }
+  }
   if (!gimbalStream || !gimbalState.connected) {
     const opened = openGimbalPort('web');
     if (!opened) {
@@ -5641,8 +5706,7 @@ app.post('/api/gimbal/track/start', (req, res) => {
     res.status(500).json({ success: false, message: 'Gimbal serial open failed.', state: gimbalState });
     return;
   }
-  const body = req.body || {};
-  const result = startGimbalTracking({ mode: body.mode || body.target || body.detectorMode });
+  const result = startGimbalTracking({ mode, followFusion: body.followFusion === true });
   if (!result.ok) {
     res.status(result.statusCode || 500).json({ success: false, message: result.error, state: gimbalState });
     return;

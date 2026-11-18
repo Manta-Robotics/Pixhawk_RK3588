@@ -104,9 +104,9 @@
         return this.motionLocked;
     };
 
-    TransportBase.prototype.setDriveEnabled = function (enabled) {
+    TransportBase.prototype.setDriveEnabled = function (enabled, { sendNeutral = true } = {}) {
         this.driveEnabled = Boolean(enabled);
-        if (!this.driveEnabled && this.drive) this.drive({ x: 0, y: 0 });
+        if (!this.driveEnabled && this.drive && sendNeutral) this.drive({ x: 0, y: 0 });
         return this.driveEnabled;
     };
 
@@ -852,7 +852,9 @@
                 }
                 var startRequestedMode = function () {
                     requireCurrent();
-                    return postJson("/api/gimbal/track/start", { mode: requestedMode });
+                    var body = { mode: requestedMode };
+                    if (requestedMode === "swimmer" && payload?.followFusion === true) body.followFusion = true;
+                    return postJson("/api/gimbal/track/start", body);
                 };
                 var request = this.gimbalTrackingActive ? postJson("/api/gimbal/track/stop", {}).then(startRequestedMode) : startRequestedMode();
                 return request.then(function (result) {

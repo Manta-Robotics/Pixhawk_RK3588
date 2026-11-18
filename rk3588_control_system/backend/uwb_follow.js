@@ -228,7 +228,10 @@ export class UwbFollowController {
     const estimated = usableControlEstimate(targetEstimate, now, this.config.prediction);
     const distanceM = estimated ? Math.hypot(targetEstimate.relativeBodyM.x, targetEstimate.relativeBodyM.y) : finite(uwb.distanceM);
     const estimatedBearingDeg = estimated ? Math.atan2(targetEstimate.relativeBodyM.y, targetEstimate.relativeBodyM.x) / DEG_TO_RAD : null;
-    const azimuthDeg = estimated ? normalizeAngleDeg(estimatedBearingDeg - this.config.bearingOffsetDeg)
+    // Existing guidance implementations accept a receiver-space angle and apply their
+    // calibrated transform once. Convert a body-frame estimate at this single boundary.
+    const bodyBearing = estimated ? estimatedBearingDeg : finite(uwb.followBearingDeg);
+    const azimuthDeg = bodyBearing !== null ? normalizeAngleDeg(bodyBearing - this.config.bearingOffsetDeg)
       / (this.config.bearingSign * this.config.bearingScale) : finite(uwb.azimuthDeg);
     const yawDeg = finite(attitude.yaw);
     const measuredYawRateDegS = finite(attitude.yawRateDegS, 0);
@@ -604,7 +607,10 @@ export class UwbFollowController {
     const fovStopDeg = this.config.fieldOfViewHalfDeg - 10;
     const outwardRateDegS = Math.max(0, Math.sign(bearingDeg || lineOfSightRateDegS)
       * (lineOfSightRateDegS - measuredYawRateDegS));
-    const fovProjectedBearingDeg = Math.max(Math.abs(bearingDeg), Math.abs(controlBearingDeg))
+    const receiverBearing = Number.isFinite(telemetry.uwb?.followBearingDeg)
+      ? normalizeAngleDeg(telemetry.uwb.azimuthDeg * this.config.bearingSign * this.config.bearingScale + this.config.bearingOffsetDeg)
+      : bearingDeg;
+    const fovProjectedBearingDeg = Math.max(Math.abs(receiverBearing), Math.abs(bearingDeg), Math.abs(controlBearingDeg))
       + .5 * outwardRateDegS;
     const fovSpeedScale = acroVelocity
       ? clamp((fovStopDeg - fovProjectedBearingDeg) / (fovStopDeg - fovSlowDeg), 0, 1) : 1;

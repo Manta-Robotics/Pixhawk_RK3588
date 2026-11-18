@@ -60,11 +60,45 @@ test('device fusion API requires ownership; saving/enabling never starts propuls
     assert.equal(changed.config.calibrated, false);
     const enabled = await (await ownerApi('/api/uwb-vision/enabled', { enabled: true })).json();
     assert.equal(enabled.state.enabled, true); assert.equal(enabled.state.result, null);
+    assert.equal(enabled.followSource, 'uwb');
+    const route = '/api/uwb-vision/follow-source';
+    assert.equal((await viewerApi(route, {source: 'uwb+vision'})).status, 403);
+    assert.equal((await ownerApi(route, {source: 'vision'})).status, 400);
+    assert.equal((await (await ownerApi(route, {source: 'uwb+vision'})).json()).followSource, 'uwb+vision');
+    assert.equal((await (await viewerApi('/api/uwb-vision/state')).json()).followSource, 'uwb+vision');
+    assert.equal((await ownerApi('/api/uwb-vision/enabled', {enabled: false})).status, 409);
+    assert.equal((await (await ownerApi(route, {source: 'uwb'})).json()).followSource, 'uwb');
     const gimbal = await (await ownerApi('/api/gimbal/state')).json(); assert.equal(gimbal.state.trackingActive, false);
     assert.ok(!commands.some(packet => packet.command === 'ARM'));
     assert.ok(commands.filter(packet => ['ROVER_DRIVE', 'ROVER_BODY_VELOCITY', 'ROVER_ACRO'].includes(packet.command))
         .every(packet => !packet.params?.throttle && !packet.params?.forwardSpeedMps));
     assert.equal((await ownerApi('/api/uwb-vision/enabled', { enabled: false })).status, 200);
+});
+
+test('follow source changes serialize with active follow and reset with the control session', async t => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'manta-follow-source-'));
+    t.after(() => fs.rm(directory, { recursive: true, force: true }));
+    const app = express();
+    app.use(express.json());
+    const transitions = [];
+    let following = false;
+    const service = installUwbVisionApi(app, { filename: path.join(directory, 'fusion.json'), getInputs: () => ({}),
+        followInProgress: () => following, onFollowSourceChange: source => transitions.push(source) });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise(resolve => server.once('listening', resolve));
+    t.after(() => new Promise(resolve => server.close(resolve)));
+    const set = source => fetch(`http://127.0.0.1:${server.address().port}/api/uwb-vision/follow-source`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source }) });
+    assert.equal(service.guidance(123), null);
+    assert.equal((await set('uwb+vision')).status, 200);
+    following = true;
+    assert.equal((await set('uwb+vision')).status, 200);
+    assert.equal((await set('uwb')).status, 409);
+    assert.equal(service.followSource, 'uwb+vision');
+    assert.deepEqual(transitions, ['uwb+vision']);
+    service.stop();
+    assert.equal(service.guidance(123), null);
+    assert.deepEqual(transitions, ['uwb+vision', 'uwb']);
 });
 
 test('persisted fusion settings survive service recreation while enable state resets', async t => {
