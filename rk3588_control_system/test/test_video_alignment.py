@@ -19,7 +19,61 @@ import io
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / 'scripts'))
-from media_alignment import FrameClock, frame_headers, MediaCapture  # noqa: E402
+from media_alignment import FrameClock, frame_headers, MediaCapture, probe_clip  # noqa: E402
+
+
+class FrameIndexTest(unittest.TestCase):
+    def test_delayed_picture_uses_movie_timeline_without_matching_shifted_pts(self):
+        probe = {
+            'streams': [{'time_base': '1/1000', 'start_pts': 100, 'duration_ts': 350}],
+            'frames': [{'pkt_pts': 100, 'pkt_duration': 55}, {'pkt_pts': 155, 'pkt_duration': 33}, {'pkt_pts': 188}],
+        }
+        source = {Fraction(100, 1000): FrameClock().observe(100, Fraction(1, 1000))}
+        with patch('media_alignment.subprocess.run', return_value=SimpleNamespace(stdout=json.dumps(probe))):
+            index = probe_clip('delayed.mp4', {}, source)
+
+        self.assertEqual(index['play_origin_pts'], '0')
+        self.assertEqual([(row['file_pts'], row['play_us']) for row in index['frames']],
+                         [('100', 100000), ('155', 155000), ('188', 188000)])
+        self.assertEqual([row['play_end_us'] for row in index['frames']], [155000, 188000, None])
+        self.assertTrue(all(row['frame_id'] is None and row['identity'] == 'unknown' for row in index['frames']))
+
+    def test_missing_pts_keeps_display_row_without_time_or_identity(self):
+        probe = {
+            'streams': [{'time_base': '1/1000', 'start_pts': 0}],
+            'frames': [{'pkt_pts': 0, 'pkt_pos': '10', 'pkt_duration': 40},
+                       {'best_effort_timestamp': 40, 'pkt_pos': '20', 'pkt_duration': 40},
+                       {'pts': 80, 'pkt_pos': '30', 'pkt_duration': 40}],
+        }
+        packets = {'packets': [{'pts': 0, 'pos': '10'}, {'pts': 40, 'pos': '20'}, {'pts': 80, 'pos': '30'}]}
+        clock = FrameClock()
+        source = {Fraction(pts, 1000): clock.observe(pts, Fraction(1, 1000)) for pts in (0, 40, 80)}
+        replies = [SimpleNamespace(stdout=json.dumps(result)) for result in (probe, packets)]
+        with patch('media_alignment.subprocess.run', side_effect=replies):
+            index = probe_clip('clip.mp4', {}, source)
+
+        first, unknown, last = index['frames']
+        self.assertEqual(index['index_state'], 'partial')
+        self.assertEqual([row['display_no'] for row in index['frames']], [0, 1, 2])
+        for key in ('file_pts', 'play_us', 'play_end_us', 'frame_id', 'frame_mono_ns'):
+            self.assertIsNone(unknown[key], key)
+        self.assertEqual((unknown['identity'], unknown['time_kind']), ('unknown', 'unknown'))
+        self.assertEqual((first['play_us'], first['play_end_us'], first['identity']), (0, 40000, 'exact'))
+        self.assertEqual((last['file_pts'], last['play_us'], last['identity']), ('80', 80000, 'exact'))
+        self.assertEqual(last['frame_id'], source[Fraction(80, 1000)]['frame_id'])
+
+    def test_trimmed_edit_does_not_match_an_unrelated_original_pts(self):
+        probe = {'streams': [{'time_base': '1/1000', 'start_pts': 0}], 'frames': [{'pts': 0, 'pkt_pos': '30'}]}
+        packets = {'packets': [{'pts': 0, 'pos': '10'}, {'pts': 176, 'pos': '30'}]}
+        source = {Fraction(0): FrameClock().observe(0, Fraction(1, 1000))}
+        replies = [SimpleNamespace(stdout=json.dumps(result)) for result in (probe, packets)]
+        with patch('media_alignment.subprocess.run', side_effect=replies):
+            index = probe_clip('trimmed.mp4', {}, source)
+
+        frame = index['frames'][0]
+        self.assertEqual((frame['file_pts'], frame['play_us']), ('0', 0))
+        self.assertIsNone(frame['frame_id'])
+        self.assertEqual(frame['identity'], 'unknown')
 
 
 @unittest.skipUnless(all(importlib.util.find_spec(module) for module in ('av', 'cv2', 'numpy')),
