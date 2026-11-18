@@ -23,6 +23,8 @@ import { Bonjour } from 'bonjour-service';
 import { validateSystemConfig } from '../scripts/validate_config.mjs';
 import { isSameOriginRequest, rejectCrossOrigin } from './origin_policy.js';
 import { createControlAccess, loadControlPin } from './control_access.js';
+import { installUwbVisionApi } from './uwb_vision_service.js';
+import { captureSwimmerVisionSample, swimmerVisionInputs, fusionBodyLeftUwb } from './swimmer_vision_input.js';
 import { createGimbalWebrtcProxy } from './gimbal_webrtc_proxy.js';
 import { WifiLatestDelivery, WIFI_COMPRESSION, restrictCompressionToWifi, emitWifiAwareState } from './wifi_latest_delivery.js';
 import { computeBeaconControl, normalizeAngleDeg } from './gimbal_beacon.js';
@@ -321,6 +323,7 @@ const controlAccess = createControlAccess({
       return false;
     }
     stopUwbFollow(reason, { disarm: true });
+    uwbVisionService.stop();
     forceNeutralRoverControl('CONTROL_SESSION_ENDED', reason);
     if (isVisionActive()) stopVision();
     return false;
@@ -493,6 +496,7 @@ let gimbalTrackCounterBrakeY = 0;
 let gimbalTrackCounterBrakeSettled = true;
 let gimbalTrackCommandPauseUntil = 0;
 let gimbalTrackTarget = null;
+let swimmerVisionSample = null;
 let gimbalTrackHolding = true;
 let gimbalTrackLastTargetAt = 0;
 let gimbalRxBuffer = Buffer.alloc(0);
@@ -1003,6 +1007,25 @@ app.get(['/', '/index.html'], (_req, res) => {
   res.sendFile(path.join(PROJECT_ROOT, 'frontend', 'mobile-preview-kimi-k26.html'));
 });
 app.use(express.static(path.join(PROJECT_ROOT, 'frontend')));
+
+const uwbVisionService = installUwbVisionApi(app, {
+  filename: process.env.MANTA_UWB_VISION_CONFIG || path.join(PROJECT_ROOT, 'data', 'uwb-vision.json'),
+  model: String(gimbalConfig.swimmer?.weights || 'scripts/best.pt'),
+  // A8 feedback is right-positive; fusion uses left-positive, bow-zero bearings.
+  defaults: IS_SIYI ? { yawSign: -1 } : {},
+  getInputs: () => ({
+    uwb: fusionBodyLeftUwb(sharedUwbControlTelemetry().uwb, {
+      bearingSign: traditionalUwbFollowController.config.bearingSign,
+      bearingScale: traditionalUwbFollowController.config.bearingScale,
+      bearingOffsetDeg: traditionalUwbFollowController.config.bearingOffsetDeg
+    }),
+    ...swimmerVisionInputs(swimmerVisionSample, {
+      mode: gimbalState.trackMode, trackingActive: gimbalState.trackingActive,
+      workerActive: isGimbalTrackingActive(), locked: gimbalState.trackStatus.locked,
+      connected: gimbalState.connected
+    })
+  })
+});
 
 const telemetryCsvBuffer = [];
 let telemetryCsvFlushTimer = null;
@@ -2197,6 +2220,7 @@ function updateGimbalTrackStatus(update = {}) {
   gimbalState.trackWorkerActive = isGimbalTrackingActive();
   gimbalState.trackStatus = next;
   if (!next.locked) {
+    swimmerVisionSample = null;
     gimbalState.lastTarget = next;
   }
   io.emit('gimbal_track_status', next);
@@ -3090,6 +3114,11 @@ function startGimbalTracking(options = {}) {
             const lockedLabel = requestedMode === 'swimmer' ? 'SWIMMER LOCKED' : 'FACE LOCKED';
             const message = { ...target, mode: requestedMode, commandDx: sent.x, commandDy: sent.y, predictedDx: sent.predictedX, predictedDy: sent.predictedY, targetSpeed: sent.targetSpeed, rawVx: sent.rawVx, rawVy: sent.rawVy, filteredVx: sent.filteredVx, filteredVy: sent.filteredVy, leadMs: sent.leadMs, detectorAgeMs: sent.detectorAgeMs, angleGain: sent.angleGain, rateX: sent.rateX, rateY: sent.rateY, desiredRateX: sent.desiredRateX ?? sent.rateX, desiredRateY: sent.desiredRateY ?? sent.rateY, holdMs: sent.holdMs || 0, axis: sent.axis || '', pulse: Boolean(sent.pulse), smooth: Boolean(sent.smooth), gated: Boolean(sent.gated), limited: Boolean(sent.limited), locked: true, message: target.message || lockedLabel, workerActive: true, timestamp: Date.now() };
             gimbalState.lastTarget = message;
+            if (requestedMode === 'swimmer') {
+              swimmerVisionSample = captureSwimmerVisionSample(message, gimbalState.feedback, {
+                protocol: GIMBAL_PROTOCOL, connected: gimbalState.connected
+              });
+            }
             updateGimbalTrackStatus({ ...message, status: target.status || 'track', detections: Number(target.detections || 0) });
             emitDashboardState('gimbal_target', message);
           } catch (error) {
@@ -5588,6 +5617,7 @@ app.post('/api/system/reboot', (req, res) => {
 app.post('/api/emergency/stop', (req, res) => {
   const requestedAt = Date.now();
   addLog('CRITICAL', 'Emergency stop triggered');
+  uwbVisionService.stop();
   stopUwbFollow('emergency_stop');
 
   for (let channel = 1; channel <= 8; channel += 1) {
@@ -5855,3 +5885,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 export default app;
+

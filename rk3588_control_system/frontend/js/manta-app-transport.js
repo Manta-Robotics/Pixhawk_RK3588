@@ -983,6 +983,7 @@
     };
 
     window.MantaAppTransport = {
+        request: apiFetch,
         create: function (mode) { return mode === "live" ? new LiveTransport() : new MockTransport(); },
         MockTransport: MockTransport,
         LiveTransport: LiveTransport,
