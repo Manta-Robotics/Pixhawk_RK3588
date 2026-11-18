@@ -113,6 +113,7 @@
     function MockTransport() {
         TransportBase.call(this);
         this.mode = "mock";
+        this.experiments = window.MantaExperimentApi?.mockApi(this);
         this.telemetryTimer = null;
         this.vector = { x: 0, y: 0 };
         this.startedAt = Date.now();
@@ -137,7 +138,8 @@
         });
     };
 
-    MockTransport.prototype.connect = function () {
+    MockTransport.prototype.connect = function (options = {}) {
+        this.experimentReadOnly = options.readOnly === true;
         this.connected = true;
         this.emit("hardwareStatus", { boardOnline: true, pixhawkOnline: true, imuOnline: true, motorsOnline: true, gimbalOnline: true, gimbalOutputAvailable: true });
         this.startedAt = Date.now();
@@ -145,7 +147,21 @@
         this.log("INFO", "WIFI", "5 GHz 影像链路已建立，互联网保持在线", "hardware", "5 GHz video link established; internet remains online");
         this.log("INFO", "PIXHAWK", "飞控状态在线", "hardware", "Flight controller online");
         this.startTelemetry();
+        this.startExperimentPreview();
         return Promise.resolve({ device: DEFAULT_DEVICE });
+    };
+
+    MockTransport.prototype.startExperimentPreview = function () {
+        if (!this.experiments) return;
+        clearInterval(this.experimentTimer);
+        var publish = function () {
+            this.experiments.snapshot().then(function (snapshot) {
+                if (this.connected) this.emit("experimentSnapshot", snapshot);
+            }.bind(this));
+        }.bind(this);
+        this.emit("experimentConnection", { connected: true, synced: true });
+        publish();
+        this.experimentTimer = setInterval(publish, 250);
     };
 
     MockTransport.prototype.startTelemetry = function () {
@@ -268,6 +284,8 @@
     MockTransport.prototype.disconnect = function () {
         this.connected = false;
         clearInterval(this.telemetryTimer);
+        clearInterval(this.experimentTimer);
+        this.emit("experimentConnection", { connected: false });
         this.drive({ x: 0, y: 0 });
         this.log("INFO", "LINK", "设备连接已断开", "hardware", "Device connection closed");
         return Promise.resolve();
@@ -276,6 +294,9 @@
     function LiveTransport() {
         TransportBase.call(this);
         this.mode = "live";
+        var experimentApi = window.MantaExperimentApi;
+        this.experiments = experimentApi?.liveApi(apiFetch);
+        this.experimentFeed = experimentApi && new experimentApi.SnapshotFeed(this.experiments, this.emit.bind(this));
         this.boardClock = null;
         this.latestUwb = null;
         this.canControl = false;
@@ -375,7 +396,7 @@
         });
     };
 
-    LiveTransport.prototype.connect = function () {
+    LiveTransport.prototype.connect = function (options = {}) {
         var generation = ++this.connectGeneration, controller = new AbortController();
         // A restarted backend begins a fresh ownership revision sequence.
         this.controlRevision = -1; this.controlSession = null; this.canControl = false;
@@ -399,6 +420,7 @@
                 return this.waitForSocket(controller.signal);
             }.bind(this)).then(function () {
                 if (!current()) throw new Error("连接已取消");
+                if (options.readOnly) return;
                 return this.claimControl({ signal: controller.signal }).catch(function (error) {
                     if (error.status !== 409) throw error;
                     this.canControl = false;
@@ -428,7 +450,17 @@
         if (!window.io) return;
         this.socket = window.io({ transports: ["websocket", "polling"], timeout: 5000, auth: { clientId: CONTROL_CLIENT_ID } });
         this.socket.on("control_session", function (session) { this.applyControlSession(session); }.bind(this));
-        this.socket.on("connect", function () { this.latestUwb = null; this.emit("connection", { connected: true, degraded: false }); }.bind(this));
+        var connectedSocket = this.socket;
+        this.socket.on("experiment_snapshot", function (snapshot) {
+            if (this.socket === connectedSocket) this.experimentFeed?.receive(snapshot);
+        }.bind(this));
+        this.socket.on("connect", function () {
+            if (this.socket !== connectedSocket) return;
+            this.latestUwb = null;
+            this.experimentFeed?.open();
+            if (this.experimentPreviewActive) connectedSocket.emit("experiment_preview", { active: true });
+            this.emit("connection", { connected: true, degraded: false });
+        }.bind(this));
         this.socket.on("telemetry_update", function (telemetry) { this.applyTelemetry(telemetry); }.bind(this));
         this.socket.on("uwb_path_update", function (path) { this.emit("uwbPath", path || {}); }.bind(this));
         this.socket.on("uwb_update", function (uwb) { this.emit("telemetry", { uwb: this.selectUwb(uwb) }); }.bind(this));
@@ -454,16 +486,25 @@
             this.log(entry.level, entry.source || "BOARD", entry.message, /motor|gimbal|pixhawk/i.test(entry.source || "") ? "hardware" : "system");
         }.bind(this));
         this.socket.on("disconnect", function () {
+            if (this.socket !== connectedSocket) return;
+            this.experimentFeed?.close();
             this.canControl = false;
             this.driveVector = { x: 0, y: 0 }; clearTimeout(this.driveTimer);
             this.emit("connection", { connected: false, degraded: true });
         }.bind(this));
     };
 
+    LiveTransport.prototype.setExperimentPreview = function (active) {
+        if (Boolean(this.experimentPreviewActive) === active) return;
+        this.experimentPreviewActive = active;
+        if (this.socket?.connected) this.socket.emit("experiment_preview", { active: active });
+    };
+
     LiveTransport.prototype.startPolling = function () {
         clearInterval(this.pollTimer);
         var generation = this.connectGeneration;
         this.pollTimer = setInterval(function () {
+            this.experimentFeed?.poll();
             if (!this.connected || this.pollInFlight) return;
             this.pollInFlight = true;
             var controller = new AbortController(), startedAt = performance.now();
@@ -894,6 +935,8 @@
         ++this.connectGeneration;
         if (this.connectAbort) this.connectAbort.abort();
         if (this.pollAbort) this.pollAbort.abort();
+        this.experimentFeed?.close();
+        this.setExperimentPreview(false);
         var ownedControl = this.canControl;
         this.drive({ x: 0, y: 0 });
         this.connected = false; this.canControl = false;

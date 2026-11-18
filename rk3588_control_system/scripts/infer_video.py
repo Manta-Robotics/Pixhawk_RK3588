@@ -13,6 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from media_alignment import LatestMediaCapture, emit_frame_result, normalized_targets
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_WEIGHTS = PROJECT_ROOT / "best.pt"
@@ -593,7 +594,7 @@ def run(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"tracker config not found: {tracker}")
 
     model = YOLO(str(weights))
-    cap = cv2.VideoCapture(source)
+    cap = LatestMediaCapture(source)
     fps = cap.get(cv2.CAP_PROP_FPS) or float(args.loop_hz or 10.0)
     dt = 1.0 / max(float(fps), 1.0)
     min_interval = 1.0 / max(float(args.loop_hz), 1.0)
@@ -613,6 +614,7 @@ def run(args: argparse.Namespace) -> None:
     locked_wh = None
     last_emit = 0.0
     last_status_emit = 0.0
+    last_measured_frame_id = None
 
     print(json.dumps({
         "event": "ready",
@@ -628,6 +630,8 @@ def run(args: argparse.Namespace) -> None:
     while True:
         frame_started = time.monotonic()
         ok, frame = cap.read()
+        for skipped_metadata in cap.skipped:
+            emit_frame_result(skipped_metadata, 'not_run', 'swimmer', last_measured_frame_id=last_measured_frame_id)
         if not ok:
             now = time.monotonic()
             if now - last_status_emit >= status_interval:
@@ -635,8 +639,10 @@ def run(args: argparse.Namespace) -> None:
                 last_status_emit = now
             cap.release()
             time.sleep(0.05)
-            cap = cv2.VideoCapture(source)
+            cap = LatestMediaCapture(source)
             continue
+
+        frame_meta = cap.metadata
 
         frame_height, frame_width = frame.shape[:2]
         frame_center_x = frame_width * 0.5
@@ -666,6 +672,7 @@ def run(args: argparse.Namespace) -> None:
                     verbose=False,
                 )[0]
             except Exception as predict_exc:
+                emit_frame_result(frame_meta, 'error', 'swimmer', last_measured_frame_id=last_measured_frame_id)
                 now = time.monotonic()
                 if now - last_status_emit >= status_interval:
                     emit_status("model_error", frame_width=frame_width, frame_height=frame_height,
@@ -675,6 +682,7 @@ def run(args: argparse.Namespace) -> None:
                 if elapsed < min_interval:
                     time.sleep(min_interval - elapsed)
                 continue
+        measured_ids = result.boxes is not None and result.boxes.id is not None
         if result.boxes is not None and len(result.boxes) > 0:
             xyxy = result.boxes.xyxy.cpu().numpy()
             confs = result.boxes.conf.cpu().numpy()
@@ -733,6 +741,15 @@ def run(args: argparse.Namespace) -> None:
             center_hist.clear()
             locked_wh = None
             status = "lost"
+
+        targets = normalized_targets(xyxy, confs, ids if measured_ids else [None] * len(xyxy), frame)
+        detection_state = 'predicted' if status == 'coast' else 'detected' if targets else 'no_target'
+        if detection_state == 'detected' and frame_meta:
+            last_measured_frame_id = frame_meta['frame_id']
+        selected_id = str(locked_id) if measured_ids and locked_id is not None else None
+        selected_index = 0 if len(targets) == 1 and locked_box is not None and detection_state == 'detected' else None
+        emit_frame_result(frame_meta, detection_state, 'swimmer', targets, selected_id, last_measured_frame_id,
+                          selected_index=selected_index)
 
         now = time.monotonic()
         if stable_box is not None and now - last_emit >= min_interval:

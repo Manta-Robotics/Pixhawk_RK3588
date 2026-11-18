@@ -10,4 +10,4 @@ if [ -f "$ROS_WORKSPACE/install/setup.bash" ]; then
   source "$ROS_WORKSPACE/install/setup.bash"
 fi
 cd "$LOGGER_DIR"
-exec "${MANTA_LOGGER_PYTHON:-python3}" -u experiment_logger.py --config config.json "$@"
+exec "${MANTA_LOGGER_PYTHON:-python3}" -u experiment_logger.py --config "${MANTA_LOGGER_CONFIG:-config.json}" "$@"

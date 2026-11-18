@@ -24,6 +24,7 @@ os.environ.setdefault("OPENCV_OPENCL_RUNTIME", "disabled")
 
 import cv2
 import numpy as np
+from media_alignment import MediaCapture, emit_frame_result, normalized_targets
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = PROJECT_ROOT / "scripts" / "models" / "version-slim-320_without_postprocessing.onnx"
@@ -36,13 +37,16 @@ class ActivationController:
 
     def __init__(self, active: bool = True) -> None:
         self._event = threading.Event()
+        self.mode_generation = int(os.environ.get('MANTA_MODE_GENERATION', '0'))
         if active:
             self._event.set()
 
     def is_active(self) -> bool:
         return self._event.is_set()
 
-    def set_active(self, active: bool) -> None:
+    def set_active(self, active: bool, mode_generation: int | None = None) -> None:
+        if mode_generation is not None:
+            self.mode_generation = mode_generation
         if active:
             self._event.set()
         else:
@@ -63,7 +67,7 @@ def start_control_reader(controller: ActivationController) -> None:
                 if "active" not in payload:
                     raise ValueError("control message requires active")
                 active = bool(payload["active"])
-                controller.set_active(active)
+                controller.set_active(active, payload.get('mode_generation'))
                 print("CONTROL:" + json.dumps({"active": active}, separators=(",", ":")), flush=True)
             except Exception as exc:
                 print("CONTROL:" + json.dumps({"error": str(exc)}, separators=(",", ":")), flush=True)
@@ -145,6 +149,8 @@ class LatestFrameGrabber:
         self.lock = threading.Lock()
         self.frame: np.ndarray | None = None
         self.frame_id = 0
+        self.metadata = None
+        self.recent = deque(maxlen=64)
         self.updated_at = 0.0
         self.error = ""
         self.stopped = False
@@ -153,8 +159,8 @@ class LatestFrameGrabber:
     def start(self) -> None:
         self.thread.start()
 
-    def _open(self) -> cv2.VideoCapture:
-        cap = cv2.VideoCapture(self.source)
+    def _open(self) -> MediaCapture:
+        cap = MediaCapture(self.source)
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
@@ -174,16 +180,23 @@ class LatestFrameGrabber:
                 continue
             with self.lock:
                 self.frame = frame
+                self.metadata = cap.metadata
                 self.frame_id += 1
+                if self.metadata:
+                    self.recent.append((self.frame_id, self.metadata))
                 self.updated_at = time.monotonic()
                 self.error = ""
         cap.release()
 
-    def read_latest(self) -> tuple[bool, np.ndarray | None, int, float, str]:
+    def read_latest(self) -> tuple[bool, np.ndarray | None, int, float, str, dict | None]:
         with self.lock:
             if self.frame is None:
-                return False, None, self.frame_id, self.updated_at, self.error
-            return True, self.frame.copy(), self.frame_id, self.updated_at, self.error
+                return False, None, self.frame_id, self.updated_at, self.error, None
+            return True, self.frame.copy(), self.frame_id, self.updated_at, self.error, self.metadata
+
+    def skipped(self, before, after):
+        with self.lock:
+            return [meta for frame_no, meta in self.recent if before < frame_no < after]
 
 
 def resolve_path(value: str | Path) -> Path:
@@ -647,13 +660,22 @@ class DetectionWorker:
 
     def _loop(self) -> None:
         last_frame_id = -1
+        last_measured_frame_id = None
+        mode_generation = None
         while True:
             if not self.controller.wait(0.1):
                 continue
-            ok, frame, frame_id, captured_at, stream_error = self.grabber.read_latest()
+            ok, frame, frame_id, captured_at, stream_error, metadata = self.grabber.read_latest()
             if not ok or frame is None or frame_id == last_frame_id:
                 time.sleep(0.008)
                 continue
+            generation = self.controller.mode_generation
+            if generation != mode_generation:
+                mode_generation, last_measured_frame_id = generation, None
+            elif last_frame_id >= 0:
+                for skipped in self.grabber.skipped(last_frame_id, frame_id):
+                    emit_frame_result(skipped, 'not_run', 'face', last_measured_frame_id=last_measured_frame_id,
+                                      mode_generation=generation)
             last_frame_id = frame_id
             try:
                 boxes, scores, track_ids = self.detector.detect(frame)
@@ -668,6 +690,18 @@ class DetectionWorker:
                 )
                 if target is not None:
                     self.previous = target.copy()
+                targets = normalized_targets(boxes, scores, track_ids, frame)
+                if targets and metadata:
+                    last_measured_frame_id = metadata['frame_id']
+                selected_index = None
+                if target is not None:
+                    h, w = frame.shape[:2]
+                    selected_index = min(range(len(targets)), key=lambda i:
+                        (targets[i]['x'] + targets[i]['w'] / 2 - target[0] / w) ** 2
+                        + (targets[i]['y'] + targets[i]['h'] / 2 - target[1] / h) ** 2) if targets else None
+                emit_frame_result(metadata, 'detected' if targets else 'no_target', 'face', targets,
+                                  str(self.locked_id) if targets and self.locked_id is not None else None,
+                                  last_measured_frame_id, generation, selected_index)
                 with self.lock:
                     self.latest = {
                         "frame_id": frame_id,
@@ -676,9 +710,13 @@ class DetectionWorker:
                         "conf": conf,
                         "detections": len(boxes),
                         "locked_id": self.locked_id,
+                        "last_measured_frame_id": last_measured_frame_id,
+                        "mode_generation": generation,
                         "error": "",
                     }
             except Exception as exc:
+                emit_frame_result(metadata, 'error', 'face', last_measured_frame_id=last_measured_frame_id,
+                                  mode_generation=generation)
                 with self.lock:
                     self.latest = {
                         **self.latest,
@@ -975,7 +1013,7 @@ def run(args: argparse.Namespace) -> None:
             was_active = True
 
         started = time.monotonic()
-        ok, frame, frame_id, captured_at, stream_error = grabber.read_latest()
+        ok, frame, frame_id, captured_at, stream_error, metadata = grabber.read_latest()
         if not ok or frame is None:
             now = time.monotonic()
             if now - last_status >= status_interval:
@@ -1006,6 +1044,11 @@ def run(args: argparse.Namespace) -> None:
                 bridge.mark_detector_miss()
 
         target, flow_quality, predicting, prediction_age = bridge.update(frame, frame_id, captured_at or now)
+        if (predicting and frame_id > detection_frame_id and detection.get('last_measured_frame_id')
+                and detection.get('mode_generation') == controller.mode_generation):
+            emit_frame_result(metadata, 'predicted', 'face',
+                              last_measured_frame_id=detection['last_measured_frame_id'],
+                              mode_generation=controller.mode_generation)
         detector_worker.set_prediction(target)
         if target is not None and now - last_emit >= min_interval:
             output = smoother.apply(target, now)

@@ -4,6 +4,14 @@
  */
 
 import express from 'express';
+import { GimbalRecording } from './gimbal_recording.js';
+import { createPreviewDemand, MediaAlignment, subscribeMediaFrames } from './media_alignment.js';
+import { randomUUID } from 'node:crypto';
+import { installCinematographyApi } from './cinematography_api.js';
+import { ExperimentLive } from './experiment_live.js';
+import { ExperimentJournal } from './experiment_journal.js';
+import { readExperimentLoggerConfig, installExperimentHistory } from './experiment_history.js';
+import { acceptUwb, acceptGimbal, modeMiddleware } from './experiment_sources.js';
 import { startExperimentSnapshot } from './experiment_snapshot.js';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
@@ -80,6 +88,20 @@ const configErrors = validateSystemConfig(config);
 if (configErrors.length) {
   throw new Error(`[Config] Invalid system.config.json:\n- ${configErrors.join('\n- ')}`);
 }
+let experimentLoggerConfig;
+let experimentConfigError;
+try {
+  experimentLoggerConfig = readExperimentLoggerConfig(PROJECT_ROOT);
+} catch (error) {
+  experimentConfigError = '实验日志配置不可读：'+error.message;
+  // Keep the existing control server and legacy video playback available during a logger fault.
+  experimentLoggerConfig = {directory:path.join(PROJECT_ROOT,'data','experiment_unavailable')};
+}
+const experimentCalibration = config.experiment?.calibration || {};
+const experimentLive = new ExperimentLive({diagnostic:{motor_cmd:config.rover_command_timeout_ms??350,...config.experiment?.diagnostic},
+  publish:snapshot=>emitDashboardState('experiment_snapshot',snapshot),journal:(kind,payload)=>experimentJournal.append(kind,payload)});
+const experimentJournal = new ExperimentJournal(experimentLive,experimentLoggerConfig,PROJECT_ROOT,{
+  calibration:experimentCalibration,channel_mapping:{left:config.rover_left_channel??1,right:config.rover_right_channel??3}});
 const motorConfig = readJsonFile('config/motor_config.json', { motors: [] });
 
 const LOGS_DIR = path.resolve(PROJECT_ROOT, config.logs_dir || './logs');
@@ -308,6 +330,11 @@ const wirelessAddresses = () => os.networkInterfaces()[String(config.wireless_in
 restrictCompressionToWifi(io, wirelessAddresses);
 const wifiDelivery = new WifiLatestDelivery({ wirelessAddresses, maxInFlight: 2 });
 function emitDashboardState(event, value, options) {
+  if(event==='uwb_follow_update'||event==='gimbal_state')refreshExperimentModes();
+  if(event==='rover_control_update'&&[value.leftPwm,value.rightPwm].every(Number.isFinite)){
+    const origin=String(value.source??'').toUpperCase();
+    if(origin)experimentLive.modes({control_owner:origin.startsWith('UWB')?'uwb':/WEB|SOCKET|MANUAL/.test(origin)?'manual':'other'});
+  }
   emitWifiAwareState(io, wifiDelivery, event, value, options);
 }
 
@@ -473,6 +500,8 @@ let gimbalHoldUntil = 0;
 let gimbalLastFrame = Buffer.alloc(GIMBAL_FRAME_LENGTH, 0);
 let gimbalTxEnabled = false;
 let gimbalTrackProcess = null;
+let experimentTrackGeneration = 0;
+let experimentTrackWorker = null;
 let gimbalTrackRestartTimer = null;
 let gimbalTrackStopRequested = false;
 let gimbalLastRateX = 0;
@@ -997,6 +1026,26 @@ app.use(bodyParser.json({ limit: '1mb', inflate: false }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '64kb', parameterLimit: 100, inflate: false }));
 controlAccess.installRoutes(app);
 app.use('/api', controlAccess.middleware);
+installCinematographyApi(app);
+app.use('/api',modeMiddleware(experimentLive,refreshExperimentModes));
+app.get('/api/experiments/live',(_req,res)=>res.json({success:true,data:experimentLive.snapshot()}));
+for(const action of ['start','stop']){
+  app.post('/api/experiments/'+action,(_req,res)=>{
+    try {res.json({success:true,data:experimentJournal[action]()});}
+    catch(error){
+      if(action==='start'){
+        experimentLive.writer.state='failed';
+        experimentLive.alert('logger','LOG_WRITE_FAILED','error',error.message);
+      }
+      res.status(503).json({success:false,code:'LOGGER_UNAVAILABLE',message:error.message});
+    }
+  });
+}
+if(experimentConfigError){
+  app.use('/api/experiments/sessions',(_req,res)=>res.status(503).json({success:false,code:'HISTORY_UNAVAILABLE',message:experimentConfigError}));
+}else{
+  installExperimentHistory(app,{projectRoot:PROJECT_ROOT,recordingsDir:RECORDINGS_DIR,loggerConfig:experimentLoggerConfig});
+}
 app.use('/api/gimbal/webrtc', createGimbalWebrtcProxy());
 
 app.get('/api/diagnostics/wifi', (_req, res) => {
@@ -1244,7 +1293,18 @@ function appendTelemetryCsv(telemetry) {
   scheduleTelemetryCsvFlush();
 }
 
+function refreshExperimentModes(){
+  experimentLive.modes({control_owner:experimentLive.mode.control_owner??'unknown',follow_active:!!uwbFollowState.active,follow_side:uwbFollowMode,follow_method:uwbTrackingMethod,
+    follow_control_mode:uwbFollowState.controlMode??uwbFollowControlMode,
+    gimbal_mode:gimbalState.trackingActive?gimbalState.trackMode:(gimbalState.mode==='idle'?'idle':gimbalState.mode||'idle')});
+}
 function sendMavlinkCommand(command, params = {}) {
+  if(command==='ROVER_DRIVE'&&[params.throttle,params.steering].every(Number.isFinite)){
+    const drive=normalizeRoverControl(params);
+    experimentLive.local('motor_cmd',{cmd_left_pwm_us:drive.leftPwm,cmd_right_pwm_us:drive.rightPwm},
+      {origin:params.reason??'manual',valid_for_ms:ROVER_COMMAND_TIMEOUT_MS});
+  }
+  if(command==='SET_MODE')params={...params,experiment_request_id:experimentLive.modeRequest('fc',String(params.mode).toUpperCase(),params.reason||'control')};
   const payload = { command, params, timestamp: Date.now() };
   const buffer = Buffer.from(JSON.stringify(payload));
   commandSocket.send(buffer, BRIDGE_COMMAND_PORT, BRIDGE_HOST, (error) => {
@@ -1309,6 +1369,7 @@ function parseGimbalFeedbackFrames() {
       const feedback = siyiGimbal.feedback(packet, gimbalState.feedback || {});
       if (feedback) {
         gimbalState.feedback = feedback;
+        acceptGimbal(experimentLive,feedback,true,experimentCalibration,'a8/'+experimentLive.epoch+'/'+packet.sequence);
         acceptGimbalFeedback(gimbalLinkHealth, feedback.updatedAt);
       }
     }
@@ -1357,7 +1418,10 @@ function parseGimbalFeedbackFrames() {
       checksumValid,
       updatedAt
     };
-    if (checksumValid) acceptGimbalFeedback(gimbalLinkHealth, updatedAt);
+    if (checksumValid) {
+      acceptGimbalFeedback(gimbalLinkHealth, updatedAt);
+      acceptGimbal(experimentLive,gimbalState.feedback,false,experimentCalibration);
+    }
     gimbalFeedbackParseBuffer = gimbalFeedbackParseBuffer.subarray(64);
   }
 }
@@ -1437,8 +1501,26 @@ function startSiyiPolling() {
 }
 
 function writeGimbalWireFrame(frame) {
-  if (!IS_SIYI) return gimbalStream.write(frame);
-  for (const packet of siyiGimbal.translate(frame, gimbalState.feedback)) gimbalStream.write(packet);
+  if (!IS_SIYI) {
+    const result=gimbalStream.write(frame);
+    if(experimentCalibration.gimbal_pitch_down_positive===true){
+      const values=frame[2]===0x72?{gimbal_cmd_yaw_deg:frame.readInt16LE(3)/100,gimbal_cmd_pitch_deg:-frame.readInt16LE(5)/100}:
+        frame[2]===0&&frame[37]===0x70?{gimbal_cmd_yaw_rate_deg_s:frame.readInt16LE(38),gimbal_cmd_pitch_rate_deg_s:-frame.readInt16LE(40)}:null;
+      if(values)experimentLive.local('gimbal_cmd',values,{protocol:'serial'});
+    }
+    return result;
+  }
+  for (const packet of siyiGimbal.translate(frame, gimbalState.feedback)) {
+    gimbalStream.write(packet);
+    const op=packet[7], opts=gimbalConfig.siyi||{};
+    if(op===0x0e){
+      const pitch=packet.readInt16LE(10)/10;
+      experimentLive.local('gimbal_cmd',{gimbal_cmd_yaw_deg:packet.readInt16LE(8)/10,gimbal_cmd_pitch_deg:siyiGimbal.mounting===2?-pitch:pitch},{protocol:'siyi'});
+    }else if(op===0x07){
+      const gain=Number(opts.rate_units_per_dps??1);
+      if(gain>0)experimentLive.local('gimbal_cmd',{gimbal_cmd_yaw_rate_deg_s:packet.readInt8(8)/gain,gimbal_cmd_pitch_rate_deg_s:packet.readInt8(9)/gain},{protocol:'siyi',rate_units_per_dps:gain});
+    }
+  }
   return true;
 }
 
@@ -2158,7 +2240,11 @@ function setFaceTrackerActive(active) {
   if (!gimbalTrackProcess || gimbalTrackProcess.exitCode !== null || gimbalTrackProcess.killed) return false;
   if (!gimbalTrackProcess.stdin || gimbalTrackProcess.stdin.destroyed || !gimbalTrackProcess.stdin.writable) return false;
   try {
-    gimbalTrackProcess.stdin.write(`${JSON.stringify({ active: Boolean(active) })}\n`);
+    if (active) experimentTrackGeneration++;
+    gimbalTrackProcess.stdin.write(`${JSON.stringify({ active: Boolean(active), mode_generation: experimentTrackGeneration })}\n`);
+    if (experimentTrackWorker) experimentLive?.visionWorker(active ? 'start' : 'stopped', {
+      ...experimentTrackWorker, mode_generation: experimentTrackGeneration
+    });
     return true;
   } catch (error) {
     addLog('GIMBAL_TRACK_ERR', `Face tracker control failed: ${error.message}`);
@@ -2169,6 +2255,9 @@ function setFaceTrackerActive(active) {
 function stopGimbalTracking(resetState = true, options = {}) {
   if (options.cancelCalibration !== false) cancelBeaconCalibrationSession();
   gimbalTrackStopRequested = true;
+  if (experimentTrackWorker) experimentLive?.visionWorker('stopped', {
+    ...experimentTrackWorker, mode_generation: experimentTrackGeneration
+  });
   const shouldCounterBrake = resetState && Math.hypot(gimbalLastRateX, gimbalLastRateY) >= GIMBAL_TRACK_COUNTER_BRAKE_MIN_DPS;
   const keepWarm = GIMBAL_FACE_KEEP_WARM
     && gimbalState.trackMode === 'face'
@@ -2969,7 +3058,7 @@ function startGimbalTracking(options = {}) {
   gimbalTrackStopRequested = false;
   gimbalState.trackMode = requestedMode;
   cleanupStaleGimbalTrackWorkers(`start-${requestedMode}`);
-  const sharedSource = 'http://127.0.0.1:8091/stream.mjpg';
+  const sharedSource = `http://127.0.0.1:${GIMBAL_STREAM_PROXY_PORT}/stream.mjpg`;
   let detector = requestedMode;
   let source = sharedSource;
   let trackerThreadLimit = 2;
@@ -3049,8 +3138,12 @@ function startGimbalTracking(options = {}) {
   }
   try {
     const trackerThreadLimitText = String(trackerThreadLimit);
+    const workerEpoch = randomUUID();
+    const modeGeneration = ++experimentTrackGeneration;
     const childEnv = {
       ...process.env,
+      MANTA_WORKER_EPOCH: workerEpoch,
+      MANTA_MODE_GENERATION: String(modeGeneration),
       MANTA_TRACK_THREADS: trackerThreadLimitText,
       OMP_NUM_THREADS: trackerThreadLimitText,
       OPENBLAS_NUM_THREADS: trackerThreadLimitText,
@@ -3061,6 +3154,9 @@ function startGimbalTracking(options = {}) {
       OPENCV_OPENCL_RUNTIME: 'disabled'
     };
     const child = spawn(PYTHON_EXEC, args, { cwd: PROJECT_ROOT, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv });
+    const worker = { worker_epoch: workerEpoch, mode_generation: modeGeneration, detector: requestedMode };
+    experimentTrackWorker = worker;
+    if (!warmOnly) experimentLive?.visionWorker('start', worker);
     gimbalTrackProcess = child;
     gimbalTrackTarget = null;
     gimbalTrackHolding = true;
@@ -3079,6 +3175,18 @@ function startGimbalTracking(options = {}) {
         const line = stdoutBuf.slice(0, index).trim();
         stdoutBuf = stdoutBuf.slice(index + 1);
         if (!line) continue;
+        if (line.startsWith('FRAME_RESULT:')) {
+          try {
+            const result = JSON.parse(line.slice(13));
+            if (result.worker_epoch === workerEpoch) experimentLive?.visionResult(result, {
+              frame_id: result.frame_id || null, stream_epoch: result.stream_epoch || null,
+              obs_ns: result.obs_ns || null, time_kind: result.time_kind || 'unknown',
+              primary: child === gimbalTrackProcess && gimbalState.trackingActive
+                && result.mode_generation === experimentTrackGeneration
+            });
+          } catch (error) { addLog('GIMBAL_TRACK_ERR', error.message); }
+          continue;
+        }
         if (child !== gimbalTrackProcess) {
           continue;
         }
@@ -3141,6 +3249,9 @@ function startGimbalTracking(options = {}) {
     child.on('exit', (code, signalName) => {
       addLog('GIMBAL_TRACK', `Tracker exited code=${code} signal=${signalName || ''}`);
       if (child !== gimbalTrackProcess) return;
+      if (!gimbalTrackStopRequested && gimbalState.trackingActive) {
+        experimentLive?.visionWorker('failed', { ...worker, mode_generation: experimentTrackGeneration });
+      }
       gimbalTrackProcess = null;
       gimbalState.trackWorkerActive = false;
       if (!gimbalTrackStopRequested && gimbalState.trackingActive) {
@@ -3191,8 +3302,36 @@ async function refreshHostBoardTemperature() {
   }
 }
 
-let gimbalRecordingProcess = null;
-let gimbalRecordingState = null;
+const recordingConfig = config.recordings || {};
+const frameBroker = `http://127.0.0.1:${GIMBAL_STREAM_PROXY_PORT}`;
+const recordingPython = process.env.MANTA_RECORDING_PYTHON ||
+  (fs.existsSync(path.join(PROJECT_ROOT, '.venv', 'bin', 'python')) ? path.join(PROJECT_ROOT, '.venv', 'bin', 'python')
+    : process.env.PYTHON_EXEC || 'python3');
+let recordingBootId = null;
+try { recordingBootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); } catch (_) {}
+const recordingAlignment = new MediaAlignment({
+  projectRoot: PROJECT_ROOT, indexDirectory: path.join(experimentLoggerConfig.directory, 'clip_indexes'),
+  directory: RECORDINGS_DIR, python: recordingPython, bootId: recordingBootId,
+  codec: gimbalVideoConfig.aligned_codec || 'libx264', fps: Math.max(1, Math.round(gimbalVideoConfig.fps || 25)),
+  ffprobe: process.env.FFPROBE_BIN || 'ffprobe', getSessionId: () => experimentLive?.session || null,
+  onClip: clip => experimentLive?.event('video', 'record_phase', {
+    clip_id: clip.clip_id, recording_id: clip.recording_id, message: clip.reason?.message || '录像段已检查',
+    level: clip.index_state === 'failed' ? 'error' : 'info', code: clip.reason?.code || null
+  }, { ...clip, operation: 'clip_index' })
+});
+const mediaPreviewDemand = createPreviewDemand(active => experimentLive?.videoDemand(active));
+const closeMediaFrameSubscription = !SIMULATION_MODE && gimbalVideoConfig.shared_frame_alignment !== false
+  ? subscribeMediaFrames(`${frameBroker}/_frame-events`, metadata => experimentLive?.mediaFrame(metadata)) : () => {};
+const gimbalRecorder = new GimbalRecording({ alignment: recordingAlignment, binary: FFMPEG_BIN,
+  startupTimeoutMs: recordingConfig.startup_timeout_ms, stallTimeoutMs: recordingConfig.stall_timeout_ms,
+  segmentSeconds: recordingConfig.segment_seconds,
+  onChange: () => {
+    const state = buildRecordingState();
+    io.emit('gimbal_recording_state', state);
+    experimentLive?.recordState(state);
+  }, log: message => addLog('GIMBAL_REC', message) });
+let recordingStartPending = null;
+let recordingControlBusy = false;
 
 function recordingTimestamp(date = new Date()) {
   const pad = (value) => String(value).padStart(2, '0');
@@ -3244,6 +3383,7 @@ function recordingFileInfo(filePath, baseUrl = '') {
   const streamPath = `/api/gimbal/recordings/${encodeURIComponent(name)}/stream`;
   const downloadPath = `/api/gimbal/recordings/${encodeURIComponent(name)}/download`;
   return {
+    ...(gimbalRecorder.clips.get(name) || {}),
     name,
     title: name.replace(/\.mp4$/i, ''),
     size: stat.size,
@@ -3261,69 +3401,52 @@ function listGimbalRecordings(baseUrl = '') {
   return fs.readdirSync(RECORDINGS_DIR)
     .filter((name) => name.toLowerCase().endsWith('.mp4'))
     .map((name) => path.join(RECORDINGS_DIR, name))
-    .filter((filePath) => fs.existsSync(filePath))
+    .filter(filePath => {
+      const name = path.basename(filePath);
+      return fs.existsSync(filePath) && fs.statSync(filePath).size > 0 &&
+        !gimbalRecorder.isOpen(name) && gimbalRecorder.clips.get(name)?.phase !== 'failed';
+    })
     .map((filePath) => recordingFileInfo(filePath, baseUrl))
     .sort((a, b) => String(b.modifiedAt).localeCompare(String(a.modifiedAt)));
 }
 
 function isGimbalRecordingActive() {
-  return Boolean(gimbalRecordingProcess && gimbalRecordingProcess.exitCode === null && !gimbalRecordingProcess.killed);
+  return gimbalRecorder.state().active;
 }
 
 function buildRecordingState() {
+  const state = gimbalRecorder.state();
   return {
-    active: isGimbalRecordingActive(),
-    current: gimbalRecordingState ? { ...gimbalRecordingState, path: undefined } : null,
+    ...state, elapsed_ms: state.current?.elapsedMs ?? null,
     directory: RECORDINGS_DIR,
     input: GIMBAL_RECORD_INPUT
   };
+}
+
+async function selectRecordingInput(input) {
+  recordingAlignment.source = null;
+  if (gimbalVideoConfig.shared_frame_alignment === false || !input.startsWith('rtsp://') || input !== GIMBAL_VIDEO_INPUT) return;
+  const status = await fetch(`${frameBroker}/healthz`, { signal: AbortSignal.timeout(750), cache: 'no-store' })
+    .then(reply => reply.ok ? reply.json() : null).catch(() => null);
+  if (status?.shared_frame_alignment && status.inputUrl === input) recordingAlignment.source = `${frameBroker}/_record.mjpg`;
 }
 
 function startGimbalRecording(options = {}) {
   if (isGimbalRecordingActive()) return { ok: true, alreadyRunning: true, recording: buildRecordingState().current };
   const outputPath = uniqueRecordingPath(options.name || recordingTimestamp());
   const input = String(options.input || GIMBAL_RECORD_INPUT || GIMBAL_VIDEO_INPUT);
-  const useRtsp = input.startsWith('rtsp://');
-  const args = ['-hide_banner', '-loglevel', 'warning', '-y'];
-  if (useRtsp) args.push('-rtsp_transport', String(gimbalVideoConfig.rtsp_transport || 'tcp'));
-  args.push('-i', input, '-map', '0:v:0', '-an', '-c:v', GIMBAL_RECORD_CODEC);
-  if (GIMBAL_RECORD_CODEC !== 'copy' && GIMBAL_RECORD_BITRATE) {
-    args.push('-b:v', GIMBAL_RECORD_BITRATE);
-  }
-  args.push('-movflags', '+faststart', outputPath);
   try {
-    const child = spawn(FFMPEG_BIN, args, { cwd: PROJECT_ROOT, stdio: ['ignore', 'ignore', 'pipe'] });
-    gimbalRecordingProcess = child;
-    gimbalRecordingState = {
-      name: path.basename(outputPath),
-      title: path.basename(outputPath, '.mp4'),
-      path: outputPath,
-      input,
-      startedAt: new Date().toISOString()
-    };
-    child.stderr.on('data', (data) => addLog('GIMBAL_REC_ERR', String(data).trimEnd()));
-    child.on('exit', (code, signalName) => {
-      addLog('GIMBAL_REC', `Recording exited code=${code} signal=${signalName || ''}`);
-      gimbalRecordingProcess = null;
-      gimbalRecordingState = null;
-      io.emit('gimbal_recording_state', buildRecordingState());
-    });
-    addLog('GIMBAL_REC', `Recording started ${outputPath}`);
-    io.emit('gimbal_recording_state', buildRecordingState());
+    gimbalRecorder.start({ outputPath, input, codec: GIMBAL_RECORD_CODEC, bitrate: GIMBAL_RECORD_BITRATE,
+      transport: String(gimbalVideoConfig.rtsp_transport || 'tcp') });
     return { ok: true, recording: buildRecordingState().current };
   } catch (error) {
     return { ok: false, error: error.message };
   }
 }
 
-function stopGimbalRecording() {
-  if (isGimbalRecordingActive()) {
-    try { gimbalRecordingProcess.kill('SIGINT'); } catch (_) {}
-  }
+async function stopGimbalRecording() {
   const stopped = buildRecordingState().current;
-  gimbalRecordingProcess = null;
-  gimbalRecordingState = null;
-  io.emit('gimbal_recording_state', buildRecordingState());
+  await gimbalRecorder.stop();
   return { ok: true, recording: stopped };
 }
 
@@ -3411,6 +3534,7 @@ app.get('/api/gimbal/video/stream', (_req, res) => {
 });
 
 app.get('/api/gimbal/stream', async (req, res) => {
+  mediaPreviewDemand.trackResponse(res);
   let upstreamUrl;
   try {
     upstreamUrl = new URL(GIMBAL_LOCAL_STREAM_URL);
@@ -3774,6 +3898,15 @@ function publishUwbFollowState(result, active = uwbFollowState.active) {
     updatedAt: Date.now()
   };
   systemState.uwbFollow = uwbFollowState;
+  if(result.safe===false && result.reason && result.reason!==experimentLive.protectionReason && active){
+    experimentLive.event('fc','protection',{code:result.reason,message:result.reason},{control_mode:uwbFollowControlMode});
+  }
+  experimentLive.protectionReason=result.safe===false?result.reason:null;
+  const last=experimentLive.samples.get('uwb');
+  if(result.targetEstimate?.source==='predicted'&&last){
+    experimentLive.local('uwb_pred',{uwb_pred_range_m:result.distanceM??null,uwb_pred_bearing_deg:result.bearingDeg??null},
+      {based_on_sample_id:last.sample_id},{quality:'predicted'});
+  }
   emitDashboardState('uwb_follow_update', uwbFollowState);
 }
 
@@ -4614,6 +4747,8 @@ function updateTelemetry(newTelemetry = {}) {
 function updateConnectionStatus(isConnected) {
   const previousStatus = systemState.pixhawkStatus;
   systemState.isConnected = Boolean(isConnected);
+  experimentLive.linkDown=!isConnected;
+  if(!isConnected)experimentLive.check();
   if (isConnected) {
     systemState.hardware.pixhawk.lastSeenAt = Date.now();
   }
@@ -4635,7 +4770,18 @@ telemetrySocket.on('message', (rawMessage) => {
   try {
     const packet = JSON.parse(rawMessage.toString('utf8'));
 
+    if(packet.kind==='experiment_sample'&&packet.v===2){
+      const previous=experimentLive.actual('fc');
+      if(experimentLive.ingest(packet.payload)&&packet.payload.source==='fc'){
+        experimentLive.linkDown=false;experimentLive.applied('fc',packet.payload.values.fc_mode,previous??undefined);
+      }
+      return;
+    }
+    if(packet.type==='experiment_mode_rejected'){
+      experimentLive.modeOutcome('fc',packet.payload?.request_id,'rejected',packet.payload?.reason);return;
+    }
     if (packet.type === 'uwb') {
+      if(!UWB_USB_ENABLED)acceptUwb(experimentLive,packet.payload,traditionalUwbFollowController.config,experimentCalibration);
       if (UWB_USB_ENABLED) return; // USB owns the observation; TELEM cannot overwrite it.
       // This path does not refresh any other sensor or wait for the full telemetry timer.
       systemState.telemetry = { ...systemState.telemetry,
@@ -4675,6 +4821,7 @@ telemetrySocket.bind(BRIDGE_TELEMETRY_PORT, '127.0.0.1', () => {
 
 if (usbUwbSource) {
   usbUwbSource.on('packet', packet => {
+    acceptUwb(experimentLive,packet,traditionalUwbFollowController.config,experimentCalibration);
     systemState.telemetry = { ...systemState.telemetry,
       uwb: mergeUwbTelemetry(systemState.telemetry.uwb, packet) };
     emitDashboardState('uwb_update', systemState.telemetry.uwb);
@@ -5165,36 +5312,56 @@ app.get('/api/gimbal/recording/state', (_req, res) => {
   res.json({ success: true, state: buildRecordingState() });
 });
 
-app.post('/api/gimbal/recording/start', (req, res) => {
-  if (!gimbalStream || !gimbalState.connected) {
-    openGimbalPort('recording');
+app.post('/api/gimbal/recording/start', async (req, res) => {
+  const current = buildRecordingState();
+  if (recordingControlBusy || current.phase === 'finalizing') {
+    return res.status(409).json({ success: false, code: 'RECORD_FINALIZING', message: '录像正在封装', state: current });
   }
-  let protocol = null;
-  let streamProfile = null;
-  if (gimbalStream) {
-    sendGimbalOsd(0, 'recording');
-    streamProfile = sendGimbalStreamProfile(
-      req.body && Number.isFinite(Number(req.body.streamIndex)) ? Number(req.body.streamIndex) : GIMBAL_RECORD_STREAM_INDEX,
-      req.body && Number.isFinite(Number(req.body.quality)) ? Number(req.body.quality) : GIMBAL_RECORD_STREAM_QUALITY,
-      'recording'
-    );
-    protocol = sendGimbalRecordCommand('start', 'recording');
+  if (current.desired) return res.json({ success: true, active: current.active, alreadyRunning: true,
+    protocol: null, streamProfile: null, recording: current.current, state: current });
+  const repeated = Boolean(recordingStartPending);
+  if (!repeated) {
+    recordingStartPending = (async () => {
+      await selectRecordingInput(String(req.body?.input || GIMBAL_RECORD_INPUT || GIMBAL_VIDEO_INPUT));
+      if (!gimbalStream || !gimbalState.connected) openGimbalPort('recording');
+      let protocol = null;
+      let streamProfile = null;
+      if (gimbalStream) {
+        sendGimbalOsd(0, 'recording');
+        streamProfile = sendGimbalStreamProfile(
+          req.body && Number.isFinite(Number(req.body.streamIndex)) ? Number(req.body.streamIndex) : GIMBAL_RECORD_STREAM_INDEX,
+          req.body && Number.isFinite(Number(req.body.quality)) ? Number(req.body.quality) : GIMBAL_RECORD_STREAM_QUALITY,
+          'recording');
+        protocol = sendGimbalRecordCommand('start', 'recording');
+      }
+      const result = startGimbalRecording(req.body || {});
+      return { ...result, protocol, streamProfile };
+    })().finally(() => { recordingStartPending = null; });
   }
-  const result = startGimbalRecording(req.body || {});
-  if (!result.ok) {
-    res.status(500).json({ success: false, message: result.error, state: buildRecordingState() });
-    return;
-  }
-  res.json({ success: true, active: true, alreadyRunning: Boolean(result.alreadyRunning), protocol, streamProfile, recording: result.recording, state: buildRecordingState() });
+  try {
+    const result = await recordingStartPending;
+    const state = buildRecordingState();
+    return res.json({ success: true, active: state.active, alreadyRunning: repeated || Boolean(result.alreadyRunning),
+      protocol: repeated ? null : result.protocol, streamProfile: repeated ? null : result.streamProfile,
+      recording: result.recording, state });
+  } catch (error) { return res.status(500).json({ success: false, message: error.message, state: buildRecordingState() }); }
 });
 
-app.post('/api/gimbal/recording/stop', (req, res) => {
+app.post('/api/gimbal/recording/stop', async (req, res) => {
+  if (recordingStartPending) { try { await recordingStartPending; } catch (_) {} }
+  const state = buildRecordingState();
+  if (recordingControlBusy || !state.desired) return res.json({ success: true, active: false, protocol: null,
+    recording: state.current, state, recordings: listGimbalRecordings(publicBaseUrl(req)) });
+  recordingControlBusy = true;
+  try {
   let protocol = null;
   if (gimbalStream) {
     protocol = sendGimbalRecordCommand('stop', 'recording');
   }
-  const result = stopGimbalRecording();
+  const result = await stopGimbalRecording();
   res.json({ success: true, active: false, protocol, recording: result.recording, state: buildRecordingState(), recordings: listGimbalRecordings(publicBaseUrl(req)) });
+  } catch (error) { res.status(500).json({ success: false, message: error.message, state: buildRecordingState() }); }
+  finally { recordingControlBusy = false; }
 });
 
 app.get('/api/gimbal/recordings', (req, res) => {
@@ -5216,28 +5383,64 @@ app.get('/api/gimbal/recordings/:name/download', (req, res) => {
     res.status(404).json({ success: false, message: 'Recording not found' });
     return;
   }
+  if (gimbalRecorder.isOpen(path.basename(filePath))) return res.status(409).json({ success: false, message: 'Recording segment is still being written' });
   res.download(filePath, path.basename(filePath));
 });
 
-app.patch('/api/gimbal/recordings/:name', (req, res) => {
-  const filePath = resolveRecordingPath(req.params.name);
-  if (!filePath || !fs.existsSync(filePath)) {
-    res.status(404).json({ success: false, message: 'Recording not found' });
-    return;
-  }
-  const targetPath = uniqueRecordingPath((req.body && req.body.name) || path.basename(filePath, '.mp4'));
-  fs.renameSync(filePath, targetPath);
-  res.json({ success: true, recording: recordingFileInfo(targetPath, publicBaseUrl(req)), recordings: listGimbalRecordings(publicBaseUrl(req)) });
+app.patch('/api/gimbal/recordings/:name', async (req, res, next) => {
+  try {
+    const filePath = resolveRecordingPath(req.params.name);
+    if (!filePath || !fs.existsSync(filePath)) {
+      res.status(404).json({ success: false, message: 'Recording not found' });
+      return;
+    }
+    const oldName = path.basename(filePath);
+    if (gimbalRecorder.isOpen(oldName)) return res.status(409).json({ success: false, message: 'Recording segment is still being written' });
+    const clip = gimbalRecorder.clips.get(oldName) || await recordingAlignment.lookupFile(oldName);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, message: 'Recording not found' });
+    const targetPath = uniqueRecordingPath((req.body && req.body.name) || path.basename(filePath, '.mp4'));
+    const newName = path.basename(targetPath);
+    fs.renameSync(filePath, targetPath);
+    try {
+      if (clip) await recordingAlignment.updateFile(clip.clip_id, newName);
+    } catch (error) {
+      if (!fs.existsSync(filePath)) fs.renameSync(targetPath, filePath);
+      throw error;
+    }
+    if (clip) {
+      gimbalRecorder.clips.delete(oldName);
+      gimbalRecorder.clips.set(newName, { ...clip, file_name: newName });
+    }
+    if (clip) {
+      experimentLive?.event('video', 'record_phase', {
+        recording_id: clip.recording_id, clip_id: clip.clip_id, message: '录像段已改名'
+      }, { operation: 'clip_renamed', previous_file_name: oldName, file_name: newName });
+    }
+    res.json({ success: true, recording: recordingFileInfo(targetPath, publicBaseUrl(req)), recordings: listGimbalRecordings(publicBaseUrl(req)) });
+  } catch (error) { next(error); }
 });
 
-app.delete('/api/gimbal/recordings/:name', (req, res) => {
-  const filePath = resolveRecordingPath(req.params.name);
-  if (!filePath || !fs.existsSync(filePath)) {
-    res.status(404).json({ success: false, message: 'Recording not found' });
-    return;
-  }
-  fs.unlinkSync(filePath);
-  res.json({ success: true, recordings: listGimbalRecordings(publicBaseUrl(req)) });
+app.delete('/api/gimbal/recordings/:name', async (req, res, next) => {
+  try {
+    const filePath = resolveRecordingPath(req.params.name);
+    if (!filePath || !fs.existsSync(filePath)) {
+      res.status(404).json({ success: false, message: 'Recording not found' });
+      return;
+    }
+    const fileName = path.basename(filePath);
+    if (gimbalRecorder.isOpen(fileName)) return res.status(409).json({ success: false, message: 'Recording segment is still being written' });
+    const clip = gimbalRecorder.clips.get(fileName) || await recordingAlignment.lookupFile(fileName);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, message: 'Recording not found' });
+    fs.unlinkSync(filePath);
+    if (clip) {
+      await recordingAlignment.updateFile(clip.clip_id, null);
+      gimbalRecorder.clips.delete(fileName);
+      experimentLive?.event('video', 'record_phase', {
+        recording_id: clip.recording_id, clip_id: clip.clip_id, message: '录像文件已移除'
+      }, { operation: 'clip_removed', file_name: fileName });
+    }
+    res.json({ success: true, recordings: listGimbalRecordings(publicBaseUrl(req)) });
+  } catch (error) { next(error); }
 });
 
 app.post('/api/gimbal/connect', (_req, res) => {
@@ -5679,6 +5882,7 @@ app.use((error, _req, res, _next) => {
 });
 
 io.on('connection', (socket) => {
+  mediaPreviewDemand.trackSocket(socket);
   addLog('INFO', `Web client connected: ${socket.id}`);
   socket.emit('control_session', controlAccess.state(socket.data.controlSession, socket.data.controlClient));
   socket.emit('system_state', systemState);
@@ -5748,6 +5952,18 @@ io.on('connection', (socket) => {
   });
 });
 
+refreshExperimentModes();
+for(const source of ['fc','att','imu','pwm'])experimentLive.setExpected(source,true);
+experimentLive.setExpected('uwb',UWB_USB_ENABLED||config.uwb_dual?.enabled!==false);
+experimentLive.setExpected('gimbal',gimbalConfig.enabled!==false);
+if(experimentConfigError)experimentJournal.listenerError=experimentConfigError;
+else experimentJournal.listen().catch(error=>{experimentJournal.listenerError='日志通信接口不可用：'+error.message;});
+const experimentClock=setInterval(()=>{
+  experimentLive.check();
+  if(!experimentJournal.finishing)experimentLive.overview();
+},50);
+const experimentPush=setInterval(()=>experimentLive.publish(experimentLive.snapshot()),250);
+experimentClock.unref();experimentPush.unref();
 const stopExperimentSnapshot = startExperimentSnapshot(() => ({
   telemetry: systemState.telemetry,
   hardware: systemState.hardware,
@@ -5812,14 +6028,17 @@ let shutdownStarted = false;
 function shutdown() {
   if (shutdownStarted) return;
   shutdownStarted = true;
+  const recordingClosed = gimbalRecorder.stop();
+  closeMediaFrameSubscription();
   const forceExitTimer = setTimeout(() => {
     console.error('[Shutdown] Force exit after timeout');
     process.exit(0);
-  }, 2500);
+  }, gimbalRecorder.state().phase === 'finalizing' ? 12000 : 2500);
   forceExitTimer.unref();
 
   usbUwbSource?.close();
   stopExperimentSnapshot();
+  clearInterval(experimentClock);clearInterval(experimentPush);experimentJournal.close();
   controlAccess.close();
   wifiDelivery.close();
   flushTelemetryCsv(true);
@@ -5874,7 +6093,8 @@ function shutdown() {
     bonjour = null;
   }
 
-  httpServer.close(() => {
+  httpServer.close(async () => {
+    await recordingClosed;
     console.log('[Server] Closed');
     clearTimeout(forceExitTimer);
     process.exit(0);

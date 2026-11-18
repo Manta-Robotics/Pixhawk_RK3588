@@ -15,7 +15,7 @@ export function startExperimentSnapshot(readState) {
       const raw = Buffer.from(JSON.stringify(packet));
       if (raw.length > 60000) { drops += 1; return; }
       busy = true;
-      socket.send(raw, 14660, '127.0.0.1', (error) => {
+      socket.send(raw, Number(process.env.MANTA_EXPERIMENT_RAW_PORT || 14660), '127.0.0.1', (error) => {
         busy = false;
         if (error) drops += 1;
       });

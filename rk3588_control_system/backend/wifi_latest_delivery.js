@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { BlockList, isIP } from 'node:net';
 
-const STATE_EVENTS = ['uwb_path_update', 'uwb_update', 'telemetry_update', 'motor_output_update', 'gimbal_state',
+const STATE_EVENTS = ['experiment_snapshot', 'uwb_path_update', 'uwb_update', 'telemetry_update', 'motor_output_update', 'gimbal_state',
   'uwb_follow_update', 'rover_control_update', 'gimbal_target', 'vision_detections'];
 const normalizeAddress = address => String(address || '').replace(/^::ffff:/, '').split('%')[0];
 const observationClock = value => Math.max(0, ...[value?.measurementUpdatedAt,

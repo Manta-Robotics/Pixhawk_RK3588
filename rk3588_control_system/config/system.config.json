@@ -1,4 +1,14 @@
 {
+  "experiment": {
+    "calibration": {
+      "imu_frd_axes": null,
+      "uwb_calibration_id": null,
+      "gimbal_calibration_id": null,
+      "esc_rpm_units": null,
+      "pole_pairs": {}
+    },
+    "diagnostic": {}
+  },
   "mission_planner_tcp": {
     "enabled": false,
     "host": "127.0.0.1",

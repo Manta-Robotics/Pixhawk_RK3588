@@ -4,5 +4,6 @@ pymavlink>=2.4.36,<3
 pyserial>=3.5,<4
 numpy>=1.24,<2
 opencv-python-headless>=4.8,<4.12
+av>=14,<17
 ultralytics>=8.3.52,<8.4
 psutil>=5.9,<8
