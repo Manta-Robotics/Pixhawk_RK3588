@@ -260,32 +260,55 @@ def atomic_json(path, data):
         temporary.unlink(missing_ok=True)
 
 
+def unedited_packet_pts(media, ffprobe):
+    """Read video packet timestamps before the MP4 demuxer applies edits."""
+    try:
+        output = subprocess.run([ffprobe, '-v', 'error', '-ignore_editlist', '1', '-select_streams', 'v:0',
+                                 '-show_packets', '-show_entries', 'packet=pts,pos', '-of', 'json', str(media)],
+                                check=True, capture_output=True, timeout=10)
+        packets = json.loads(output.stdout).get('packets', [])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+    timestamps = {}
+    for packet in packets:
+        position = str(packet.get('pos', ''))
+        pts = str(packet.get('pts', ''))
+        if position.isdigit():
+            timestamps[position] = int(pts) if position not in timestamps and pts.lstrip('-').isdigit() else None
+    return timestamps
+
+
 def probe_clip(media, clip, source_by_time=None, ffprobe='ffprobe'):
     """Explicit encoder PTS→common-JPEG map. Ambiguous keys stay unidentified."""
     output = subprocess.run([ffprobe, '-v', 'error', '-select_streams', 'v:0', '-show_streams',
                              '-show_frames', '-show_entries',
-                             'stream=time_base,start_pts,duration_ts:frame=pts,best_effort_timestamp,pkt_duration,duration',
+                             'stream=time_base,start_pts,duration_ts:frame=pts,pkt_pts,pkt_pos,pkt_duration,duration',
                              '-of', 'json', str(media)], check=True, capture_output=True, timeout=30)
     probe = json.loads(output.stdout)
     streams, shown = probe.get('streams', []), probe.get('frames', [])
     if not streams or not shown:
         raise ValueError('No decodable display frames')
     base = Fraction(streams[0]['time_base'])
-    pts_values = [value.get('pts') if value.get('pts') is not None else value.get('best_effort_timestamp') for value in shown]
-    pts_values = [int(pts) if str(pts).lstrip('-').isdigit() else None for pts in pts_values]
-    origin = streams[0].get('start_pts')
-    origin = int(origin) if str(origin).lstrip('-').isdigit() else next((p for p in pts_values if p is not None), None)
-    source_by_time = source_by_time or {}
+    # Older ffprobe versions print the same AVFrame.pts as pkt_pts.
+    pts_values = [int(pts) if str(pts).lstrip('-').isdigit() else None
+                  for pts in (frame.get('pts', frame.get('pkt_pts')) for frame in shown)]
+    # MP4 frame PTS already use the edit-adjusted, zero-based movie timeline.
+    # A delayed first picture must keep its leading gap in the player.
+    starts_at_zero = str(streams[0].get('start_pts')) == '0'
+    source_by_time = (source_by_time or {}) if starts_at_zero else {}
+    raw_pts = unedited_packet_pts(media, ffprobe) if source_by_time else {}
     pts_counts = {}
-    for pts in pts_values:
+    position_counts = {}
+    positions = [str(frame.get('pkt_pos', '')) for frame in shown]
+    for pts, position in zip(pts_values, positions):
         pts_counts[pts] = pts_counts.get(pts, 0) + 1
+        position_counts[position] = position_counts.get(position, 0) + 1
     frames = []
-    for index, (pts, data) in enumerate(zip(pts_values, shown)):
-        # An MP4 edit can move the presentation origin. It must not be used
-        # to shift the identity evidence from the encoder's written packets.
-        key = (pts - origin) * base if pts is not None and origin is not None else None
-        meta = source_by_time.get(pts * base) if pts is not None and pts_counts[pts] == 1 else None
-        play_us = round(key * 1_000_000) if key is not None else None
+    for index, (pts, position, data) in enumerate(zip(pts_values, positions, shown)):
+        key = pts * base if pts is not None else None
+        same_packet_pts = pts is not None and raw_pts.get(position) == pts and position_counts[position] == 1
+        meta = source_by_time.get(key) if same_packet_pts and pts_counts[pts] == 1 else None
+        play_us = round(key * 1_000_000) if key is not None and key >= 0 else None
         raw_duration = data.get('duration') or data.get('pkt_duration')
         duration_us = round(int(raw_duration) * base * 1_000_000) if str(raw_duration).isdigit() else 0
         current_ns = int(meta['obs_ns']) if meta and meta.get('obs_ns') is not None else None
@@ -314,7 +337,7 @@ def probe_clip(media, clip, source_by_time=None, ffprobe='ffprobe'):
             current['play_end_us'] = end
     last = frames[-1]
     duration_ts = streams[0].get('duration_ts')
-    if last['play_end_us'] is None and last['play_us'] is not None and str(duration_ts).isdigit():
+    if starts_at_zero and last['play_end_us'] is None and last['play_us'] is not None and str(duration_ts).isdigit():
         stream_end = round(int(duration_ts) * base * 1_000_000)
         if stream_end > last['play_us']:
             last['play_end_us'] = stream_end
@@ -323,5 +346,5 @@ def probe_clip(media, clip, source_by_time=None, ffprobe='ffprobe'):
         if 0 < duration_ns <= 500_000_000:
             last['frame_mono_end_ns'] = str(int(last['frame_mono_ns']) + duration_ns)
     return {**clip, 'phase': 'ready', 'index_state': 'ready' if all(f['identity'] == 'exact' for f in frames) else 'partial',
-            'play_origin_pts': str(origin) if origin is not None else None, 'tb_num': base.numerator,
+            'play_origin_pts': '0', 'tb_num': base.numerator,
             'tb_den': base.denominator, 'frames': frames, 'gaps': gaps}
