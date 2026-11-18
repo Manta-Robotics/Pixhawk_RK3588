@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from experiment_tap import record_mavlink
+from experiment_tap import record_mavlink, canonical_sample
 from uwb_fusion import DualUwbFusion
 from uwb_measurement_filter import GatedUwbKalman, DEFAULTS as UWB_FILTER_DEFAULTS
 from rover_pilot_mapping import motor_target_axes, valid_pilot_type
@@ -391,7 +391,13 @@ class MAVLinkBridge:
         if receiver is not None and revision() != before and hasattr(self, 'telemetry_socket'):
             # Publish completed observations and invalidations immediately. No GPS,
             # IMU, camera request, or periodic telemetry deadline is awaited here.
-            self._send_node_packet('uwb', self._uwb_payload())
+            uwb = self._uwb_payload()
+            raw = getattr(self, '_experiment_raw', None)
+            stamp = (uwb.get('measurementUpdatedAt'), tuple(uwb.get('activeReceiverIds') or ()))
+            if raw and uwb.get('fresh') and stamp != getattr(self, '_experiment_uwb_revision', None):
+                self._experiment_uwb_revision = stamp
+                uwb['experiment_stamp'] = {k: raw[k] for k in ('sample_id', 'obs_ns', 'boot_id')}
+            self._send_node_packet('uwb', uwb)
 
     def _apply_uwb_named_value(
         self,
@@ -741,6 +747,8 @@ class MAVLinkBridge:
             'timestamp': time.time(),
         }
         try:
+            if packet_type == 'experiment_sample':
+                packet.update(kind='experiment_sample', v=2)
             data = json.dumps(packet).encode('utf-8')
             self.telemetry_socket.sendto(data, self.node_addr)
         except Exception as exc:
@@ -1416,7 +1424,9 @@ class MAVLinkBridge:
             return
 
         if command == 'SET_MODE':
-            self._set_flight_mode(str(params.get('mode', '')))
+            applied = self._set_flight_mode(str(params.get('mode', '')))
+            if not applied and params.get('experiment_request_id'):
+                self._send_node_packet('experiment_mode_rejected', {'request_id':params['experiment_request_id'], 'reason':'飞控模式请求未发送'})
             return
 
         if command == 'ARM':
@@ -1460,7 +1470,14 @@ class MAVLinkBridge:
             self._handle_command_packet(raw_data)
 
     def _parse_message(self, msg: Any) -> None:
-        record_mavlink(msg, getattr(self, 'target_system', None), getattr(self, 'target_component', None))
+        raw = record_mavlink(msg, getattr(self, 'target_system', None), getattr(self, 'target_component', None))
+        self._experiment_raw = raw
+        if raw and hasattr(self, 'telemetry_socket'):
+            flight_mode = mavutil.mode_string_v10(msg) if is_target_fcu_heartbeat(msg, self.target_system, self.target_component) else None
+            sample = canonical_sample(raw, (getattr(self, 'rover_left_output_channel', 1), getattr(self, 'rover_right_output_channel', 3)),
+                                      getattr(self, 'experiment_calibration', {}), flight_mode)
+            if sample:
+                self._send_node_packet('experiment_sample', sample)
         msg_type = msg.get_type()
 
         if msg_type == 'PARAM_VALUE':
@@ -1998,6 +2015,7 @@ def main() -> None:
         )
 
         bridge.command_timeout_s = max(.2, float(config.get('rover_command_timeout_ms', 350)) / 1000.0)
+        bridge.experiment_calibration = config.get('experiment', {}).get('calibration', {})
         if bridge.connect(timeout=8.0):
             bridge.run()
             logger.warning('Bridge disconnected from Pixhawk, retrying in 2 seconds...')

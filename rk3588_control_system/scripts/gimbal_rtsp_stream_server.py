@@ -6,6 +6,7 @@ import select
 import subprocess
 import threading
 import time
+from collections import deque
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -14,6 +15,12 @@ from urllib.parse import urlsplit
 
 import cv2
 import numpy as np
+from media_alignment import FrameClock, frame_headers
+
+try:
+    import av
+except ImportError:
+    av = None
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = Path(os.environ.get('MANTA_CONFIG_FILE') or os.environ.get('MANTA_CONFIG_PATH')
@@ -42,19 +49,24 @@ if not INPUT_URL.lower().startswith('rtsp://'):
     raise SystemExit('gimbal video input must be an RTSP URL')
 
 FRAME_LOCK = threading.Lock()
-FRAME_CACHE = {'timestamp': 0.0, 'bytes': b'', 'error': ''}
+FRAME_CHANGED = threading.Condition(FRAME_LOCK)
+FRAME_CACHE = {'timestamp': 0.0, 'bytes': b'', 'error': '', 'metadata': None}
 FRAME_READY = threading.Event()
-MOBILE_FRAME_CACHE = {'timestamp': 0.0, 'bytes': b''}
+MOBILE_FRAME_CACHE = {'timestamp': 0.0, 'bytes': b'', 'metadata': None}
 MOBILE_FRAME_READY = threading.Event()
 MOBILE_INTERVAL_SECONDS = 1.0 / MOBILE_FPS
 MOBILE_LAST_ENCODED_AT = 0.0
+FRAME_HISTORY = deque(maxlen=24)
+FRAME_SEQUENCE = 0
+ALIGNMENT_ENABLED = av is not None and VIDEO.get('shared_frame_alignment', True) is not False
 
 
-def update_mobile_frame(payload: bytes, timestamp: float) -> None:
+def update_mobile_frame(payload: bytes, timestamp: float, metadata=None, image=None) -> None:
     global MOBILE_LAST_ENCODED_AT
     if timestamp - MOBILE_LAST_ENCODED_AT < MOBILE_INTERVAL_SECONDS:
         return
-    image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         return
     resized = cv2.resize(image, (MOBILE_WIDTH, MOBILE_HEIGHT), interpolation=cv2.INTER_AREA)
@@ -62,7 +74,7 @@ def update_mobile_frame(payload: bytes, timestamp: float) -> None:
     if not ok:
         return
     with FRAME_LOCK:
-        MOBILE_FRAME_CACHE.update({'timestamp': timestamp, 'bytes': encoded.tobytes()})
+        MOBILE_FRAME_CACHE.update({'timestamp': timestamp, 'bytes': encoded.tobytes(), 'metadata': metadata})
     MOBILE_LAST_ENCODED_AT = timestamp
     MOBILE_FRAME_READY.set()
 
@@ -97,6 +109,9 @@ def build_capture_command() -> list[str]:
 
 
 def capture_loop() -> None:
+    if ALIGNMENT_ENABLED:
+        capture_shared_frames()
+        return
     while True:
         process = None
         try:
@@ -169,6 +184,47 @@ def capture_loop() -> None:
         time.sleep(0.4)
 
 
+def capture_shared_frames():
+    global FRAME_SEQUENCE
+    clock = FrameClock()
+    rotation = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(VIDEO_ROTATION_DEG)
+    while True:
+        clock.reset()
+        try:
+            with av.open(INPUT_URL, options={'rtsp_transport': str(VIDEO.get('rtsp_transport', 'tcp')),
+                         'fflags': '+discardcorrupt'}, timeout=(4.0, FRAME_STALL_SECONDS)) as source:
+                stream = source.streams.video[0]
+                stream.codec_context.thread_count = 2
+                for frame in source.decode(stream):
+                    if frame.is_corrupt:
+                        continue
+                    metadata = clock.observe(frame.pts, frame.time_base)
+                    image = frame.to_ndarray(format='bgr24')
+                    if rotation is not None:
+                        image = cv2.rotate(image, rotation)
+                    ok, encoded = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 88])
+                    if not ok:
+                        continue
+                    payload, stamp = encoded.tobytes(), time.monotonic()
+                    with FRAME_CHANGED:
+                        FRAME_SEQUENCE += 1
+                        FRAME_HISTORY.append((FRAME_SEQUENCE, payload, metadata))
+                        FRAME_CACHE.update(timestamp=stamp, bytes=payload, metadata=metadata, error='')
+                        FRAME_CHANGED.notify_all()
+                    FRAME_READY.set()
+                    update_mobile_frame(payload, stamp, metadata, image)
+            raise RuntimeError('Video input ended')
+        except (av.error.FFmpegError, OSError, RuntimeError, ValueError, IndexError) as error:
+            with FRAME_CHANGED:
+                FRAME_CACHE.update(bytes=b'', metadata=None, error=str(error))
+                MOBILE_FRAME_CACHE.update(bytes=b'', metadata=None)
+                FRAME_HISTORY.clear()
+                FRAME_CHANGED.notify_all()
+            FRAME_READY.clear()
+            MOBILE_FRAME_READY.clear()
+        time.sleep(0.4)
+
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -204,7 +260,17 @@ class GimbalStreamHandler(BaseHTTPRequestHandler):
 
         if path in ('/healthz', '/health'):
             with FRAME_LOCK:
-                self._send_json({'ok': True, 'inputUrl': INPUT_URL, 'inputType': 'rtsp', 'lastError': FRAME_CACHE['error'], 'ready': bool(FRAME_CACHE['bytes'])})
+                status = {'ok': True, 'inputUrl': INPUT_URL, 'inputType': 'rtsp', 'lastError': FRAME_CACHE['error'],
+                          'ready': bool(FRAME_CACHE['bytes']), 'shared_frame_alignment': ALIGNMENT_ENABLED}
+            self._send_json(status)
+            return
+
+        if path in ('/_record.mjpg', '/_frame-events'):
+            if self.client_address[0] not in ('127.0.0.1', '::1') or not ALIGNMENT_ENABLED:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.stream_aligned_frames(path == '/_frame-events')
             return
 
         if path in ('/stream', '/stream.mjpg', '/mobile', '/mobile.mjpg'):
@@ -230,6 +296,7 @@ class GimbalStreamHandler(BaseHTTPRequestHandler):
                         cache = MOBILE_FRAME_CACHE if mobile else FRAME_CACHE
                         frame = cache['bytes']
                         ts = cache['timestamp']
+                        metadata = cache['metadata']
                         err = FRAME_CACHE['error']
 
                     if not frame:
@@ -246,6 +313,7 @@ class GimbalStreamHandler(BaseHTTPRequestHandler):
                         b'--ffmpeg\r\n'
                         b'Content-Type: image/jpeg\r\n'
                         + f'Content-Length: {len(frame)}\r\n'.encode('ascii')
+                        + frame_headers(metadata)
                         + f'Date: {formatdate(usegmt=True)}\r\n\r\n'.encode('ascii')
                     )
                     self.wfile.write(header)
@@ -276,6 +344,33 @@ class GimbalStreamHandler(BaseHTTPRequestHandler):
 
         self.send_response(404)
         self.end_headers()
+
+    def stream_aligned_frames(self, events):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/x-ndjson' if events else 'multipart/x-mixed-replace; boundary=ffmpeg')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.connection.settimeout(4)
+        with FRAME_LOCK:
+            sequence = FRAME_SEQUENCE
+        try:
+            while True:
+                with FRAME_CHANGED:
+                    FRAME_CHANGED.wait_for(lambda: FRAME_SEQUENCE > sequence, timeout=1)
+                    available = [(seq, payload, meta) for seq, payload, meta in FRAME_HISTORY if seq > sequence]
+                if not available and events:
+                    self.wfile.write(b'\n')
+                for sequence, jpeg, metadata in available:
+                    if events:
+                        self.wfile.write(json.dumps(metadata, separators=(',', ':')).encode('ascii') + b'\n')
+                    else:
+                        self.wfile.write(b'--ffmpeg\r\nContent-Type: image/jpeg\r\n'
+                                         + f'Content-Length: {len(jpeg)}\r\n'.encode('ascii')
+                                         + frame_headers(metadata) + b'\r\n' + jpeg + b'\r\n')
+                self.wfile.flush()
+        except OSError:
+            pass
 
 
 if __name__ == '__main__':

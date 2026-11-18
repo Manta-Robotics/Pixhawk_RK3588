@@ -4,3 +4,7 @@ pymavlink>=2.4.36,<3
 lupa>=2,<3
 # Exercise the real USB reader against a virtual UART in Linux CI.
 pyserial>=3.5,<4
+# Exercise display-frame alignment and the encoded fixture on Linux CI.
+av>=14,<17
+numpy>=1.24,<2
+opencv-python-headless>=4.8,<4.12

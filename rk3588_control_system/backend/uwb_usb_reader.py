@@ -6,6 +6,9 @@ import signal
 import struct
 import sys
 import time
+import uuid
+
+PRODUCER = uuid.uuid4().hex
 
 
 SERIAL_IDLE_RECONNECT_SECONDS = 3.0
@@ -129,6 +132,8 @@ def main():
                         parser.counts['coalescedPositions'] += 1
                         continue
                     event['receivedMonoMs'] = now*1000
+                    if event['type'] == 'position':
+                        event['experiment_stamp'] = {'sample_id': f"{PRODUCER}/{parser.counts['goodCount']}", 'obs_ns': str(round(now*1e9))}
                     if event['type'] == 'position':
                         event['gapMs'] = None if last_position_at is None else (now-last_position_at)*1000
                         last_position_at = now

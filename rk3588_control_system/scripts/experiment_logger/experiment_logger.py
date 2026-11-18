@@ -18,6 +18,8 @@ import time
 import uuid
 
 from motion_labels import MotorLabels, esc_power, number
+from logger_config import load_logger_config
+from imu_units import normalize_imu
 
 IMU_TYPES = {'HIGHRES_IMU', 'RAW_IMU', 'SCALED_IMU', 'SCALED_IMU2', 'SCALED_IMU3'}
 CSV_FIELDS = ['wall_ns', 'mono_ns', 'elapsed_s', 'snapshot_age_s', 'snapshot_sequence',
@@ -55,26 +57,6 @@ def age_ms(value, wall_ns):
         return None
     age = wall_ns / 1e9 - value / 1000
     return age if age >= 0 else None
-
-
-def normalize_imu(message):
-    kind = message['mavpackettype']
-    if kind == 'HIGHRES_IMU':
-        acc_scale, gyro_scale = 1.0, 1.0
-    elif kind.startswith('SCALED_IMU'):
-        acc_scale, gyro_scale = 9.80665 / 1000, .001
-    else:
-        # RAW_IMU units are dialect dependent; retain counts without inventing SI.
-        return {}
-    result = {}
-    flags = message.get('fields_updated') if kind == 'HIGHRES_IMU' else None
-    for index, (axis, field) in enumerate(zip('xyz', ['ax_m_s2', 'ay_m_s2', 'az_m_s2'])):
-        value = number(message.get(axis + 'acc'))
-        result[field] = value * acc_scale if value is not None and (flags is None or flags & (1 << index)) else None
-    for index, (axis, field) in enumerate(zip('xyz', ['gx_rad_s', 'gy_rad_s', 'gz_rad_s'])):
-        value = number(message.get(axis + 'gyro'))
-        result[field] = value * gyro_scale if value is not None and (flags is None or flags & (1 << (index + 3))) else None
-    return result
 
 
 class Recorder:
@@ -399,11 +381,25 @@ def ros_worker(out_queue, stop, recorder):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', required=True)
+    parser.add_argument('--legacy', action='store_true', help='保留旧版独立数据采集模式')
+    parser.add_argument('--rebuild-video', metavar='SESSION_ID', help='原子重建已结束会话的录像对齐表')
     args = parser.parse_args()
-    config = json.loads(Path(args.config).read_text())
+    config = load_logger_config(args.config)
+    if args.rebuild_video:
+        from history_query import export_video, load_session
+        session = load_session(config['directory'], args.rebuild_video)
+        if session['manifest']['status'] == 'running':
+            parser.error('活动会话应从历史 API 下载已提交数据')
+        export_video(session, persist=True)
+        return
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
+    if not args.legacy:
+        from journal_writer import run_journal
+        port = int(os.environ.get('MANTA_EXPERIMENT_RAW_PORT', '14660'))
+        run_journal(config, stop, normalize_imu=normalize_imu, ros_worker=ros_worker, raw_port=port)
+        return
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4*1024*1024)
     sock.bind(('127.0.0.1', 14660))
