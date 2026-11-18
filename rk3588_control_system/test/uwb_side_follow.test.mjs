@@ -44,6 +44,26 @@ test('left/right reference offsets and steering mirror in the target ground-trac
   assert.ok(Math.abs(east.desiredOffsetNedM.y) < 1e-8);
 });
 
+test('side guidance uses the fused bearing while the radio field-of-view guard uses the receiver bearing', () => {
+  const controller = new UwbSideFollowController(config);
+  controller.setMode('right');
+  let result;
+  for (let i = 0; i <= 40; ++i) {
+    const now = 10000 + i * 100;
+    const t = packet(now, {target: {x: 4 + i * 0.04, y: 0}});
+    t.uwb.followBearingDeg = 10;
+    result = controller.update({now, telemetry: t, connected: true});
+  }
+  assert.equal(result.reason, 'side_tracking');
+  assert.equal(result.bearingDeg, 10);
+  assert.ok(result.relativeBodyM.y > 0);
+  const uncovered = packet(14200);
+  Object.assign(uncovered.uwb, {azimuthDeg: 115, followBearingDeg: 105});
+  result = controller.update({now: 14200, telemetry: uncovered, connected: true});
+  assert.equal(result.reason, 'side_target_outside_coverage');
+  assert.equal(result.throttlePercent, 0);
+});
+
 test('own translation is compensated and a rotating boat does not invent target motion', () => {
   const c = new UwbSideFollowController(config);
   let result;

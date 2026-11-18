@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#0a1017">
 <title>MANTA — Your AI Camera on Water</title>
-<link rel="stylesheet" href="css/uwb-vision.css?v=20261112">
 <style>
 :root{
   --bg:#0a1017;--bg2:#18232e;--bg3:#121c26;--glass:rgba(22,33,44,.84);
@@ -509,6 +508,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
 }
 </style>
 <link rel="stylesheet" href="css/experiment-console.css?v=2">
+<link rel="stylesheet" href="css/uwb-vision.css?v=20261118-follow">
 </head>
 <body data-theme="dark" data-language="zh">
 <div class="orientation-gate" aria-hidden="true">
@@ -576,14 +576,13 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
       <div class="control-toolbar">
         <div class="control-identity"><i></i><span><b id="controlDeviceName">MANTA ROBOTIC</b><small id="controlDeviceSerial">MANTA · 2407</small></span></div>
         <div class="control-mode" role="group" aria-label="船体跟随模式">
-          <button type="button" id="manualFollowButton" class="active">手动跟随</button>
-          <button type="button" id="autoFollowButton">自动跟随</button>
+          <button type="button" id="manualFollowButton" class="active">手动驾驶</button>
+          <button type="button" id="autoFollowButton">自主跟随</button>
         </div>
         <button class="disconnect-btn" id="claimControlButton" type="button" hidden>获取控制</button>
         <span id="controlSessionLabel"></span>
         <button class="disconnect-btn" id="disconnectButton" type="button">断开</button>
       </div>
-      <section id="uwbVisionModule" aria-label="UWB与视觉融合追踪"></section>
       <div class="quadrant-grid" id="quadrantGrid">
         <div class="quad quad-imu" data-area="imu">
           <div class="quad-header">
@@ -634,6 +633,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
               <div class="fault-actions"><button type="button" id="repairGimbal" class="repair-btn">云台修复</button><button type="button" id="openReport">查看诊断报告</button></div>
             </div>
             <div class="video-toolbar">
+              <span class="fusion-camera-label" hidden>自主跟随 · 泳者视觉</span>
               <div class="gimbal-modes">
                 <button class="gimbal-mode-btn active" type="button" data-gimbal-mode="click">点击居中</button>
                 <button class="gimbal-mode-btn" type="button" data-gimbal-mode="face">人脸跟踪</button>
@@ -653,21 +653,23 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
         </div>
         <div class="quad quad-drive" data-area="drive">
           <div class="quad-header">
-            <div class="quad-header-left"><b>移动控制</b><small id="driveModeLabel">双桨推进</small></div>
-            <span class="quad-header-right" id="driveOutput">X 0.00 · Y 0.00</span>
-          </div>
-          <div class="drive-body">
-            <div class="joystick-wrap" id="joystick" role="slider" tabindex="0" aria-label="Manta 360度移动摇杆" aria-valuetext="停止">
-              <div class="joystick-base"></div><div class="joystick-ring"></div>
-              <div class="joystick-stick" id="joyStick"></div>
-              <span class="joystick-label fwd">前进</span><span class="joystick-label rev">后退</span>
-              <span class="joystick-label left">左</span><span class="joystick-label right">右</span>
-            </div>
+            <div class="quad-header-left"><b id="driveSectionTitle">移动控制</b><small id="driveModeLabel">双桨推进</small></div>
             <div class="drive-follow-control" id="driveFollowControl" hidden>
               <button class="drive-follow-switch" type="button" id="driveFollowSwitch">
                 <strong id="driveFollowSwitchLabel">启动跟随</strong>
                 <small id="driveFollowSwitchStatus">自动选择控制模式并武装</small>
               </button>
+            </div>
+            <span class="quad-header-right" id="driveOutput">X 0.00 · Y 0.00</span>
+          </div>
+          <div class="follow-workspace">
+            <section id="uwbVisionModule" aria-label="自主跟随定位" hidden></section>
+            <div class="drive-body">
+            <div class="joystick-wrap" id="joystick" role="slider" tabindex="0" aria-label="Manta 360度移动摇杆" aria-valuetext="停止">
+              <div class="joystick-base"></div><div class="joystick-ring"></div>
+              <div class="joystick-stick" id="joyStick"></div>
+              <span class="joystick-label fwd">前进</span><span class="joystick-label rev">后退</span>
+              <span class="joystick-label left">左</span><span class="joystick-label right">右</span>
             </div>
             <div class="relative-position-panel" id="relativePositionPanel" data-state="offline">
               <div class="relative-position-head"><span id="relativePositionTitle">目标相对位置</span><button type="button" id="relativeRadarExpand" class="relative-radar-expand" aria-label="放大雷达图" aria-expanded="false" title="放大雷达图查看距离刻度">⛶</button><div class="relative-head-controls"><select class="relative-range-select" id="relativeRangeSelect" aria-label="雷达图量程" title="固定外圈量程，不随坐标自动缩放"><option value="1">1 m</option><option value="2" selected>2 m</option><option value="5">5 m</option><option value="10">10 m</option><option value="20">20 m</option><option value="50">50 m</option></select><b id="relativeFusionMode">等待 UWB</b></div></div>
@@ -732,6 +734,7 @@ body[data-theme="light"] .media-rate-select option{color:#173040;background:#f8f
               </div>
             </div>
           </div>
+        </div>
         </div>
         <div class="quad quad-logs" data-area="logs">
           <div class="quad-header">
@@ -1109,7 +1112,7 @@ var STATIC_EN={
 "面向开放水域游泳与专业野泳运动员的自主水面摄影机器人。":"An autonomous surface camera robot for open-water swimmers and professionals.",
 "安全连接已就绪":"Secure connection ready","BLE 5.0 发现":"BLE 5.0 discovery","互联网连接保持在线":"Internet stays online",
 "连接 Manta":"Connect Manta","首次连接需要输入 Manta 显示的 6 位配对码":"First connection requires the 6-digit code shown by Manta",
-"手动跟随":"Manual follow","自动跟随":"Auto follow","即将推出":"Coming soon","断开":"Disconnect",
+"手动驾驶":"Manual drive","自主跟随":"Autonomous follow","即将推出":"Coming soon","断开":"Disconnect",
 "飞控姿态":"Flight attitude","IMU 校准":"IMU calibration","横滚 ROLL":"ROLL","俯仰 PITCH":"PITCH","航向 YAW":"YAW","校准状态":"Calibration","良好":"Good","IMU 未连接":"IMU offline","等待 Pixhawk 遥测":"Waiting for Pixhawk telemetry","在线":"Online","离线":"Offline",
 "移动控制":"Drive control","前进":"FORWARD","后退":"REVERSE","左推进":"Left thrust","右推进":"Right thrust","紧急停止":"Emergency stop","滑动立即停止":"Slide to stop now",
 "推进状态":"Propulsion","已解除武装":"Disarmed","已武装":"Armed","滑动武装":"Slide to arm","解除武装":"DISARM",
@@ -1407,29 +1410,44 @@ function renderDriveMode(){
   joystick.hidden=automatic;
   followControl.hidden=!automatic;
   methodControl.hidden=!automatic;
-  $("#driveModeLabel").textContent=automatic?"UWB AUTO FOLLOW":localize("双桨推进","DUAL THRUST");
+  $("#uwbVisionModule").hidden=!automatic;
+  $("#driveSectionTitle").textContent=automatic?localize("自主跟随","Autonomous follow"):localize("移动控制","Drive control");
+  $("#driveModeLabel").textContent=automatic?localize("船体","Vessel"):localize("双桨推进","DUAL THRUST");
   if(!automatic)$("#driveOutput").textContent="X "+Number(state.vector.x||0).toFixed(2)+" · Y "+Number(state.vector.y||0).toFixed(2);
   joystick.setAttribute("aria-disabled",String(automatic||state.driveModeSwitching||!state.connected||!state.controlLink||!state.armed||state.calibrating||state.emergency||state.disarmPending));
 }
 
 var driveModeGeneration=0;
-function setDriveMode(mode){
+function setDriveMode(mode,viewOnly){
   var nextMode=mode==="auto"?"auto":"manual";
   if(state.driveMode===nextMode)return;
   var activeTransport=ensureTransport(),generation=++driveModeGeneration;
+  if(activeTransport?.connected && (state.transportMode==="live" ? !activeTransport.canControl : activeTransport.experimentReadOnly)){
+    state.driveMode=nextMode;state.driveModeSwitching=false;
+    renderDriveMode();renderUwbFollow();renderArmControl();return;
+  }
   if(window.resetMantaJoystick)window.resetMantaJoystick();
-  if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(false);
+  if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(false,{sendNeutral:!viewOnly});
   state.driveMode=nextMode;state.driveModeSwitching=false;
   function renderMode(){renderDriveMode();renderUwbFollow();renderArmControl();}
-  function enableManual(){
+  async function enableManual(){
+    if(generation!==driveModeGeneration||state.driveMode!=="manual")return;
+    if(globalThis.MantaFollowFusion?.usesGimbal()){
+      try { await globalThis.MantaFollowFusion.release(); }
+      catch(error){
+        if(generation!==driveModeGeneration)return;
+        state.driveMode="auto";state.driveModeSwitching=false;
+        showToast(error.message||"无法切回 UWB 定位");renderMode();return;
+      }
+    }
     if(generation!==driveModeGeneration||state.driveMode!=="manual")return;
     state.driveModeSwitching=false;
     if(activeTransport&&activeTransport.setDriveEnabled)activeTransport.setDriveEnabled(true);
     renderMode();
   }
   if(nextMode==="manual"){
+    state.driveModeSwitching=true;
     if(activeTransport&&uwbFollowIsRequested()){
-      state.driveModeSwitching=true;
       activeTransport.stopUwbFollow().then(enableManual).catch(function(error){
         if(generation!==driveModeGeneration)return;
         state.driveMode="auto";state.driveModeSwitching=false;
@@ -1563,6 +1581,7 @@ function stopBeaconCalibrationPolling(){
   beaconCalibrationPollTimer=0;
 }
 function openBeaconCalibration(){
+  if(globalThis.MantaFollowFusion?.usesGimbal())return;
   if(!pageCanControl()){showToast("当前页面只读，请先在连接栏获取控制权","This page is read-only; acquire control first");return}
   var activeTransport=ensureTransport();
   if(!activeTransport||!activeTransport.getBeaconCalibration){showToast("请先连接板端后再进行实机校准","Connect to the device before calibration");return}
@@ -1627,7 +1646,7 @@ function drawGimbalOverlay(){
   canvas.width=Math.max(1,Math.round(map.width*ratio));canvas.height=Math.max(1,Math.round(map.height*ratio));
   var ctx=canvas.getContext("2d");ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,map.width,map.height);
   ctx.strokeStyle="rgba(186,225,242,.72)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(map.width/2-9,map.height/2);ctx.lineTo(map.width/2+9,map.height/2);ctx.moveTo(map.width/2,map.height/2-9);ctx.lineTo(map.width/2,map.height/2+9);ctx.stroke();
-  if(state.gimbalMode==="click"&&state.clickMarker){var mx=map.offsetX+state.clickMarker.x*map.sourceWidth*map.scale,my=map.offsetY+state.clickMarker.y*map.sourceHeight*map.scale;ctx.strokeStyle="#88e8ff";ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx,my,14,0,Math.PI*2);ctx.moveTo(mx-20,my);ctx.lineTo(mx+20,my);ctx.moveTo(mx,my-20);ctx.lineTo(mx,my+20);ctx.stroke()}
+  if(!globalThis.MantaFollowFusion?.usesGimbal()&&state.gimbalMode==="click"&&state.clickMarker){var mx=map.offsetX+state.clickMarker.x*map.sourceWidth*map.scale,my=map.offsetY+state.clickMarker.y*map.sourceHeight*map.scale;ctx.strokeStyle="#88e8ff";ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(mx,my,14,0,Math.PI*2);ctx.moveTo(mx-20,my);ctx.lineTo(mx+20,my);ctx.moveTo(mx,my-20);ctx.lineTo(mx,my+20);ctx.stroke()}
   if(state.gimbalMode==="beacon")return;
   if(!state.trackingActive||state.gimbalMode==="click")return;var target=state.trackTarget,status=state.trackStatus||{};
   if(target&&status.locked!==false){var fw=Number(target.frame_w||target.frameW)||1920,fh=Number(target.frame_h||target.frameH)||1080,targetMap=gimbalVideoMapping(fw,fh);
@@ -1649,7 +1668,7 @@ function handleGimbalVideoClick(event){
     refreshGimbalVideoStream();
     return;
   }
-  if(state.gimbalMode!=="click"||!gimbalControlAvailable())return;
+  if(globalThis.MantaFollowFusion?.usesGimbal()||state.gimbalMode!=="click"||!gimbalControlAvailable())return;
   var map=gimbalVideoMapping(),rect=$(".video-feed").getBoundingClientRect(),px=event.clientX-rect.left,py=event.clientY-rect.top,videoX=(px-map.offsetX)/map.scale,videoY=(py-map.offsetY)/map.scale;
   if(videoX<0||videoX>map.sourceWidth||videoY<0||videoY>map.sourceHeight)return;state.clickMarker={x:videoX/map.sourceWidth,y:videoY/map.sourceHeight};drawGimbalOverlay();
   var dx=Math.round((videoX/map.sourceWidth-0.5)*(state.gimbalControlWidth||1920)),dy=Math.round((videoY/map.sourceHeight-0.5)*(state.gimbalControlHeight||1080)),activeTransport=ensureTransport();
@@ -2911,6 +2930,7 @@ function installEvents(){
   $$("[data-gimbal-mode]").forEach(function(b){b.addEventListener("click",function(){
 if(!gimbalControlAvailable()){showToast("云台当前不可控制","Gimbal control is currently unavailable");return}
     if(gimbalModeBusy)return;
+    if(globalThis.MantaFollowFusion?.usesGimbal())return;
     var requestedMode=b.dataset.gimbalMode;
     if(state.trackingActive&&state.runningTrackMode===requestedMode){state.gimbalMode=requestedMode;state.trackMode=requestedMode;renderTrackingMode();showToast("当前跟踪模式已在运行","This tracking mode is already active");return}
     if(requestedMode==="click"&&!state.trackingActive){state.clickMarker=null;state.gimbalMode="click";state.trackTarget=null;renderTrackingMode();showToast("点击居中","Click center");return}
@@ -2983,6 +3003,7 @@ if(!gimbalControlAvailable()){showToast("云台当前不可控制","Gimbal contr
   $$("[data-gimbal-action]").forEach(function(b){b.addEventListener("click",function(){
 if(!gimbalControlAvailable()){showToast("云台当前不可控制","Gimbal control is currently unavailable");return}
 var action=b.dataset.gimbalAction;
+if(action==="home"&&globalThis.MantaFollowFusion?.usesGimbal())return;
 if(action==="record"){setRecording(!state.recording)}
 else{var activeTransport=ensureTransport();if(activeTransport)activeTransport.gimbal(action).catch(function(error){showToast(error.message||"云台指令失败","Gimbal command failed")});showToast(action==="home"?localize("云台正在回中","Gimbal is centering"):localize("云台已停止","Gimbal stopped"))}
 })});
@@ -3027,10 +3048,10 @@ setEmergency(true);setModal("imuCalibrationModal",false);
   document.addEventListener("keydown",function(e){if(e.key==="Escape"){if(relativeRadarHome)setRadarExpanded(false);toggleDrawer($("#toolDrawer"),false);toggleDrawer($("#demoConsole"),false)}});
 }
 function seedLogs(){ [ {source:"APP",message:"Manta App Preview 已启动",messageEn:"Manta App Preview started",category:"system"}, {source:"BLE",message:"近距离发现模块待机",messageEn:"Nearby discovery is standing by",category:"hardware"}, {source:"PIXHAWK",message:"等待设备连接",messageEn:"Waiting for device connection",category:"hardware"}, {source:"GIMBAL",message:"测试视频已载入",messageEn:"Test video loaded",category:"hardware"} ].forEach(addLog) }
-installEvents();installJoystick();installArmControl();seedLogs();renderTransportMode();renderConnection();renderTelemetry();renderGpsStatus();renderGimbalOsd();renderCalibrationWizard();renderMediaPlayer();renderMediaFilter();showView("device");window.MantaPreview={state:state,getTransport:function(){return transport},showView:showView,applyDemoState:applyDemoState,applyLanguage:applyLanguage,openImuCalibrationWizard:openImuCalibrationWizard,selectedExperimentMedia:selectedExperimentMedia,openExperimentRecording:openExperimentRecording,recordingFilename:recordingFilename};
+installEvents();installJoystick();installArmControl();seedLogs();renderTransportMode();renderConnection();renderTelemetry();renderGpsStatus();renderGimbalOsd();renderCalibrationWizard();renderMediaPlayer();renderMediaFilter();showView("device");window.MantaPreview={state:state,getTransport:function(){return transport},showView:showView,showFollowView:function(){showView("device");setDriveMode("auto",true)},followRequested:uwbFollowIsRequested,applyDemoState:applyDemoState,applyLanguage:applyLanguage,openImuCalibrationWizard:openImuCalibrationWizard,selectedExperimentMedia:selectedExperimentMedia,openExperimentRecording:openExperimentRecording,recordingFilename:recordingFilename};
 })()
 </script>
-<script type="module" src="js/uwb-vision-panel.js?v=20261112"></script>
+<script type="module" src="js/uwb-vision-panel.js?v=20261118-follow"></script>
 <script type="module" src="js/experiment-panel.js?v=2"></script>
 <script type="module" src="js/cinematography-panel.js?v=1"></script>
 </body>

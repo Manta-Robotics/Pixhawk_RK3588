@@ -4,7 +4,7 @@ import path from 'path';
 const COLUMNS = [
   'timestamp_iso', 'elapsed_ms', 'event', 'session_id', 'follow_status', 'follow_reason',
   'measurement_status', 'measurement_rejection_reason', 'measurement_nis', 'measurement_filter_uncertainty_m',
-  'target_source', 'target_last_measured_at', 'prediction_age_ms', 'prediction_uncertainty_m', 'recovery_samples',
+  'follow_source', 'guidance_source', 'fusion_reason', 'target_source', 'target_last_measured_at', 'prediction_age_ms', 'prediction_uncertainty_m', 'recovery_samples',
   'control_mode', 'flight_mode', 'armed', 'gps_lat', 'gps_lon', 'gps_alt_m',
   'yaw_deg', 'yaw_rate_deg_s', 'velocity_north_mps', 'velocity_east_mps',
   'estimated_north_m', 'estimated_east_m',

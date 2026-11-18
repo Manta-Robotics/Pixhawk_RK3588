@@ -22,7 +22,7 @@ export class SmoothedUwbPath {
       &&now-u.measurementUpdatedAt<=(c.uwbTimeoutMs??450)
       &&[u.relativeXM,u.relativeYM,u.distanceM,u.azimuthDeg].every(finite);
     if(!p.options.enabled||!admitted){p.reset();return {...base,active:false,reason:!p.options.enabled?'disabled':'smoothed_uwb_unavailable',pointCount:0,bodyPath:[],bodyObservations:[]};}
-    const bearing=wrap(u.azimuthDeg*(c.bearingSign??1)*(c.bearingScale??1)+(c.bearingOffsetDeg??0));
+    const bearing=u.followBearingDeg??wrap(u.azimuthDeg*(c.bearingSign??1)*(c.bearingScale??1)+(c.bearingOffsetDeg??0));
     const result=p.update({now,telemetry:t,distanceM:u.distanceM,bearingDeg:bearing});
     if(!p.navigation||!finite(t.attitude?.yaw))return {...base,...result,bodyPath:[],bodyObservations:[]};
     const dt=(now-p.navigation.at)/1000;

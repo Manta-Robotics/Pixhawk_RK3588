@@ -176,6 +176,10 @@ test('loopback experiment API secures ownership and preserves UWB and mode evide
     await until(() => latest(viewerSocket, id, snapshot => !uwbAlert(snapshot) && moduleData(snapshot, 'uwb').sample_id === 'fixture/uwb/3'),
       'two distinct measured samples did not clear the same alert', 3000);
     await push('fixture/fc/1', { fc_mode: 'MANUAL', armed: false }, 'fc');
+    const fusion = await json(await owner('/api/uwb-vision/follow-source', { source: 'uwb+vision' }));
+    assert.equal(fusion.followSource, 'uwb+vision');
+    const observed = (await json(await viewer(endpoint + '/live'))).data;
+    assert.equal(reading(observed, 'mode', 'follow_source').value, 'uwb+vision');
     const selected = await json(await owner('/api/uwb-follow/mode', { mode: 'left', distanceM: 3 }));
     assert.equal(selected.state.followMode, 'left');
     assert.equal(selected.state.active, false);
@@ -212,6 +216,10 @@ test('loopback experiment API secures ownership and preserves UWB and mode evide
     assert.ok(later.items.every(event => event.event_no > chunk.next_after));
     const eventPage = (await json(await viewer(atSession + '/events'))).data;
     const events = eventPage.items;
+    const sourceRequest = events.find(event => event.type === 'mode_request' && event.detail_json.axis === 'follow_source');
+    assert.ok(sourceRequest?.request_id);
+    const appliedSource = events.find(event => event.type === 'mode_applied' && event.request_id === sourceRequest.request_id);
+    assert.equal(appliedSource?.detail_json.actual, 'uwb+vision');
     assert.deepEqual(events.filter(event => event.alert_id === alertId).map(event => event.type), ['alert_open', 'alert_level', 'alert_close']);
     const modeRequest = events.find(event => event.type === 'mode_request' && event.detail_json.requested === 'left');
     assert.ok(modeRequest?.request_id, 'mode request is missing its stable request ID');

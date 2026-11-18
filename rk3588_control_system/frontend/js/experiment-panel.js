@@ -6,6 +6,7 @@ const STATES = { ok: '正常', warn: '警告', error: '错误', idle: '待机', 
 const LEVELS = { info: '信息', warn: '警告', error: '错误' };
 const CSV = { overview: 'state_overview.csv', events: 'events.csv', video: 'video_aligned.csv' };
 const ENUMS = {
+    follow_source: { uwb: '仅 UWB', 'uwb+vision': 'UWB＋视觉融合' },
     follow_side: { rear: '后方', left: '左侧', right: '右侧' },
     follow_method: { traditional: '传统', neural: '神经网络' },
     control_owner: { uwb: 'UWB', manual: '手动', joystick: '摇杆' },
@@ -182,7 +183,7 @@ class LiveView {
 
 const CONTROL_ENTRIES = {
     mode: [['跟随启停', '#driveFollowSwitch']],
-    uwb: [['UWB 跟随启停', '#driveFollowSwitch'], ['信标跟踪', '[data-gimbal-mode="beacon"]']],
+    uwb: [['跟随启停', '#driveFollowSwitch']],
     gimbal: [['信标跟踪', '[data-gimbal-mode="beacon"]'], ['停止云台', '[data-gimbal-action="stop"]']],
     vision: [['人脸跟踪', '[data-gimbal-mode="face"]'], ['泳者跟踪', '[data-gimbal-mode="swimmer"]'], ['停止跟踪', '[data-gimbal-action="stop"]']],
     video: [['录像启停', '#recordButton'], ['刷新预览', '#refreshGimbalVideo']]
@@ -297,30 +298,42 @@ function renderControlLinks(writable) {
     const observedState = alert.some(item => item.level === 'error') ? 'error' : alert.length ? 'warn' : selected?.state;
     const reading = (selected?.readings || []).map(item => (item.label || item.key) + ' ' + measurement(item.value, item.unit, item.key));
     $('#experimentSelectedModule').textContent = [STATES[observedState] || '等待数据', ...reading, selected?.note].filter(Boolean).join(' · ');
-    const listing = CONTROL_ENTRIES[id] || [];
-    const keys = [id, writable, ...listing.map(([, selector]) => Boolean($(selector) && !$(selector).disabled))].join('|');
+    const follow = window.MantaFollowFusion;
+    const showFollow = ['mode', 'uwb', 'vision', 'gimbal'].includes(id);
+    const usesGimbal = () => window.MantaFollowFusion?.usesGimbal() === true;
+    const isTrackingMode = selector => selector.startsWith('[data-gimbal-mode=');
+    const listing = (CONTROL_ENTRIES[id] || []).filter(([, selector]) => {
+        if (isTrackingMode(selector) && usesGimbal()) return false;
+        return selector !== '#driveFollowSwitch' || !$(selector)?.closest('[hidden]');
+    });
+    const canOpenFollow = Boolean(follow && transport?.connected);
+    const keys = [id, writable, canOpenFollow, ...listing.map(([, selector]) => selector + Boolean($(selector) && !$(selector).disabled))].join('|');
     if (slot.dataset.keys === keys) return;
     slot.dataset.keys = keys;
-    if (!listing.length) {
-        const note = id === 'logger' ? '下方可开始或结束记录' : '该模块随设备状态运行';
-        slot.replaceChildren(element('span', 'experiment-status', note));
-        return;
+    const links = [];
+    if (showFollow) {
+        const open = button('自主跟随', () => {
+            if (!transport?.connected || !window.MantaFollowFusion) return;
+            dialog.close();
+            window.MantaFollowFusion.open();
+        });
+        open.disabled = !canOpenFollow;
+        links.push(open);
     }
-    const links = listing.map(([label, selector]) => {
+    for (const [label, selector] of listing) {
         const trigger = $(selector);
-        const linkButton = button(label, () => {
-            if (!transport?.connected || (simulated ? transport.experimentReadOnly : !transport.canControl) || !trigger || trigger.disabled) return;
-            if (trigger.closest('[hidden]') && selector === '#driveFollowSwitch') {
-                dialog.close();
-                preview.showView('device');
-                $('#autoFollowButton')?.focus();
-                return;
-            }
+        const action = button(label, () => {
+            if (!transport?.connected || !link.synced || (simulated ? transport.experimentReadOnly : !transport.canControl) || !trigger || trigger.disabled) return;
+            if (isTrackingMode(selector) && usesGimbal()) return;
             trigger.click();
         });
-        linkButton.disabled = !writable || !trigger || trigger.disabled;
-        return linkButton;
-    });
+        action.disabled = !writable || !trigger || trigger.disabled;
+        links.push(action);
+    }
+    if (!links.length) {
+        const note = id === 'logger' ? '下方可开始或结束记录' : '该模块随设备状态运行';
+        links.push(element('span', 'experiment-status', note));
+    }
     slot.replaceChildren(...links);
 }
 
@@ -682,6 +695,7 @@ $('#experimentMoreSessions').addEventListener('click', () => loadSessions(true))
 $('#experimentRefresh').addEventListener('click', () => { loadSessions(); loadManifest(); refreshEvents(); });
 $('#experimentModule').addEventListener('change', renderEvents);
 $('#experimentControlModule').addEventListener('change', renderLive);
+window.addEventListener('manta-follow-fusion-change', renderLive);
 $('#experimentLevel').addEventListener('change', renderEvents);
 $('#experimentClearAlert').addEventListener('click', event => { activeAlert = null; event.currentTarget.hidden = true; renderEvents(); });
 $('#experimentOlderEvents').addEventListener('click', () => { visibleEvents += 100; renderEvents(); });

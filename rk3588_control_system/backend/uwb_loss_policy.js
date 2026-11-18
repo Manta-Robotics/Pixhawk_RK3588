@@ -68,7 +68,7 @@ export class LastUwbPointApproach {
     if(fresh) {
       const id=identity(u);
       if(!this.last||this.last.at!==stamp||this.last.id!==id){
-        const bearing=wrap(u.azimuthDeg*value(calibration.bearingSign,-1)*value(calibration.bearingScale,.8148)
+        const bearing=u.followBearingDeg??wrap(u.azimuthDeg*value(calibration.bearingSign,-1)*value(calibration.bearingScale,.8148)
           +value(calibration.bearingOffsetDeg,-4.816));
         const age=(now-stamp)/1000;
         const measuredX=this.x-this.speed*age*Math.cos(yaw*rad);

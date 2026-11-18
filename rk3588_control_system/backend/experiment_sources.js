@@ -58,6 +58,7 @@ export function acceptGimbal(live, feedback, siyi, installation, sampleId) {
   );
 }
 const routeModes = {
+  '/uwb-vision/follow-source': ['follow_source', (body) => body.source],
   '/uwb-follow/mode': ['follow_side', (body) => body.mode],
   '/uwb-follow/method': ['follow_method', (body) => body.method],
   '/uwb-follow/start': ['follow_active', () => true],
