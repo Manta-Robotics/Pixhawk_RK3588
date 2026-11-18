@@ -22,6 +22,11 @@ Browser -> Socket.IO/REST -> backend/server.js
 
 后端负责输入限幅、状态聚合和命令审计；MAVLink 桥接只负责协议与串口边界。
 
+自动跟随的位置选择通过 `POST /api/uwb-follow/mode` 独立于控制方法管理。
+后方模式使用既有跟随器；左右模式使用 `backend/uwb_side_follow.js`，由实时
+UWB/IMU 与 GPS/EKF 地速估计目标方向、生成侧向参考，复用航速环和 MANUAL 输出。
+切换前必须停止跟随，侧向模式不执行后方盲预测或最后位置推进。细节见 [SIDE_FOLLOW.md](SIDE_FOLLOW.md)。
+
 ## 云台链路
 
 ```text
