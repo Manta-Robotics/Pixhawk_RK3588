@@ -190,6 +190,12 @@ test('loopback experiment API secures ownership and preserves UWB and mode evide
     const intervals = snapshots.slice(1).map((value, i) => Number(BigInt(value.mono_ns) - BigInt(snapshots[i].mono_ns)) / 1e6);
     assert.ok(intervals.filter(interval => interval >= 140 && interval <= 410).length >= 2, String(intervals));
     assert.equal((await viewer(endpoint + '/stop', {})).status, 403);
+    // The mode event is immediate. A 20 Hz row containing it exists only after
+    // the next sample tick and writer commit, which may follow the HTTP reply.
+    await waitFor(async () => {
+      const rows = await download(viewer, atSession + '/files/overview', 'follow_side', 'state_overview.csv');
+      return rows.some(row => row.follow_side === 'left' && row.fc_mode === 'MANUAL');
+    }, 'committed overview did not include the selected side and confirmed flight mode');
     assert.equal((await json(await owner(endpoint + '/stop', {}))).data.state, 'finalizing');
     await waitFor(async () => {
       const data = (await json(await viewer(endpoint + '/live'))).data;
